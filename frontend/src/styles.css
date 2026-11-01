@@ -207,3 +207,7 @@ kbd { font: inherit; font-size: 11px; color: var(--muted); border: 1px solid var
 .chip { border-radius: 99px; padding: 4px 12px; font-size: 13px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
 .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .cat-title { margin: 14px 0 0; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.tabs { margin: 8px 0; }
+.conn-form { display: grid; gap: 8px; margin: 8px 0; max-width: 460px; }
+.conn-form label { display: grid; gap: 3px; font-size: 13px; color: var(--muted); }
+.row { display: flex; gap: 8px; margin-top: auto; }

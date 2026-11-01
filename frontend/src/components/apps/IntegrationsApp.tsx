@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, formatAgo, formatDate } from "../../api";
+import ConnectionsPanel from "./ConnectionsPanel";
 import type { Integration, IntegrationStatus, IntegrationsResponse } from "../../types";
 
 const STATUS_LABEL: Record<IntegrationStatus, string> = {
@@ -27,6 +28,7 @@ function matches(i: Integration, f: Filter): boolean {
 }
 
 export default function IntegrationsApp() {
+  const [tab, setTab] = useState<"systems" | "connections">("systems");
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [data, setData] = useState<IntegrationsResponse | null>(null);
@@ -99,8 +101,14 @@ export default function IntegrationsApp() {
           {checking === "all" ? "Проверяем…" : "Проверить все"}
         </button>
       </div>
-      {error && <div className="error">{error}</div>}
-      {!data && !error && <p className="muted">Загрузка…</p>}
+      <div className="chips tabs">
+        <button className={`chip${tab === "systems" ? " on" : ""}`} onClick={() => setTab("systems")}>Системы компании</button>
+        <button className={`chip${tab === "connections" ? " on" : ""}`} onClick={() => setTab("connections")}>Подключения: компания и сотрудники</button>
+      </div>
+      {tab === "connections" && <ConnectionsPanel />}
+      {error && tab === "systems" && <div className="error">{error}</div>}
+      {tab === "systems" && !data && !error && <p className="muted">Загрузка…</p>}
+      {tab === "systems" && (<>
       <div className="integ-tools">
         <input
           type="search"
@@ -149,6 +157,7 @@ export default function IntegrationsApp() {
           </div>
         </section>
       ))}
+      </>)}
     </div>
   );
 }

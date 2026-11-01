@@ -57,6 +57,9 @@ def run_scheduled_checks() -> None:
     """Точка входа для планировщика: своя сессия на каждый запуск."""
     with SessionLocal() as db:
         check_all(db)
+        from ..routers.connections import check_all_connections
+
+        check_all_connections(db)
 
 
 def record_sync(db: Session, key: str, when: datetime | None = None) -> None:

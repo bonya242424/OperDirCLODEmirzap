@@ -35,3 +35,35 @@ export interface ChatMessage {
   content: string;
   created_at: string;
 }
+
+export interface ConnectionField {
+  name: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  default: string;
+}
+
+export interface ConnectionKind {
+  key: string;
+  name: string;
+  description: string;
+  fields: ConnectionField[];
+}
+
+export interface Connection {
+  id: number;
+  kind: string;
+  kind_name: string;
+  title: string;
+  scope: "company" | "personal";
+  owner_id: number | null;
+  owner_name: string;
+  status: IntegrationStatus;
+  message: string;
+  last_check_at: string | null;
+  last_sync_at: string | null;
+  values: Record<string, string>;
+  secrets_set: string[];
+  can_edit: boolean;
+}
