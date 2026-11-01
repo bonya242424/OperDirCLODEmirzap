@@ -4,11 +4,13 @@
 передаётся модели как данные и не как инструкции: см. SYSTEM_PROMPT в routers/chat.py.
 """
 
-from sqlalchemy import select
+from datetime import date, timedelta
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .integrations.registry import REGISTRY
-from .models import BitrixTask, Integration, Metric, Task, User, utcnow
+from .models import BitrixTask, Integration, Metric, MetricValue, Task, User, utcnow
 from .routers.metrics import _out as metric_out
 
 DIRECTIONS = {"gen": "Генеральный директор", "tech": "Технический директор", "ops": "Операционный директор", "fin": "Финансовый директор"}
@@ -26,6 +28,22 @@ def _clean(text: str, limit: int = 160) -> str:
 
 def _fmt(v: float | None) -> str:
     return "нет" if v is None else f"{v:g}"
+
+
+def _month_bounds(today: date) -> tuple[date, date, date]:
+    this_start = today.replace(day=1)
+    prev_end = this_start
+    prev_start = (this_start.replace(day=1) - timedelta(days=1)).replace(day=1)
+    return prev_start, prev_end, this_start
+
+
+def _avg(db: Session, metric_id: int, start: date, end: date) -> tuple[float | None, int]:
+    avg, n = db.execute(
+        select(func.avg(MetricValue.value), func.count(MetricValue.id)).where(
+            MetricValue.metric_id == metric_id, MetricValue.period >= start, MetricValue.period < end
+        )
+    ).one()
+    return (None if avg is None else float(avg)), n
 
 
 def build_context(db: Session) -> str:
@@ -49,6 +67,16 @@ def build_context(db: Session) -> str:
         if m.warn_threshold is not None or m.bad_threshold is not None:
             part += f" (пороги: внимание {_fmt(m.warn_threshold)}, плохо {_fmt(m.bad_threshold)}; {'больше лучше' if m.better == 'up' else 'меньше лучше'})"
         lines.append(part)
+        prev_start, prev_end, this_start = _month_bounds(now.date())
+        avg_prev, n_prev = _avg(db, m.id, prev_start, prev_end)
+        avg_cur, n_cur = _avg(db, m.id, this_start, now.date() + timedelta(days=2))
+        bits = []
+        if avg_prev is not None:
+            bits.append(f"среднее за прошлый месяц {avg_prev:.4g} (по {n_prev} значениям)")
+        if avg_cur is not None:
+            bits.append(f"среднее за текущий месяц {avg_cur:.4g} (по {n_cur} значениям)")
+        if bits:
+            lines.append("  " + "; ".join(bits))
 
     lines.append("\n## Задачи")
     names = {u.id: (u.full_name or u.email) for u in db.scalars(select(User))}
