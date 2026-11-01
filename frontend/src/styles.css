@@ -1,6 +1,11 @@
 :root {
-  --radius: 14px;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Шкала: отступы 4/8/12/16/24, радиусы 8 (поля), 12 (карточки), 18 (окна), 99 (метки) */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
   color-scheme: light;
 }
 
@@ -38,10 +43,17 @@
 }
 
 * { box-sizing: border-box; }
+::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offset: 0; }
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 40%, transparent) transparent; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
 html, body, #root { height: 100%; margin: 0; }
-body { background: var(--bg); color: var(--text); font-size: 14px; }
+body { background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
 h1, h2, h3, p { margin: 0 0 8px; }
-h2 { font-size: 18px; }
+h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
 h3 { font-size: 15px; margin-top: 20px; }
 
 button {
@@ -319,3 +331,6 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .linkish { background: transparent; border: 0; padding: 0; text-align: left; font: inherit; color: var(--text); } .linkish:hover:not(:disabled) { text-decoration: underline; border: 0; }
 .widget .stats { grid-template-columns: repeat(3, 1fr); }
 .narrow { width: 90px; }
+
+.kempty { margin: 8px 4px; padding: 14px 8px; text-align: center; font-size: 12.5px; color: var(--muted); border: 1px dashed var(--border); border-radius: var(--r-md); }
+.kcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

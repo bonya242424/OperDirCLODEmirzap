@@ -47,6 +47,7 @@ export default function TasksApp({ me }: { me: User }) {
   const [who, setWho] = useState<"all" | "mine" | number>("all");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [quick, setQuick] = useState<{ status: Status; text: string } | null>(null);
+  const original = draft && draft.id !== null ? board?.columns.flatMap((c) => c.cards).find((c) => c.id === `l-${draft.id}`) : undefined;
   const [dragId, setDragId] = useState<string | null>(null);
   const [over, setOver] = useState<{ status: Status; index: number } | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -139,6 +140,9 @@ export default function TasksApp({ me }: { me: User }) {
             clear_deadline: !deadline,
           },
         });
+      }
+      if (draft.id !== null && draft.status !== original?.status) {
+        await api(`/board/tasks/${draft.id}/move`, { method: "POST", body: { status: draft.status, index: 0 } });
       }
       setDraft(null);
       load();
@@ -254,6 +258,11 @@ export default function TasksApp({ me }: { me: User }) {
                 <span className={`kdot ${col.key}`} />
                 <strong>{col.title}</strong>
                 <span className="muted">{cards.length}</span>
+                {cards.some((c) => c.overdue) && (
+                  <span className="chipd late" title="Просроченные задачи в колонке">
+                    {cards.filter((c) => c.overdue).length} просрочено
+                  </span>
+                )}
               </header>
               <div className="kcards">
                 {cards.map((c, i) => {
@@ -268,8 +277,10 @@ export default function TasksApp({ me }: { me: User }) {
                         setDragId(null);
                         setOver(null);
                       }}
-                      onDragOver={(e) => (c.editable || true) && overCard(e, col.key, i)}
+                      onDragOver={(e) => overCard(e, col.key, i)}
                       onClick={() => openCard(c)}
+                      tabIndex={0}
+                      onKeyDown={(e) => e.key === "Enter" && openCard(c)}
                       title={c.editable ? "Открыть задачу" : "Задача из Битрикс24: менять её нужно там"}
                     >
                       {over?.status === col.key && over.index === i && dragId && <div className="kline" />}
@@ -287,6 +298,9 @@ export default function TasksApp({ me }: { me: User }) {
                   );
                 })}
                 {over?.status === col.key && over.index >= cards.length && dragId && <div className="kline" />}
+                {cards.length === 0 && quick?.status !== col.key && (
+                  <p className="kempty">{col.key === "done" ? "Здесь появятся закрытые задачи" : "Перетащите сюда задачу"}</p>
+                )}
                 {quick?.status === col.key ? (
                   <form onSubmit={quickAdd} className="kquick">
                     <input
@@ -335,16 +349,14 @@ export default function TasksApp({ me }: { me: User }) {
                   ))}
                 </select>
               </label>
-              {draft.id === null && (
-                <label>
-                  Колонка
-                  <select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as Status })}>
-                    {board?.columns.map((c) => (
-                      <option key={c.key} value={c.key}>{c.title}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
+              <label>
+                Колонка
+                <select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as Status })}>
+                  {board?.columns.map((c) => (
+                    <option key={c.key} value={c.key}>{c.title}</option>
+                  ))}
+                </select>
+              </label>
             </div>
             <div className="modal-actions">
               {draft.id !== null && <button type="button" className="ghost danger" onClick={remove}>Удалить</button>}
