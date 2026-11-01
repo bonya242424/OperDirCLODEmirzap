@@ -20,9 +20,11 @@ services:
     env_file: .env
     environment:
       ENVIRONMENT: prod
+      FILES_DIR: /data/files
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     volumes:
       - ./secrets:/run/secrets-app:ro
+      - files:/data/files
     depends_on:
       db:
         condition: service_healthy
@@ -37,3 +39,4 @@ services:
 
 volumes:
   pgdata:
+  files:

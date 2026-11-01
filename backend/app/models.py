@@ -81,3 +81,28 @@ class Connection(Base):
     last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Folder(Base):
+    __tablename__ = "folders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    # Ключ интеграции: загрузка файла в папку отмечает свежую выгрузку этого источника.
+    source_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class StoredFile(Base):
+    __tablename__ = "stored_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    folder_id: Mapped[int] = mapped_column(ForeignKey("folders.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    content_type: Mapped[str] = mapped_column(String(255), default="application/octet-stream")
+    disk_name: Mapped[str] = mapped_column(String(64), unique=True)
+    uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

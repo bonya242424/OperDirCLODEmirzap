@@ -5,6 +5,7 @@ import tempfile
 _tmp = tempfile.mkdtemp()
 os.environ["DATABASE_URL"] = f"sqlite:///{_tmp}/test.db"
 os.environ["SCHEDULER_ENABLED"] = "false"
+os.environ["FILES_DIR"] = f"{_tmp}/files"
 os.environ["ADMIN_EMAIL"] = "owner@test.local"
 os.environ["ADMIN_PASSWORD"] = "owner-password-123"
 os.environ["SECRET_KEY"] = "test-secret-key-for-tests-only-0123456789"

@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     yandex_calendar_login: str = ""
     yandex_calendar_password: str = ""  # пароль приложения CalDAV
 
+    # Хранилище файлов (в Docker это отдельный том)
+    files_dir: str = "./data/files"
+    max_upload_mb: int = 100
+
     # Проверки интеграций
     scheduler_enabled: bool = True
     integration_check_minutes: int = 60
