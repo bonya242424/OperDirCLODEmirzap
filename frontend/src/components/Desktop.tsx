@@ -1,3 +1,4 @@
+import MeApp from "./apps/MeApp";
 import AgentsApp from "./apps/AgentsApp";
 import { CSSProperties, PointerEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
@@ -34,8 +35,12 @@ const APPS: AppDef[] = [
   { key: "strategy", title: "Стратег. задачи", icon: "🎯", colors: ["#ff9a8a", "#e0514a"], stage: 4 },
   { key: "files", title: "Файлы", icon: "📁", colors: ["#ffd27a", "#f0a030"], size: [920, 580], stage: 3 },
   { key: "agents", title: "ИИ-агенты", icon: "🤖", colors: ["#b69bff", "#7a52e0"], size: [1060, 620], stage: 2 },
+  { key: "calendar", title: "Календарь", icon: "📅", colors: ["#ffb199", "#ff6a5f"], stage: 5 },
   { key: "meetings", title: "Встречи", icon: "🎙️", colors: ["#7fd6e8", "#2f9bb8"], stage: 5 },
   { key: "integrations", title: "Интеграции", icon: "🔌", colors: ["#ff9fc4", "#d6478a"], size: [940, 620] },
+  { key: "changes", title: "Изменения", icon: "🧩", colors: ["#c3b5ff", "#7c5ce6"], stage: 6 },
+  { key: "terminal", title: "Терминал", icon: "⌨️", colors: ["#6b7488", "#2c3344"], stage: 6 },
+  { key: "me", title: "Мой кабинет", icon: "🙋", colors: ["#7fd1ff", "#3b8be0"], size: [900, 600] },
   { key: "employees", title: "Сотрудники", icon: "👥", colors: ["#a9b4c8", "#667189"], size: [900, 560] },
 ];
 
@@ -45,13 +50,15 @@ function renderApp(app: AppDef, user: User): ReactNode {
   if (app.key === "integrations") return <IntegrationsApp />;
   if (["gen", "tech", "ops", "fin"].includes(app.key)) return <DirectorApp key={app.key} direction={app.key} title={app.title} />;
   if (app.key === "tasks") return <TasksApp me={user} />;
+  if (app.key === "me") return <MeApp me={user} />;
   if (app.key === "agents") return <AgentsApp />;
   if (app.key === "files") return <FilesApp />;
   if (app.key === "employees") return <EmployeesApp me={user} />;
-  return <Placeholder title={app.title} stage={app.stage ?? 0} />;
+  return <Placeholder appKey={app.key} title={app.title} stage={app.stage ?? 0} />;
 }
 
 export default function Desktop({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const apps = useMemo(() => APPS.filter((a) => a.key !== "terminal" || user.role === "owner"), [user.role]);
   const [windows, setWindows] = useState<WindowState[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [chatWidth, setChatWidth] = useState<number>(() => Math.round(window.innerWidth * 0.4));
@@ -173,7 +180,7 @@ export default function Desktop({ user, onLogout }: { user: User; onLogout: () =
 
   const found = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q ? APPS.filter((a) => a.title.toLowerCase().includes(q)) : APPS;
+    return q ? apps.filter((a) => a.title.toLowerCase().includes(q)) : apps;
   }, [query]);
 
   function pick(app: AppDef) {
@@ -339,7 +346,7 @@ export default function Desktop({ user, onLogout }: { user: User; onLogout: () =
           )}
 
           <div className="dock">
-            {APPS.map((app) => {
+            {apps.map((app) => {
               const win = windows.find((w) => w.appKey === app.key);
               return (
                 <button
