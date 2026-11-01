@@ -152,3 +152,22 @@ class MetricValue(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Task(Base):
+    """Задача на доске. Задачи из Битрикс24 живут отдельно (BitrixTask) и показываются на доске только для чтения."""
+
+    __tablename__ = "tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(300))
+    description: Mapped[str] = mapped_column(Text, default="")
+    # new | in_progress | review | done
+    status: Mapped[str] = mapped_column(String(16), default="new", index=True)
+    priority: Mapped[str] = mapped_column(String(8), default="normal")  # low | normal | high
+    assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    position: Mapped[float] = mapped_column(Float, default=0.0)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
