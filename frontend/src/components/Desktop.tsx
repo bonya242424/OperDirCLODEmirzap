@@ -19,27 +19,28 @@ interface AppDef {
   icon: string;
   colors: [string, string];
   stage?: number;
+  size?: [number, number];
 }
 
 const APPS: AppDef[] = [
-  { key: "gen", title: "Ген. директор", icon: "🏛️", colors: ["#f5b84a", "#e8793a"], stage: 3 },
-  { key: "tech", title: "Тех. директор", icon: "🛠️", colors: ["#7aa7ff", "#4f5be0"], stage: 3 },
-  { key: "ops", title: "Опер. директор", icon: "📦", colors: ["#6fd3a0", "#2f9e78"], stage: 3 },
-  { key: "fin", title: "Фин. директор", icon: "💰", colors: ["#f2d36b", "#c79a1e"], stage: 3 },
-  { key: "tasks", title: "Задачи", icon: "✅", colors: ["#8fd47a", "#3f9d4f"], stage: 1 },
+  { key: "gen", title: "Ген. директор", icon: "🏛️", colors: ["#f5b84a", "#e8793a"], size: [1000, 640], stage: 3 },
+  { key: "tech", title: "Тех. директор", icon: "🛠️", colors: ["#7aa7ff", "#4f5be0"], size: [1000, 640], stage: 3 },
+  { key: "ops", title: "Опер. директор", icon: "📦", colors: ["#6fd3a0", "#2f9e78"], size: [1000, 640], stage: 3 },
+  { key: "fin", title: "Фин. директор", icon: "💰", colors: ["#f2d36b", "#c79a1e"], size: [1000, 640], stage: 3 },
+  { key: "tasks", title: "Задачи", icon: "✅", colors: ["#8fd47a", "#3f9d4f"], size: [1100, 660], stage: 1 },
   { key: "strategy", title: "Стратег. задачи", icon: "🎯", colors: ["#ff9a8a", "#e0514a"], stage: 4 },
-  { key: "files", title: "Файлы", icon: "📁", colors: ["#ffd27a", "#f0a030"], stage: 3 },
+  { key: "files", title: "Файлы", icon: "📁", colors: ["#ffd27a", "#f0a030"], size: [920, 580], stage: 3 },
   { key: "agents", title: "ИИ-агенты", icon: "🤖", colors: ["#b69bff", "#7a52e0"], stage: 2 },
   { key: "meetings", title: "Встречи", icon: "🎙️", colors: ["#7fd6e8", "#2f9bb8"], stage: 5 },
-  { key: "integrations", title: "Интеграции", icon: "🔌", colors: ["#ff9fc4", "#d6478a"] },
-  { key: "employees", title: "Сотрудники", icon: "👥", colors: ["#a9b4c8", "#667189"] },
+  { key: "integrations", title: "Интеграции", icon: "🔌", colors: ["#ff9fc4", "#d6478a"], size: [940, 620] },
+  { key: "employees", title: "Сотрудники", icon: "👥", colors: ["#a9b4c8", "#667189"], size: [900, 560] },
 ];
 
 const MIN_CHAT = 300;
 
 function renderApp(app: AppDef, user: User): ReactNode {
   if (app.key === "integrations") return <IntegrationsApp />;
-  if (app.key === "tasks") return <TasksApp />;
+  if (app.key === "tasks") return <TasksApp me={user} />;
   if (app.key === "files") return <FilesApp />;
   if (app.key === "employees") return <EmployeesApp me={user} />;
   return <Placeholder title={app.title} stage={app.stage ?? 0} />;
@@ -117,10 +118,10 @@ export default function Desktop({ user, onLogout }: { user: User; onLogout: () =
       id: `${app.key}-${Date.now()}`,
       appKey: app.key,
       title: app.title,
-      x: 40 + n * 28,
-      y: 40 + n * 28,
-      w: 760,
-      h: 500,
+      x: 16 + n * 26,
+      y: 16 + n * 26,
+      w: Math.max(420, Math.min(app.size?.[0] ?? 760, window.innerWidth - (chatOpen ? chatWidth : 0) - 70)),
+      h: Math.max(320, Math.min(app.size?.[1] ?? 500, window.innerHeight - 190)),
       z: zCounter.current,
       minimized: false,
       maximized: false,
@@ -284,6 +285,7 @@ export default function Desktop({ user, onLogout }: { user: User; onLogout: () =
                   icon={app.icon}
                   onFocus={() => focus(w.id)}
                   onMove={(x, y) => patch(w.id, { x, y })}
+                  onResize={(width, height) => patch(w.id, { w: width, h: height })}
                   onClose={() => close(w.id)}
                   onMinimize={() => {
                     patch(w.id, { minimized: true });

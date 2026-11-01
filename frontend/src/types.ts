@@ -108,3 +108,27 @@ export interface TasksResponse {
   people: { name: string; open: number; overdue: number; due_soon: number }[];
   items: TaskItem[];
 }
+
+export interface BoardCard {
+  id: string;
+  source: "local" | "bitrix";
+  title: string;
+  description: string;
+  status: "new" | "in_progress" | "review" | "done";
+  priority: "low" | "normal" | "high";
+  assignee_id: number | null;
+  assignee: string;
+  deadline: string | null;
+  overdue: boolean;
+  editable: boolean;
+}
+
+export interface BoardColumn {
+  key: BoardCard["status"];
+  title: string;
+  cards: BoardCard[];
+}
+
+export interface Board {
+  columns: BoardColumn[];
+}

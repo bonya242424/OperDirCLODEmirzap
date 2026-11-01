@@ -20,6 +20,7 @@ interface Props {
   children: ReactNode;
   onFocus: () => void;
   onMove: (x: number, y: number) => void;
+  onResize: (w: number, h: number) => void;
   onClose: () => void;
   onMinimize: () => void;
   onToggleMaximize: () => void;
@@ -32,11 +33,13 @@ export default function Window({
   children,
   onFocus,
   onMove,
+  onResize,
   onClose,
   onMinimize,
   onToggleMaximize,
 }: Props) {
   const drag = useRef<{ dx: number; dy: number } | null>(null);
+  const size = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
   function down(e: PointerEvent<HTMLDivElement>) {
     if ((e.target as HTMLElement).closest("button") || win.maximized) return;
@@ -66,22 +69,45 @@ export default function Window({
         onPointerUp={() => (drag.current = null)}
         onDoubleClick={onToggleMaximize}
       >
+        <div className="traffic">
+          <button className="light red" title="Закрыть" aria-label="Закрыть" onClick={onClose}>
+            <span>×</span>
+          </button>
+          <button className="light yellow" title="Свернуть" aria-label="Свернуть" onClick={onMinimize}>
+            <span>−</span>
+          </button>
+          <button
+            className="light green"
+            title={win.maximized ? "Вернуть размер" : "Во весь экран"}
+            aria-label="Во весь экран"
+            onClick={onToggleMaximize}
+          >
+            <span>{win.maximized ? "↙" : "↗"}</span>
+          </button>
+        </div>
         <span className="window-name">
           <span aria-hidden="true">{icon}</span> {win.title}
         </span>
-        <div className="window-buttons">
-          <button onClick={onToggleMaximize}>
-            <i className="dot green" /> Во весь экран
-          </button>
-          <button onClick={onMinimize}>
-            <i className="dot yellow" /> Свернуть
-          </button>
-          <button onClick={onClose}>
-            <i className="dot red" /> Закрыть
-          </button>
-        </div>
+        <span className="traffic-spacer" />
       </div>
       <div className="window-body">{children}</div>
+      {!win.maximized && (
+        <div
+          className="window-grip"
+          onPointerDown={(e) => {
+            size.current = { x: e.clientX, y: e.clientY, w: win.w, h: win.h };
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            if (!size.current) return;
+            onResize(
+              Math.max(420, size.current.w + e.clientX - size.current.x),
+              Math.max(300, size.current.h + e.clientY - size.current.y),
+            );
+          }}
+          onPointerUp={() => (size.current = null)}
+        />
+      )}
     </div>
   );
 }
