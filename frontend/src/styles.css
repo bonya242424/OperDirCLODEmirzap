@@ -316,3 +316,6 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .director.has-drawer { padding-right: 410px; }
 .director.has-drawer .tiles { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .chat-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.linkish { background: transparent; border: 0; padding: 0; text-align: left; font: inherit; color: var(--text); } .linkish:hover:not(:disabled) { text-decoration: underline; border: 0; }
+.widget .stats { grid-template-columns: repeat(3, 1fr); }
+.narrow { width: 90px; }

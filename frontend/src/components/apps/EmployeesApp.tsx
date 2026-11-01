@@ -57,6 +57,7 @@ export default function EmployeesApp({ me }: { me: User }) {
             <th>Сотрудник</th>
             <th>Должность</th>
             <th>Отдел</th>
+            <th>id в Битрикс24</th>
             <th>Может применять доработки</th>
             <th>Доступ</th>
           </tr>
@@ -70,6 +71,20 @@ export default function EmployeesApp({ me }: { me: User }) {
               </td>
               <td>{u.position || "—"}</td>
               <td>{u.department || "—"}</td>
+              <td>
+                <input
+                  className="narrow"
+                  inputMode="numeric"
+                  placeholder="—"
+                  defaultValue={u.bitrix_user_id ?? ""}
+                  disabled={!isOwner}
+                  title="Нужен, чтобы задачи сотрудника попадали из Битрикс24 на доску"
+                  onBlur={(e) => {
+                    const v = Number(e.target.value);
+                    if (e.target.value.trim() && Number.isInteger(v) && v > 0 && v !== u.bitrix_user_id) update(u, { bitrix_user_id: v });
+                  }}
+                />
+              </td>
               <td>
                 <input
                   type="checkbox"

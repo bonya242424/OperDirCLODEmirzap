@@ -10,6 +10,7 @@ import IntegrationsApp from "./apps/IntegrationsApp";
 import Placeholder from "./apps/Placeholder";
 import Chat from "./Chat";
 import CalendarWidget from "./widgets/CalendarWidget";
+import FocusWidget from "./widgets/FocusWidget";
 import IntegrationsWidget from "./widgets/IntegrationsWidget";
 import Wallpaper from "./Wallpaper";
 import Window, { WindowState } from "./Window";
@@ -276,6 +277,7 @@ export default function Desktop({ user, onLogout }: { user: User; onLogout: () =
           <Wallpaper theme={theme} />
 
           <div className="widgets">
+            <FocusWidget onOpen={openByKey} />
             <IntegrationsWidget data={integ} onOpen={() => openByKey("integrations")} />
             <CalendarWidget />
           </div>
