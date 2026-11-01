@@ -25,6 +25,27 @@ class Settings(BaseSettings):
     rnp_spreadsheet_ids: str = ""  # id таблиц через запятую
     yandex_oauth_token: str = ""
     yandex_metrika_counter_id: str = ""
+    # Один OAuth-токен Яндекса на Метрику, Вебмастер, Диск (права выдаются при получении токена).
+    telegram_bot_token: str = ""
+    imap_host: str = ""
+    imap_port: int = 993
+    imap_user: str = ""
+    imap_password: str = ""
+    imap_ssl: bool = True
+    ftp_host: str = ""
+    ftp_port: int = 21
+    ftp_user: str = ""
+    ftp_password: str = ""
+    ftp_tls: bool = False  # FTPS (явный TLS)
+    ftp_dir: str = "/"
+    diadoc_client_id: str = ""
+    diadoc_login: str = ""
+    diadoc_password: str = ""
+    mirzap_mcp_url: str = ""
+    mirzap_mcp_token: str = ""
+    google_calendar_ids: str = ""  # id календарей через запятую
+    yandex_calendar_login: str = ""
+    yandex_calendar_password: str = ""  # пароль приложения CalDAV
 
     # Проверки интеграций
     scheduler_enabled: bool = True

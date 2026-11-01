@@ -87,6 +87,7 @@ class IntegrationOut(BaseModel):
     key: str
     name: str
     description: str
+    category: str
     status: str
     message: str
     has_sync: bool

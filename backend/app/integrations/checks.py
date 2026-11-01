@@ -112,11 +112,130 @@ def check_google_sheets(db, row: Integration) -> CheckResult:
     return freshness(row, 26, "Таблицы доступны, данные свежие")
 
 
-def check_onec_files(db, row: Integration) -> CheckResult:
-    hours = settings.onec_expected_interval_hours
+def _onec(row: Integration, what: str) -> CheckResult:
     if row.last_sync_at is None:
-        return CheckResult(NOT_CONFIGURED, "Файлы выгрузки 1С ещё не загружались")
-    return freshness(row, hours, "Файл выгрузки свежий")
+        return CheckResult(NOT_CONFIGURED, f"Выгрузка из 1С ({what}) ещё не загружалась")
+    return freshness(row, settings.onec_expected_interval_hours, "Файл выгрузки свежий")
+
+
+def check_onec_accounting(db, row: Integration) -> CheckResult:
+    return _onec(row, "Бухгалтерия")
+
+
+def check_onec_trade(db, row: Integration) -> CheckResult:
+    return _onec(row, "Управление торговлей")
+
+
+def _pending(configured: bool, missing: str) -> CheckResult:
+    """Для интеграций, которые ещё не написаны: честно говорим, что проверки пока нет."""
+    if not configured:
+        return CheckResult(NOT_CONFIGURED, missing)
+    return CheckResult(WARNING, "Данные заданы, но автоматическая проверка появится вместе с интеграцией")
+
+
+def check_telegram(db, row: Integration) -> CheckResult:
+    token = settings.telegram_bot_token.strip()
+    if not token:
+        return CheckResult(NOT_CONFIGURED, "Не задан TELEGRAM_BOT_TOKEN")
+    resp, err = _get(f"https://api.telegram.org/bot{token}/getMe")
+    if err:
+        return CheckResult(ERROR, err)
+    assert resp is not None
+    if resp.status_code in (401, 404):
+        return CheckResult(ERROR, "Telegram не принял токен бота")
+    if resp.status_code != 200:
+        return CheckResult(ERROR, f"Telegram ответил кодом {resp.status_code}")
+    return CheckResult(OK, "Бот отвечает")
+
+
+def check_imap(db, row: Integration) -> CheckResult:
+    import imaplib
+
+    if not (settings.imap_host.strip() and settings.imap_user.strip() and settings.imap_password):
+        return CheckResult(NOT_CONFIGURED, "Не заданы IMAP_HOST, IMAP_USER и IMAP_PASSWORD")
+    conn = None
+    try:
+        cls = imaplib.IMAP4_SSL if settings.imap_ssl else imaplib.IMAP4
+        conn = cls(settings.imap_host.strip(), settings.imap_port, timeout=10)
+        conn.login(settings.imap_user, settings.imap_password)
+    except imaplib.IMAP4.error:
+        return CheckResult(ERROR, "Почтовый сервер не принял логин или пароль")
+    except (OSError, EOFError) as exc:
+        return CheckResult(ERROR, f"Нет соединения с почтовым сервером ({type(exc).__name__})")
+    finally:
+        if conn is not None:
+            try:
+                conn.logout()
+            except Exception:  # noqa: BLE001 - соединение уже могло закрыться
+                pass
+    return CheckResult(OK, "Вход в почтовый ящик выполняется")
+
+
+def check_yandex_disk(db, row: Integration) -> CheckResult:
+    if not settings.yandex_oauth_token.strip():
+        return CheckResult(NOT_CONFIGURED, "Не задан YANDEX_OAUTH_TOKEN")
+    resp, err = _get("https://cloud-api.yandex.net/v1/disk", _yandex_headers())
+    if err:
+        return CheckResult(ERROR, err)
+    assert resp is not None
+    if resp.status_code in (401, 403):
+        return CheckResult(ERROR, "Токен недействителен или у него нет прав на Диск")
+    if resp.status_code != 200:
+        return CheckResult(ERROR, f"Яндекс Диск ответил кодом {resp.status_code}")
+    return CheckResult(OK, "Диск доступен")
+
+
+def check_ftp(db, row: Integration) -> CheckResult:
+    import ftplib
+
+    if not (settings.ftp_host.strip() and settings.ftp_user.strip() and settings.ftp_password):
+        return CheckResult(NOT_CONFIGURED, "Не заданы FTP_HOST, FTP_USER и FTP_PASSWORD")
+    ftp = None
+    try:
+        ftp = ftplib.FTP_TLS(timeout=10) if settings.ftp_tls else ftplib.FTP(timeout=10)
+        ftp.connect(settings.ftp_host.strip(), settings.ftp_port)
+        ftp.login(settings.ftp_user, settings.ftp_password)
+        if settings.ftp_tls:
+            ftp.prot_p()
+        ftp.cwd(settings.ftp_dir or "/")
+    except ftplib.error_perm:
+        return CheckResult(ERROR, "FTP-сервер не принял логин, пароль или папку")
+    except (ftplib.Error, OSError, EOFError) as exc:
+        return CheckResult(ERROR, f"Нет соединения с FTP-сервером ({type(exc).__name__})")
+    finally:
+        if ftp is not None:
+            try:
+                ftp.quit()
+            except Exception:  # noqa: BLE001
+                pass
+    return CheckResult(OK, "FTP-сервер доступен, папка открывается")
+
+
+def check_diadoc(db, row: Integration) -> CheckResult:
+    s = settings
+    return _pending(bool(s.diadoc_client_id and s.diadoc_login and s.diadoc_password), "Не заданы DIADOC_CLIENT_ID, DIADOC_LOGIN, DIADOC_PASSWORD")
+
+
+def check_google_docs(db, row: Integration) -> CheckResult:
+    return _pending(bool(settings.google_service_account_file.strip()), "Не задан GOOGLE_SERVICE_ACCOUNT_FILE")
+
+
+def check_google_calendar(db, row: Integration) -> CheckResult:
+    return _pending(
+        bool(settings.google_service_account_file.strip() and settings.google_calendar_ids.strip()),
+        "Не заданы GOOGLE_SERVICE_ACCOUNT_FILE и GOOGLE_CALENDAR_IDS",
+    )
+
+
+def check_yandex_calendar(db, row: Integration) -> CheckResult:
+    return _pending(
+        bool(settings.yandex_calendar_login and settings.yandex_calendar_password),
+        "Не заданы YANDEX_CALENDAR_LOGIN и YANDEX_CALENDAR_PASSWORD",
+    )
+
+
+def check_mirzap_mcp(db, row: Integration) -> CheckResult:
+    return _pending(bool(settings.mirzap_mcp_url.strip()), "Не задан MIRZAP_MCP_URL")
 
 
 def _yandex_headers() -> dict[str, str]:

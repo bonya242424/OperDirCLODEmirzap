@@ -18,6 +18,7 @@ def _out(row: Integration) -> IntegrationOut:
         key=row.key,
         name=row.name,
         description=row.description,
+        category=BY_KEY[row.key].category,
         status=row.status,
         message=row.message,
         has_sync=BY_KEY[row.key].has_sync,

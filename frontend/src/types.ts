@@ -16,6 +16,7 @@ export interface Integration {
   key: string;
   name: string;
   description: string;
+  category: string;
   status: IntegrationStatus;
   message: string;
   has_sync: boolean;

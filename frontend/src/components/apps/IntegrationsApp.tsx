@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, formatAgo, formatDate } from "../../api";
 import type { Integration, IntegrationStatus, IntegrationsResponse } from "../../types";
 
@@ -10,7 +10,25 @@ const STATUS_LABEL: Record<IntegrationStatus, string> = {
   unknown: "Не проверялось",
 };
 
+type Filter = "all" | "connected" | "idle" | "problems";
+
+const FILTERS: [Filter, string][] = [
+  ["all", "Все"],
+  ["connected", "Подключено"],
+  ["idle", "Не подключено"],
+  ["problems", "Требуют внимания"],
+];
+
+function matches(i: Integration, f: Filter): boolean {
+  if (f === "connected") return i.status === "ok";
+  if (f === "idle") return i.status === "not_configured" || i.status === "unknown";
+  if (f === "problems") return i.status === "error" || i.status === "warning";
+  return true;
+}
+
 export default function IntegrationsApp() {
+  const [filter, setFilter] = useState<Filter>("all");
+  const [search, setSearch] = useState("");
   const [data, setData] = useState<IntegrationsResponse | null>(null);
   const [error, setError] = useState("");
   const [checking, setChecking] = useState<string | null>(null);
@@ -54,6 +72,17 @@ export default function IntegrationsApp() {
     }
   }
 
+  const groups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const map = new Map<string, Integration[]>();
+    for (const i of data?.items ?? []) {
+      if (!matches(i, filter)) continue;
+      if (q && !`${i.name} ${i.description} ${i.category}`.toLowerCase().includes(q)) continue;
+      map.set(i.category, [...(map.get(i.category) ?? []), i]);
+    }
+    return [...map.entries()];
+  }, [data, filter, search]);
+
   return (
     <div className="app-pad">
       <div className="app-head">
@@ -72,8 +101,27 @@ export default function IntegrationsApp() {
       </div>
       {error && <div className="error">{error}</div>}
       {!data && !error && <p className="muted">Загрузка…</p>}
-      <div className="cards">
-        {data?.items.map((i) => (
+      <div className="integ-tools">
+        <input
+          type="search"
+          placeholder="Поиск по интеграциям…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="chips">
+          {FILTERS.map(([key, label]) => (
+            <button key={key} className={`chip${filter === key ? " on" : ""}`} onClick={() => setFilter(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {data && groups.length === 0 && <p className="muted">Ничего не найдено</p>}
+      {groups.map(([category, items]) => (
+        <section key={category}>
+          <h3 className="cat-title">{category}</h3>
+          <div className="cards">
+            {items.map((i) => (
           <div key={i.key} className="card">
             <div className="card-top">
               <strong>{i.name}</strong>
@@ -97,8 +145,10 @@ export default function IntegrationsApp() {
               {checking === i.key ? "Проверяем…" : "Проверить сейчас"}
             </button>
           </div>
-        ))}
-      </div>
+        )) }
+          </div>
+        </section>
+      ))}
     </div>
   );
 }
