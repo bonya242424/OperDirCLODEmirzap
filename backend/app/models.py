@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -118,3 +118,37 @@ class BitrixTask(Base):
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     is_open: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Metric(Base):
+    """Показатель директора: название, единицы, пороги. Значения лежат в MetricValue."""
+
+    __tablename__ = "metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    direction: Mapped[str] = mapped_column(String(16), index=True)  # gen | tech | ops | fin
+    name: Mapped[str] = mapped_column(String(200))
+    unit: Mapped[str] = mapped_column(String(32), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    # up — чем больше, тем лучше; down — чем меньше, тем лучше
+    better: Mapped[str] = mapped_column(String(8), default="up")
+    warn_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bad_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Как часто ждём новое значение (в днях); позже этого срока показатель считается устаревшим
+    expected_days: Mapped[int] = mapped_column(Integer, default=7)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MetricValue(Base):
+    __tablename__ = "metric_values"
+    __table_args__ = (UniqueConstraint("metric_id", "period", name="uq_metric_period"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    metric_id: Mapped[int] = mapped_column(ForeignKey("metrics.id"), index=True)
+    period: Mapped[date] = mapped_column(Date)
+    value: Mapped[float] = mapped_column(Float)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

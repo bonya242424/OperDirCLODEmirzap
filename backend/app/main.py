@@ -8,7 +8,7 @@ from .config import settings
 from .db import Base, SessionLocal, engine
 from .integrations.service import ensure_rows
 from .models import User
-from .routers import auth, chat, connections, files, integrations, tasks, users
+from .routers import auth, chat, connections, files, integrations, metrics, tasks, users
 from .scheduler import start_scheduler
 from .security import hash_password
 
@@ -62,6 +62,7 @@ app.include_router(chat.router)
 app.include_router(connections.router)
 app.include_router(files.router)
 app.include_router(tasks.router)
+app.include_router(metrics.router)
 
 
 @app.get("/api/health")
