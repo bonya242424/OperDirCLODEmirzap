@@ -315,3 +315,4 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .history li .muted { grid-column: 2; }
 .director.has-drawer { padding-right: 410px; }
 .director.has-drawer .tiles { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.chat-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }

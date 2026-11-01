@@ -56,12 +56,16 @@ export default function Chat() {
             <div className="chat-logo">✦</div>
             <strong>Ассистент</strong>
             <p>
-              Спросите или поручите задачу. Пока я не подключён к показателям, задачам и файлам компании, поэтому
-              цифр по бизнесу назвать не смогу.
+              Я вижу показатели директоров, задачи и состояние интеграций. Данные из 1С, РНП и Метрики появятся в ответах,
+              когда эти источники будут подключены.
             </p>
-            <button className="chip" onClick={() => void send(undefined, "Что ты умеешь?")}>
-              Что ты умеешь?
-            </button>
+            <div className="chat-chips">
+              {["Что сейчас горит?", "Какие задачи просрочены?", "Что с интеграциями?"].map((q) => (
+                <button key={q} className="chip" onClick={() => void send(undefined, q)}>
+                  {q}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {messages.map((m) => (
