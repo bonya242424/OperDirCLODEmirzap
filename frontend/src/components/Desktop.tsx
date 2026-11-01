@@ -1,3 +1,4 @@
+import AgentsApp from "./apps/AgentsApp";
 import { CSSProperties, PointerEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { applyTheme, getTheme, Theme } from "../theme";
@@ -32,7 +33,7 @@ const APPS: AppDef[] = [
   { key: "tasks", title: "Задачи", icon: "✅", colors: ["#8fd47a", "#3f9d4f"], size: [1100, 660], stage: 1 },
   { key: "strategy", title: "Стратег. задачи", icon: "🎯", colors: ["#ff9a8a", "#e0514a"], stage: 4 },
   { key: "files", title: "Файлы", icon: "📁", colors: ["#ffd27a", "#f0a030"], size: [920, 580], stage: 3 },
-  { key: "agents", title: "ИИ-агенты", icon: "🤖", colors: ["#b69bff", "#7a52e0"], stage: 2 },
+  { key: "agents", title: "ИИ-агенты", icon: "🤖", colors: ["#b69bff", "#7a52e0"], size: [1060, 620], stage: 2 },
   { key: "meetings", title: "Встречи", icon: "🎙️", colors: ["#7fd6e8", "#2f9bb8"], stage: 5 },
   { key: "integrations", title: "Интеграции", icon: "🔌", colors: ["#ff9fc4", "#d6478a"], size: [940, 620] },
   { key: "employees", title: "Сотрудники", icon: "👥", colors: ["#a9b4c8", "#667189"], size: [900, 560] },
@@ -44,6 +45,7 @@ function renderApp(app: AppDef, user: User): ReactNode {
   if (app.key === "integrations") return <IntegrationsApp />;
   if (["gen", "tech", "ops", "fin"].includes(app.key)) return <DirectorApp key={app.key} direction={app.key} title={app.title} />;
   if (app.key === "tasks") return <TasksApp me={user} />;
+  if (app.key === "agents") return <AgentsApp />;
   if (app.key === "files") return <FilesApp />;
   if (app.key === "employees") return <EmployeesApp me={user} />;
   return <Placeholder title={app.title} stage={app.stage ?? 0} />;

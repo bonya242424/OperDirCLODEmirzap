@@ -35,6 +35,17 @@ class RemoteTask:
     responsible_id: int
     status: int
     deadline: datetime | None
+    description: str = ""
+    parent_id: int | None = None
+    group_id: int | None = None
+
+
+def _opt_int(v) -> int | None:
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n or None
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -66,7 +77,7 @@ def fetch_open_tasks(responsible_id: int) -> list[RemoteTask]:
         params = {
             "filter[RESPONSIBLE_ID]": responsible_id,
             "filter[<REAL_STATUS]": STATUS_COMPLETED,
-            "select[]": ["ID", "TITLE", "STATUS", "DEADLINE", "RESPONSIBLE_ID"],
+            "select[]": ["ID", "TITLE", "STATUS", "DEADLINE", "RESPONSIBLE_ID", "DESCRIPTION", "PARENT_ID", "GROUP_ID"],
             "start": start,
         }
         try:
@@ -93,6 +104,9 @@ def fetch_open_tasks(responsible_id: int) -> list[RemoteTask]:
                     responsible_id=int(_pick(raw, "responsibleId", "RESPONSIBLE_ID") or responsible_id),
                     status=status,
                     deadline=_parse_dt(_pick(raw, "deadline", "DEADLINE")),
+                    description=str(_pick(raw, "description", "DESCRIPTION") or "")[:5000],
+                    parent_id=_opt_int(_pick(raw, "parentId", "PARENT_ID")),
+                    group_id=_opt_int(_pick(raw, "groupId", "GROUP_ID")),
                 )
             )
         nxt = data.get("next")
@@ -127,6 +141,7 @@ def sync_tasks(db: Session) -> int:
             db.add(row)
         row.title, row.responsible_id, row.status = task.title, task.responsible_id, task.status
         row.deadline, row.is_open, row.synced_at = task.deadline, True, now
+        row.description, row.parent_id, row.group_id = task.description, task.parent_id, task.group_id
     gone = [i for i, row in existing.items() if i not in fetched and row.is_open]
     if gone:
         db.execute(update(BitrixTask).where(BitrixTask.id.in_(gone)).values(is_open=False, synced_at=now))

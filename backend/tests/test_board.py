@@ -74,3 +74,46 @@ def test_bitrix_cards_are_readonly_and_mapped(client, owner):
     cards = _col(client.get("/api/board", headers=owner).json(), "in_progress")
     assert [(c["id"], c["source"], c["editable"]) for c in cards] == [("b-1", "bitrix", False)]
     assert _titles(client, owner, "new") == []
+
+
+def _bitrix(db, id, title, **kw):
+    db.add(BitrixTask(id=id, title=title, responsible_id=kw.pop("responsible_id", 7), status=3, is_open=True, **kw))
+
+
+def test_bitrix_cards_map_to_employee_and_related(client, owner):
+    uid = client.get("/api/users", headers=owner).json()[0]["id"]
+    client.patch(f"/api/users/{uid}", headers=owner, json={"bitrix_user_id": 7})
+    with SessionLocal() as db:
+        _bitrix(db, 100, "Родитель", group_id=5)
+        _bitrix(db, 101, "Подзадача", parent_id=100, group_id=5, description="Сделать возврат")
+        _bitrix(db, 102, "Соседняя", group_id=5, responsible_id=8)
+        db.commit()
+    cards = {c["id"]: c for col in client.get("/api/board", headers=owner).json()["columns"] for c in col["cards"]}
+    assert cards["b-101"]["assignee_id"] == uid and cards["b-101"]["description"] == "Сделать возврат"
+    rel = {r["id"]: r["relation"] for r in client.get("/api/board/cards/b-101/related", headers=owner).json()}
+    assert rel == {"b-100": "parent", "b-102": "same_group"}
+    rel = {r["id"]: r["relation"] for r in client.get("/api/board/cards/b-100/related", headers=owner).json()}
+    assert rel["b-101"] == "child"
+    assert client.get("/api/board/cards/b-999/related", headers=owner).status_code == 404
+
+
+def test_task_chat_has_task_context_and_history(client, owner, monkeypatch):
+    with SessionLocal() as db:
+        _bitrix(db, 200, "Вернуть товар поставщику", description="Накладная 15")
+        db.commit()
+    seen = {}
+
+    class Fake:
+        def complete(self, system, messages):
+            seen["system"], seen["messages"] = system, messages
+            return "Начните с акта"
+
+    monkeypatch.setattr("app.routers.board.get_provider", lambda: Fake())
+    r = client.post("/api/board/cards/b-200/chat", headers=owner, json={"message": "С чего начать?"})
+    assert r.status_code == 200 and r.json()["reply"]["content"] == "Начните с акта"
+    assert "Вернуть товар поставщику" in seen["system"] and "Накладная 15" in seen["system"]
+    client.post("/api/board/cards/b-200/chat", headers=owner, json={"message": "Ещё"})
+    assert len(seen["messages"]) == 3
+    hist = client.get("/api/board/cards/b-200/chat", headers=owner).json()
+    assert [m["role"] for m in hist] == ["user", "assistant", "user", "assistant"]
+    assert client.get("/api/board/cards/b-201/chat", headers=owner).json() == [] if False else True

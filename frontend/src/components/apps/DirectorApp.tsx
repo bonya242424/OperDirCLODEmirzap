@@ -115,6 +115,8 @@ export default function DirectorApp({ direction, title }: { direction: string; t
     }
   }
 
+  const RANK: Record<Metric["status"], number> = { bad: 0, warning: 1, no_data: 2, ok: 3 };
+  const sorted = metrics ? [...metrics].sort((a, b) => RANK[a.status] - RANK[b.status] || a.name.localeCompare(b.name, "ru")) : null;
   const count = (s: Metric["status"]) => metrics?.filter((m) => m.status === s).length ?? 0;
   const stale = metrics?.filter((m) => m.stale).length ?? 0;
 
@@ -145,8 +147,13 @@ export default function DirectorApp({ direction, title }: { direction: string; t
           <button className="primary" onClick={() => setForm(EMPTY)}>+ Добавить первый показатель</button>
         </div>
       )}
+      {!metrics && !error && (
+        <div className="tiles" aria-busy="true">
+          {[0, 1, 2].map((i) => <div key={i} className="tile-m skeleton" />)}
+        </div>
+      )}
       <div className="tiles">
-        {metrics?.map((m) => (
+        {sorted?.map((m) => (
           <button key={m.id} className={`tile-m ${m.status}${open?.id === m.id ? " sel" : ""}`} onClick={() => setOpen(m)}>
             <div className="tile-top">
               <span className="tile-name">{m.name}</span>
@@ -156,8 +163,8 @@ export default function DirectorApp({ direction, title }: { direction: string; t
               {fmt(m.latest)}
               <small>{m.unit}</small>
               {m.change !== null && m.change !== 0 && (
-                <span className={`delta ${(m.change > 0) === (m.better === "up") ? "pos" : "neg"}`}>
-                  {m.change > 0 ? "▲" : "▼"} {fmt(Math.abs(m.change))}
+                <span className={`delta ${(m.change > 0) === (m.better === "up") ? "pos" : "neg"}`} title="Изменение к предыдущему значению">
+                  {m.change > 0 ? "▲" : "▼"} {fmt(Math.abs(m.change))} <small>к пред.</small>
                 </span>
               )}
             </div>

@@ -118,6 +118,22 @@ class BitrixTask(Base):
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     is_open: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    description: Mapped[str] = mapped_column(Text, default="")
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # родительская задача
+    group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # проект/группа в Битрикс24
+
+
+class TaskMessage(Base):
+    """Чат с ИИ-агентом внутри карточки задачи. task_ref: «l-12» своя задача, «b-345» из Битрикс24."""
+
+    __tablename__ = "task_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_ref: Mapped[str] = mapped_column(String(32), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))  # user | assistant
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Metric(Base):

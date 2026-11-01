@@ -1,3 +1,4 @@
+import TaskDrawer from "./TaskDrawer";
 import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, formatDate } from "../../api";
 import type { Board, BoardCard, User } from "../../types";
@@ -50,6 +51,8 @@ export default function TasksApp({ me }: { me: User }) {
   const original = draft && draft.id !== null ? board?.columns.flatMap((c) => c.cards).find((c) => c.id === `l-${draft.id}`) : undefined;
   const [dragId, setDragId] = useState<string | null>(null);
   const [over, setOver] = useState<{ status: Status; index: number } | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const detail = detailId ? board?.columns.flatMap((c) => c.cards).find((c) => c.id === detailId) ?? null : null;
   const [syncing, setSyncing] = useState(false);
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : "Ошибка");
@@ -90,7 +93,7 @@ export default function TasksApp({ me }: { me: User }) {
     if (!quick || !quick.text.trim()) return setQuick(null);
     try {
       await api("/board/tasks", { method: "POST", body: { title: quick.text, status: quick.status } });
-      setQuick(null);
+      setQuick({ status: quick.status, text: "" });
       load();
     } catch (err) {
       fail(err);
@@ -98,7 +101,10 @@ export default function TasksApp({ me }: { me: User }) {
   }
 
   function openCard(c: BoardCard) {
-    if (!c.editable) return;
+    setDetailId(c.id);
+  }
+
+  function editCard(c: BoardCard) {
     setDraft({
       id: Number(c.id.split("-")[1]),
       title: c.title,
@@ -206,6 +212,23 @@ export default function TasksApp({ me }: { me: User }) {
     load();
   }
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+      if (e.key === "Escape") {
+        if (draft) setDraft(null);
+        else setDetailId(null);
+      }
+      if ((e.key === "n" || e.key === "т") && !draft && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        setQuick({ status: "new", text: "" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [draft]);
+
   const people = users.filter((u) => u.is_active);
 
   return (
@@ -305,7 +328,7 @@ export default function TasksApp({ me }: { me: User }) {
                   <form onSubmit={quickAdd} className="kquick">
                     <input
                       autoFocus
-                      placeholder="Название задачи, Enter"
+                      placeholder="Название, Enter. Esc — закончить"
                       value={quick.text}
                       onChange={(e) => setQuick({ ...quick, text: e.target.value })}
                       onBlur={() => !quick.text.trim() && setQuick(null)}
@@ -320,6 +343,10 @@ export default function TasksApp({ me }: { me: User }) {
           );
         })}
       </div>
+
+      {detail && !draft && (
+        <TaskDrawer card={detail} onClose={() => setDetailId(null)} onEdit={() => editCard(detail)} onOpenRelated={setDetailId} />
+      )}
 
       {draft && (
         <div className="modal-bg" onPointerDown={() => setDraft(null)}>
