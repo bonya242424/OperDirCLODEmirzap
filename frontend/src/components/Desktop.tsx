@@ -2,6 +2,7 @@ import { CSSProperties, PointerEvent, ReactNode, useEffect, useMemo, useRef, use
 import { api } from "../api";
 import { applyTheme, getTheme, Theme } from "../theme";
 import type { IntegrationsResponse, User } from "../types";
+import FilesApp from "./apps/FilesApp";
 import EmployeesApp from "./apps/EmployeesApp";
 import IntegrationsApp from "./apps/IntegrationsApp";
 import Placeholder from "./apps/Placeholder";
@@ -37,6 +38,7 @@ const MIN_CHAT = 300;
 
 function renderApp(app: AppDef, user: User): ReactNode {
   if (app.key === "integrations") return <IntegrationsApp />;
+  if (app.key === "files") return <FilesApp />;
   if (app.key === "employees") return <EmployeesApp me={user} />;
   return <Placeholder title={app.title} stage={app.stage ?? 0} />;
 }

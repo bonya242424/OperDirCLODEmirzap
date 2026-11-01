@@ -211,3 +211,14 @@ kbd { font: inherit; font-size: 11px; color: var(--muted); border: 1px solid var
 .conn-form { display: grid; gap: 8px; margin: 8px 0; max-width: 460px; }
 .conn-form label { display: grid; gap: 3px; font-size: 13px; color: var(--muted); }
 .row { display: flex; gap: 8px; margin-top: auto; }
+
+.files { display: grid; grid-template-columns: 230px 1fr; height: 100%; min-height: 0; }
+.files-side { border-right: 1px solid var(--line); padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.files-side-head { display: flex; justify-content: space-between; align-items: center; }
+.files-main { padding: 14px; overflow: auto; }
+.folder-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.folder { width: 100%; display: flex; justify-content: space-between; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 6px 10px; color: var(--text); }
+.folder.on { background: var(--panel-2); border-color: var(--line); }
+.files-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.files-table th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; }
+.files-table td { padding: 6px 8px; border-top: 1px solid var(--line); }

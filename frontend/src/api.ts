@@ -26,16 +26,18 @@ interface Options {
   body?: unknown;
 }
 
-export async function api<T>(path: string, options: Options = {}): Promise<T> {
+async function request(path: string, options: Options): Promise<Response> {
   const headers: Record<string, string> = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  const isForm = options.body instanceof FormData;
+  if (options.body !== undefined && !isForm) headers["Content-Type"] = "application/json";
 
   const res = await fetch(`/api${path}`, {
     method: options.method ?? "GET",
     headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    body:
+      options.body === undefined ? undefined : isForm ? (options.body as FormData) : JSON.stringify(options.body),
   });
 
   if (res.status === 401 && token) onUnauthorized();
@@ -50,7 +52,25 @@ export async function api<T>(path: string, options: Options = {}): Promise<T> {
     }
     throw new ApiError(res.status, detail);
   }
+  return res;
+}
+
+export async function api<T>(path: string, options: Options = {}): Promise<T> {
+  const res = await request(path, options);
   return (res.status === 204 ? undefined : await res.json()) as T;
+}
+
+/** Скачивание файла с авторизацией: браузер сам заголовок Authorization не передаст. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const res = await request(path, {});
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 const DATE_FORMAT = new Intl.DateTimeFormat("ru-RU", {

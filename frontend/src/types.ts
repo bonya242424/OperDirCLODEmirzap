@@ -67,3 +67,24 @@ export interface Connection {
   secrets_set: string[];
   can_edit: boolean;
 }
+
+export interface Folder {
+  id: number;
+  name: string;
+  description: string;
+  source_key: string | null;
+  files_count: number;
+  last_upload_at: string | null;
+  can_edit: boolean;
+}
+
+export interface StoredFile {
+  id: number;
+  folder_id: number;
+  name: string;
+  size: number;
+  content_type: string;
+  uploaded_by: string;
+  uploaded_at: string;
+  can_delete: boolean;
+}
