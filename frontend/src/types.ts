@@ -88,3 +88,23 @@ export interface StoredFile {
   uploaded_at: string;
   can_delete: boolean;
 }
+
+export interface TaskItem {
+  id: number;
+  title: string;
+  responsible: string;
+  status: number;
+  deadline: string | null;
+  overdue: boolean;
+  days_left: number | null;
+}
+
+export interface TasksResponse {
+  total_open: number;
+  overdue: number;
+  due_today: number;
+  due_soon: number;
+  no_deadline: number;
+  people: { name: string; open: number; overdue: number; due_soon: number }[];
+  items: TaskItem[];
+}
