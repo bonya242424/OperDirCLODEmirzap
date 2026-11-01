@@ -132,3 +132,29 @@ export interface BoardColumn {
 export interface Board {
   columns: BoardColumn[];
 }
+
+export interface Metric {
+  id: number;
+  direction: string;
+  name: string;
+  unit: string;
+  description: string;
+  better: "up" | "down";
+  warn_threshold: number | null;
+  bad_threshold: number | null;
+  expected_days: number;
+  latest: number | null;
+  latest_period: string | null;
+  previous: number | null;
+  change: number | null;
+  status: "ok" | "warning" | "bad" | "no_data";
+  stale: boolean;
+  history: number[];
+}
+
+export interface MetricValue {
+  period: string;
+  value: number;
+  note: string;
+  created_at: string;
+}

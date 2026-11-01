@@ -2,6 +2,7 @@ import { CSSProperties, PointerEvent, ReactNode, useEffect, useMemo, useRef, use
 import { api } from "../api";
 import { applyTheme, getTheme, Theme } from "../theme";
 import type { IntegrationsResponse, User } from "../types";
+import DirectorApp from "./apps/DirectorApp";
 import TasksApp from "./apps/TasksApp";
 import FilesApp from "./apps/FilesApp";
 import EmployeesApp from "./apps/EmployeesApp";
@@ -40,6 +41,7 @@ const MIN_CHAT = 300;
 
 function renderApp(app: AppDef, user: User): ReactNode {
   if (app.key === "integrations") return <IntegrationsApp />;
+  if (["gen", "tech", "ops", "fin"].includes(app.key)) return <DirectorApp key={app.key} direction={app.key} title={app.title} />;
   if (app.key === "tasks") return <TasksApp me={user} />;
   if (app.key === "files") return <FilesApp />;
   if (app.key === "employees") return <EmployeesApp me={user} />;
@@ -113,15 +115,19 @@ export default function Desktop({ user, onLogout }: { user: User; onLogout: () =
     const existing = windows.find((w) => w.appKey === app.key);
     if (existing) return focus(existing.id);
     zCounter.current += 1;
-    const n = windows.length;
+    const n = windows.length % 6;
+    const deskW = window.innerWidth - (chatOpen ? chatWidth : 0) - 60;
+    const deskH = window.innerHeight - 170;
+    const x = 16 + n * 26;
+    const y = 16 + n * 26;
     const win: WindowState = {
       id: `${app.key}-${Date.now()}`,
       appKey: app.key,
       title: app.title,
-      x: 16 + n * 26,
-      y: 16 + n * 26,
-      w: Math.max(420, Math.min(app.size?.[0] ?? 760, window.innerWidth - (chatOpen ? chatWidth : 0) - 70)),
-      h: Math.max(320, Math.min(app.size?.[1] ?? 500, window.innerHeight - 190)),
+      x,
+      y,
+      w: Math.max(420, Math.min(app.size?.[0] ?? 760, deskW - x)),
+      h: Math.max(320, Math.min(app.size?.[1] ?? 500, deskH - y + 16)),
       z: zCounter.current,
       minimized: false,
       maximized: false,
