@@ -19,22 +19,22 @@ export default function Chat() {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages, busy]);
 
-  async function send(e?: FormEvent) {
+  async function send(e?: FormEvent, preset?: string) {
     e?.preventDefault();
-    const message = text.trim();
+    const message = (preset ?? text).trim();
     if (!message || busy) return;
     setBusy(true);
     setError("");
     const draft: ChatMessage = { id: -Date.now(), role: "user", content: message, created_at: new Date().toISOString() };
     setMessages((prev) => [...prev, draft]);
-    setText("");
+    if (preset === undefined) setText("");
     try {
       const res = await api<{ reply: ChatMessage }>("/chat", { method: "POST", body: { message } });
       setMessages((prev) => [...prev, res.reply]);
     } catch (err) {
       // Сообщение не сохранилось на сервере: убираем его и возвращаем текст в поле ввода.
       setMessages((prev) => prev.filter((m) => m.id !== draft.id));
-      setText(message);
+      if (preset === undefined) setText(message);
       setError(err instanceof Error ? err.message : "Не удалось отправить");
     } finally {
       setBusy(false);
@@ -53,8 +53,15 @@ export default function Chat() {
       <div className="chat-log">
         {messages.length === 0 && (
           <div className="chat-empty">
-            Спросите что-нибудь. Пока я не подключён к показателям, задачам и файлам компании, поэтому цифр по
-            бизнесу назвать не смогу.
+            <div className="chat-logo">✦</div>
+            <strong>Ассистент</strong>
+            <p>
+              Спросите или поручите задачу. Пока я не подключён к показателям, задачам и файлам компании, поэтому
+              цифр по бизнесу назвать не смогу.
+            </p>
+            <button className="chip" onClick={() => void send(undefined, "Что ты умеешь?")}>
+              Что ты умеешь?
+            </button>
           </div>
         )}
         {messages.map((m) => (

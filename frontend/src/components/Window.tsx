@@ -16,6 +16,7 @@ export interface WindowState {
 interface Props {
   win: WindowState;
   active: boolean;
+  icon: string;
   children: ReactNode;
   onFocus: () => void;
   onMove: (x: number, y: number) => void;
@@ -24,7 +25,17 @@ interface Props {
   onToggleMaximize: () => void;
 }
 
-export default function Window({ win, active, children, onFocus, onMove, onClose, onMinimize, onToggleMaximize }: Props) {
+export default function Window({
+  win,
+  active,
+  icon,
+  children,
+  onFocus,
+  onMove,
+  onClose,
+  onMinimize,
+  onToggleMaximize,
+}: Props) {
   const drag = useRef<{ dx: number; dy: number } | null>(null);
 
   function down(e: PointerEvent<HTMLDivElement>) {
@@ -36,10 +47,6 @@ export default function Window({ win, active, children, onFocus, onMove, onClose
   function move(e: PointerEvent<HTMLDivElement>) {
     if (!drag.current) return;
     onMove(Math.max(0, e.clientX - drag.current.dx), Math.max(0, e.clientY - drag.current.dy));
-  }
-
-  function up() {
-    drag.current = null;
   }
 
   const style = win.maximized
@@ -56,19 +63,21 @@ export default function Window({ win, active, children, onFocus, onMove, onClose
         className="window-title"
         onPointerDown={down}
         onPointerMove={move}
-        onPointerUp={up}
+        onPointerUp={() => (drag.current = null)}
         onDoubleClick={onToggleMaximize}
       >
-        <span>{win.title}</span>
+        <span className="window-name">
+          <span aria-hidden="true">{icon}</span> {win.title}
+        </span>
         <div className="window-buttons">
-          <button title="Свернуть" onClick={onMinimize}>
-            –
+          <button onClick={onToggleMaximize}>
+            <i className="dot green" /> Во весь экран
           </button>
-          <button title="Развернуть" onClick={onToggleMaximize}>
-            ▢
+          <button onClick={onMinimize}>
+            <i className="dot yellow" /> Свернуть
           </button>
-          <button title="Закрыть" className="close" onClick={onClose}>
-            ✕
+          <button onClick={onClose}>
+            <i className="dot red" /> Закрыть
           </button>
         </div>
       </div>
