@@ -106,3 +106,15 @@ class StoredFile(Base):
     disk_name: Mapped[str] = mapped_column(String(64), unique=True)
     uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BitrixTask(Base):
+    __tablename__ = "bitrix_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # id задачи в Битрикс24
+    title: Mapped[str] = mapped_column(String(500))
+    responsible_id: Mapped[int] = mapped_column(Integer, index=True)  # id пользователя в Битрикс24
+    status: Mapped[int] = mapped_column(Integer, default=2)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    is_open: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

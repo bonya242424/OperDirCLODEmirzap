@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from .bitrix import run_scheduled_sync
 from .config import settings
 from .integrations.service import run_scheduled_checks
 
@@ -17,6 +18,15 @@ def start_scheduler() -> BackgroundScheduler:
         "interval",
         minutes=settings.integration_check_minutes,
         id="integration_checks",
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        run_scheduled_sync,
+        "interval",
+        minutes=settings.bitrix_sync_minutes,
+        id="bitrix_sync",
         next_run_time=datetime.now(timezone.utc),
         max_instances=1,
         coalesce=True,

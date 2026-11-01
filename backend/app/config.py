@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     files_dir: str = "./data/files"
     max_upload_mb: int = 100
 
+    bitrix_sync_minutes: int = 15
+
     # Проверки интеграций
     scheduler_enabled: bool = True
     integration_check_minutes: int = 60
