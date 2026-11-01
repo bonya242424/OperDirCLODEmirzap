@@ -183,3 +183,23 @@ def test_pending_integration_warns_when_configured(client, owner, monkeypatch):
     item = client.post("/api/integrations/mirzap_mcp/check", headers=owner).json()
     assert item["status"] == "warning"
     assert "mcp.example.com" not in item["message"]
+
+
+def test_public_sheet_by_link(client, owner, monkeypatch):
+    monkeypatch.setattr(settings, "rnp_spreadsheet_ids", "https://docs.google.com/spreadsheets/d/AAA/edit?usp=sharing")
+    seen = []
+
+    def ok(url, headers=None, timeout=None):
+        seen.append(url)
+        return httpx.Response(200, text="a,b", headers={"content-type": "text/csv"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", ok)
+    assert client.post("/api/integrations/google_sheets_rnp/check", headers=owner).json()["status"] == "ok"
+    assert "/d/AAA/export" in seen[0]
+
+    def closed(url, headers=None, timeout=None):
+        return httpx.Response(302, headers={"location": "https://accounts.google.com"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", closed)
+    item = client.post("/api/integrations/google_sheets_rnp/check", headers=owner).json()
+    assert item["status"] == "error" and "доступ" in item["message"]

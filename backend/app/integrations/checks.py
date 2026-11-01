@@ -78,37 +78,33 @@ def check_bitrix24(db, row: Integration) -> CheckResult:
     return freshness(row, 2, "Подключение работает, данные свежие")
 
 
+def check_public_sheet(sheet_id: str) -> CheckResult:
+    """Таблица открыта по ссылке: пробуем скачать её как CSV без входа в аккаунт."""
+    resp, err = _get(f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv")
+    if err:
+        return CheckResult(ERROR, err)
+    assert resp is not None
+    if resp.status_code in (301, 302, 303, 307, 308, 401, 403, 404):
+        return CheckResult(ERROR, "Таблица закрыта или ссылка неверная: откройте доступ по ссылке")
+    if resp.status_code != 200:
+        return CheckResult(ERROR, f"Google ответил кодом {resp.status_code}")
+    if "text/html" in resp.headers.get("content-type", ""):
+        return CheckResult(ERROR, "Вместо таблицы пришла страница входа: откройте доступ по ссылке")
+    return CheckResult(OK, "Таблица доступна по ссылке")
+
+
 def check_google_sheets(db, row: Integration) -> CheckResult:
-    key_file = settings.google_service_account_file.strip()
     ids = [i.strip() for i in settings.rnp_spreadsheet_ids.split(",") if i.strip()]
-    if not key_file or not ids:
-        return CheckResult(NOT_CONFIGURED, "Не заданы GOOGLE_SERVICE_ACCOUNT_FILE и RNP_SPREADSHEET_IDS")
-    try:
-        from google.auth.transport.requests import AuthorizedSession
-        from google.oauth2 import service_account
-
-        creds = service_account.Credentials.from_service_account_file(
-            key_file, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        )
-        session = AuthorizedSession(creds)
-    except (OSError, ValueError) as exc:
-        return CheckResult(ERROR, f"Не удалось прочитать файл ключа Google ({type(exc).__name__})")
-
+    if not ids:
+        return CheckResult(NOT_CONFIGURED, "Не задан RNP_SPREADSHEET_IDS (id или ссылки на таблицы через запятую)")
     problems: list[str] = []
-    for number, sheet_id in enumerate(ids, 1):
-        try:
-            resp = session.get(
-                f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}",
-                params={"fields": "properties.title"},
-                timeout=10,
-            )
-        except Exception as exc:  # noqa: BLE001 - библиотеки google/requests бросают разные типы
-            problems.append(f"таблица №{number}: ошибка сети ({type(exc).__name__})")
-            continue
-        if resp.status_code != 200:
-            problems.append(f"таблица №{number}: код {resp.status_code}")
+    for number, raw in enumerate(ids, 1):
+        sheet_id = raw.split("/d/", 1)[1].split("/", 1)[0] if "/d/" in raw else raw
+        result = check_public_sheet(sheet_id)
+        if result.status != OK:
+            problems.append(f"таблица №{number}: {result.message}")
     if problems:
-        return CheckResult(ERROR, "Нет доступа: " + "; ".join(problems))
+        return CheckResult(ERROR, "; ".join(problems))
     return freshness(row, 26, "Таблицы доступны, данные свежие")
 
 

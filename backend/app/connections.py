@@ -50,7 +50,7 @@ KINDS: dict[str, Kind] = {
         Kind(
             "google_sheet",
             "Google Таблица",
-            "Таблица, к которой у системы есть доступ на чтение",
+            "Ссылка на таблицу с открытым доступом",
             [Field("spreadsheet_id", "Ссылка или id таблицы")],
         ),
         Kind("yandex_disk", "Яндекс Диск", "Файлы на Диске", [Field("oauth_token", "OAuth-токен", secret=True)]),
@@ -136,25 +136,9 @@ def _imap(cfg):
 
 
 def _sheet(cfg):
-    key_file = settings.google_service_account_file.strip()
-    if not key_file:
-        return CheckResult(NOT_CONFIGURED, "На сервере не задан ключ сервисного аккаунта Google")
-    from google.auth.transport.requests import AuthorizedSession
-    from google.oauth2 import service_account
+    from .integrations.checks import check_public_sheet
 
-    creds = service_account.Credentials.from_service_account_file(
-        key_file, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-    )
-    resp = AuthorizedSession(creds).get(
-        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id(cfg['spreadsheet_id'])}",
-        params={"fields": "properties.title"},
-        timeout=10,
-    )
-    if resp.status_code in (403, 404):
-        return CheckResult(ERROR, "Нет доступа: откройте таблицу для сервисного аккаунта системы")
-    if resp.status_code != 200:
-        return CheckResult(ERROR, f"Google ответил кодом {resp.status_code}")
-    return CheckResult(OK, "Таблица доступна")
+    return check_public_sheet(spreadsheet_id(cfg["spreadsheet_id"]))
 
 
 def _disk(cfg):
