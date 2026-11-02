@@ -154,7 +154,14 @@ class BrowserManager:
         self._run(lambda: self._goto(key, url), timeout=60.0)
 
     async def _goto(self, key: int, url: str) -> None:
-        await self._get(key).page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        page = self._get(key).page
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as exc:  # noqa: BLE001 - редирект или прерванный переход: страница могла загрузиться другая
+            msg = (str(exc).strip().splitlines() or [""])[0][:200]
+            if page.url in ("", "about:blank"):
+                raise BrowserError(f"Страница не открылась: {msg or type(exc).__name__}") from None
+            log.info("Переход на %s закончился иначе: %s", url, msg)
 
     def read_text(self, key: int, limit: int = 6000) -> str:
         return self._run(lambda: self._read(key, limit))
