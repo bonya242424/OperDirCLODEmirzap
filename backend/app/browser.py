@@ -47,18 +47,25 @@ class BrowserManager:
                 self._loop, self._thread = loop, t
             return self._loop
 
-    def _run(self, coro, timeout: float = 45.0):
-        fut: Future = asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
-        try:
-            return fut.result(timeout=timeout)
-        except BrowserError:
-            raise
-        except TimeoutError:
-            fut.cancel()
-            raise BrowserError("Браузер не ответил вовремя") from None
-        except Exception as exc:  # noqa: BLE001 - наружу только понятный текст
-            log.warning("Ошибка браузера: %s", type(exc).__name__)
-            raise BrowserError(f"Ошибка браузера ({type(exc).__name__})") from None
+    def _run(self, make, timeout: float = 45.0):
+        """make: функция без аргументов, возвращающая корутину. При гонке со сменой страницы повторяем один раз."""
+        for attempt in (1, 2):
+            fut: Future = asyncio.run_coroutine_threadsafe(make(), self._ensure_loop())
+            try:
+                return fut.result(timeout=timeout)
+            except BrowserError:
+                raise
+            except TimeoutError:
+                fut.cancel()
+                raise BrowserError("Браузер не ответил вовремя") from None
+            except Exception as exc:  # noqa: BLE001 - наружу только понятный текст
+                msg = (str(exc).strip().splitlines() or [""])[0][:200]
+                transient = "context was destroyed" in msg or "navigat" in msg.lower()
+                if transient and attempt == 1:
+                    time.sleep(1.0)
+                    continue
+                log.warning("Ошибка браузера: %s: %s", type(exc).__name__, msg)
+                raise BrowserError(f"Ошибка браузера: {msg or type(exc).__name__}") from None
 
     async def _start(self) -> None:
         if self._browser is not None:
@@ -92,7 +99,7 @@ class BrowserManager:
         return key in self._sessions
 
     def open(self, key: int, url: str, state: dict | None) -> None:
-        self._run(self._open(key, url, state), timeout=60.0)
+        self._run(lambda: self._open(key, url, state), timeout=60.0)
 
     async def _open(self, key: int, url: str, state: dict | None) -> None:
         await self._reap()
@@ -107,7 +114,7 @@ class BrowserManager:
             log.info("Страница %s не загрузилась до конца", url)
 
     def screenshot(self, key: int) -> bytes:
-        return self._run(self._shot(key))
+        return self._run(lambda: self._shot(key))
 
     async def _shot(self, key: int) -> bytes:
         return await self._get(key).page.screenshot(type="jpeg", quality=70)
@@ -115,13 +122,13 @@ class BrowserManager:
     def click(self, key: int, x: float, y: float) -> None:
         if not (0 <= x <= VIEW_W and 0 <= y <= VIEW_H):
             raise BrowserError("Клик за пределами окна")
-        self._run(self._click(key, x, y))
+        self._run(lambda: self._click(key, x, y))
 
     async def _click(self, key: int, x: float, y: float) -> None:
         await self._get(key).page.mouse.click(x, y)
 
     def type_text(self, key: int, text: str) -> None:
-        self._run(self._type(key, text))
+        self._run(lambda: self._type(key, text))
 
     async def _type(self, key: int, text: str) -> None:
         await self._get(key).page.keyboard.type(text, delay=20)
@@ -129,13 +136,13 @@ class BrowserManager:
     def press(self, key: int, name: str) -> None:
         if name not in KEYS:
             raise BrowserError("Эта клавиша не поддерживается")
-        self._run(self._press(key, "Space" if name == "Space" else name))
+        self._run(lambda: self._press(key, "Space" if name == "Space" else name))
 
     async def _press(self, key: int, name: str) -> None:
         await self._get(key).page.keyboard.press(name)
 
     def scroll(self, key: int, dy: float) -> None:
-        self._run(self._scroll(key, max(-2000.0, min(2000.0, dy))))
+        self._run(lambda: self._scroll(key, max(-2000.0, min(2000.0, dy))))
 
     async def _scroll(self, key: int, dy: float) -> None:
         await self._get(key).page.mouse.wheel(0, dy)
@@ -144,27 +151,29 @@ class BrowserManager:
     RISKY = r"отправ|подтверд|создать заяв|удал|submit|send|confirm|delete"
 
     def goto(self, key: int, url: str) -> None:
-        self._run(self._goto(key, url), timeout=60.0)
+        self._run(lambda: self._goto(key, url), timeout=60.0)
 
     async def _goto(self, key: int, url: str) -> None:
         await self._get(key).page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
     def read_text(self, key: int, limit: int = 6000) -> str:
-        return self._run(self._read(key, limit))
+        return self._run(lambda: self._read(key, limit))
 
     async def _read(self, key: int, limit: int) -> str:
         page = self._get(key).page
+        await page.wait_for_load_state("domcontentloaded")
         return (await page.evaluate("document.body ? document.body.innerText : ''"))[:limit]
 
     def safe_click(self, key: int, x: float, y: float) -> None:
         if not (0 <= x <= VIEW_W and 0 <= y <= VIEW_H):
             raise BrowserError("Клик за пределами окна")
-        self._run(self._safe_click(key, x, y))
+        self._run(lambda: self._safe_click(key, x, y))
 
     async def _safe_click(self, key: int, x: float, y: float) -> None:
         import re
 
         page = self._get(key).page
+        await page.wait_for_load_state("domcontentloaded")
         label = await page.evaluate(
             """([x, y]) => { const el = document.elementFromPoint(x, y); if (!el) return '';
             const t = el.closest('button,a,input,[role=button],label,li,td'); const n = t || el;
@@ -176,7 +185,7 @@ class BrowserManager:
         await page.mouse.click(x, y)
 
     def safe_type(self, key: int, text: str) -> None:
-        self._run(self._safe_type(key, text))
+        self._run(lambda: self._safe_type(key, text))
 
     async def _safe_type(self, key: int, text: str) -> None:
         page = self._get(key).page
@@ -188,7 +197,7 @@ class BrowserManager:
     def safe_press(self, key: int, name: str) -> None:
         if name not in KEYS:
             raise BrowserError("Эта клавиша не поддерживается")
-        self._run(self._safe_press(key, name))
+        self._run(lambda: self._safe_press(key, name))
 
     async def _safe_press(self, key: int, name: str) -> None:
         import re
@@ -204,21 +213,21 @@ class BrowserManager:
         await page.keyboard.press(name)
 
     def info(self, key: int) -> dict:
-        return self._run(self._info(key))
+        return self._run(lambda: self._info(key))
 
     async def _info(self, key: int) -> dict:
         page = self._get(key).page
         return {"url": page.url, "title": await page.title()}
 
     def state(self, key: int) -> dict:
-        return self._run(self._state(key))
+        return self._run(lambda: self._state(key))
 
     async def _state(self, key: int) -> dict:
         return await self._get(key).context.storage_state()
 
     def close(self, key: int) -> None:
         if key in self._sessions:
-            self._run(self._close(key))
+            self._run(lambda: self._close(key))
 
     async def _close(self, key: int) -> None:
         s = self._sessions.pop(key, None)
