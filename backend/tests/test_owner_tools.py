@@ -45,3 +45,29 @@ def test_no_destructive_or_secret_tools():
 
     for bad in ("delete", "password", "connection", "user", "send_return", "submit"):
         assert not any(bad in n for n in OWNER_CHAT_TOOLS)
+
+
+def test_fetch_url_blocks_internal_and_reads_public(client, owner, monkeypatch):
+    import app.agents.tools as t
+
+    with SessionLocal() as db:
+        ctx = _ctx(db)
+        for bad in ("http://127.0.0.1:8000/api", "http://169.254.169.254/latest", "file:///etc/passwd", "http://user:p@example.com/"):
+            with pytest.raises(ToolError, match="не подходит"):
+                t.fetch_url(ctx, {"url": bad})
+
+        class R:
+            status_code = 200
+            headers = {"content-type": "text/html"}
+            text = "<html><script>x()</script><body><h1>Переписка</h1>" + "Бренд и небренд, текст страницы. " * 10 + "</body></html>"
+
+        class C:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def get(self, url): return R()
+
+        monkeypatch.setattr(t, "_public_host", lambda h: True)
+        monkeypatch.setattr("httpx.Client", C)
+        out = t.fetch_url(ctx, {"url": "https://example.com/share/1"})
+        assert "Переписка" in out and "x()" not in out
