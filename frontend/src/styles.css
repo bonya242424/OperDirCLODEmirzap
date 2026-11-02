@@ -487,3 +487,12 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 
 .ag-upload { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
 .ag-upload .ag-link { flex: 1; min-width: 220px; }
+
+.guides { display: grid; gap: 8px; margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2); }
+.guides-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.guides h4 { margin: 0; }
+.guides p { margin: 0; }
+.guide { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.guide-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.guide textarea { width: 100%; font: inherit; }
+.guide.error { border-top-color: var(--bad); }

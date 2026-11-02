@@ -9,6 +9,7 @@ from .db import Base, SessionLocal, add_missing_columns, engine
 from .integrations.service import ensure_rows
 from .models import User
 from . import search as search_index
+from .guide_calc import reset_stale as reset_stale_guides
 from .metric_calc import reset_stale
 from .routers import search as search_router
 from . import changelog as changelog_data
@@ -57,6 +58,7 @@ async def lifespan(_: FastAPI):
         search_index.index_missing(db)
         changelog_data.sync(db)
     reset_stale()
+    reset_stale_guides()
     scheduler = start_scheduler() if settings.scheduler_enabled else None
     yield
     if scheduler is not None:

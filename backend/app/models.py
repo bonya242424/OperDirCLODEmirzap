@@ -213,6 +213,23 @@ class ReturnSupplier(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ReturnGuide(Base):
+    """Видео «как оформлять возврат» у поставщика и инструкция, которую ИИ составил по кадрам."""
+
+    __tablename__ = "return_guides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("return_suppliers.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(300))
+    disk_name: Mapped[str] = mapped_column(String(64))
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running | ok | error
+    text: Mapped[str] = mapped_column(Text, default="")  # инструкция по шагам; владелец может поправить
+    message: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ReturnBatch(Base):
     """Сборка возвратов одному поставщику, загруженная из таблицы."""
 

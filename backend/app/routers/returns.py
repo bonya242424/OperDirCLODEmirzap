@@ -9,14 +9,19 @@ import re
 from collections import defaultdict
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import current_user
-from ..models import ReturnBatch, ReturnLine, ReturnSupplier, User
+from ..config import settings
+from ..guide_calc import analyze_guide, guides_dir
+from ..models import ReturnBatch, ReturnGuide, ReturnLine, ReturnSupplier, User
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
@@ -324,4 +329,99 @@ def update_supplier(supplier_id: int, body: SupplierPatch, db: Session = Depends
 def archive_supplier(supplier_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
     """Поставщик скрывается, загруженные документы остаются."""
     _get_supplier(db, supplier_id).is_active = False
+    db.commit()
+
+
+VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
+
+
+def _guide_out(g: ReturnGuide) -> dict:
+    return {
+        "id": g.id, "supplier_id": g.supplier_id, "filename": g.filename, "size": g.size, "status": g.status,
+        "text": g.text, "message": g.message, "created_at": g.created_at.isoformat(),
+    }
+
+
+def _get_guide(db: Session, guide_id: int) -> ReturnGuide:
+    g = db.get(ReturnGuide, guide_id)
+    if g is None:
+        raise HTTPException(status_code=404, detail="Видео не найдено")
+    return g
+
+
+@router.get("/suppliers/{supplier_id}/guides")
+def list_guides(supplier_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    _get_supplier(db, supplier_id)
+    return [_guide_out(g) for g in db.scalars(select(ReturnGuide).where(ReturnGuide.supplier_id == supplier_id).order_by(ReturnGuide.id.desc()))]
+
+
+@router.post("/suppliers/{supplier_id}/guides", status_code=201)
+async def upload_guide(
+    supplier_id: int,
+    tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    me: User = Depends(current_user),
+):
+    _get_supplier(db, supplier_id)
+    name = (file.filename or "видео").replace("\\", "/").split("/")[-1][:300]
+    if Path(name).suffix.lower() not in VIDEO_EXT:
+        raise HTTPException(status_code=422, detail="Нужен видеофайл: mp4, mov, webm, m4v или mkv")
+    limit = settings.max_upload_mb * 1024 * 1024
+    disk_name = uuid.uuid4().hex
+    target = guides_dir() / disk_name
+    size = 0
+    try:
+        with open(target, "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(status_code=413, detail=f"Видео больше {settings.max_upload_mb} МБ")
+                out.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=422, detail="Файл пустой")
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+    g = ReturnGuide(supplier_id=supplier_id, filename=name, disk_name=disk_name, size=size, created_by=me.id)
+    db.add(g)
+    db.commit()
+    tasks.add_task(analyze_guide, g.id)
+    db.refresh(g)
+    return _guide_out(g)
+
+
+class GuideText(BaseModel):
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def _t(cls, v: str) -> str:
+        return v.strip()[:20000]
+
+
+@router.patch("/guides/{guide_id}")
+def edit_guide(guide_id: int, body: GuideText, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    g = _get_guide(db, guide_id)
+    g.text = body.text
+    db.commit()
+    return _guide_out(g)
+
+
+@router.post("/guides/{guide_id}/reanalyze", status_code=202)
+def reanalyze_guide(guide_id: int, tasks: BackgroundTasks, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    g = _get_guide(db, guide_id)
+    if g.status == "running":
+        raise HTTPException(status_code=409, detail="Разбор уже идёт")
+    g.status, g.message = "running", ""
+    db.commit()
+    tasks.add_task(analyze_guide, g.id)
+    return _guide_out(g)
+
+
+@router.delete("/guides/{guide_id}", status_code=204)
+def delete_guide(guide_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    g = _get_guide(db, guide_id)
+    (guides_dir() / g.disk_name).unlink(missing_ok=True)
+    db.delete(g)
     db.commit()

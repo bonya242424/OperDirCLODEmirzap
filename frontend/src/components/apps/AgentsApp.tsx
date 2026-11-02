@@ -3,6 +3,7 @@ import { api } from "../../api";
 import type { User } from "../../types";
 import AgentList from "./AgentList";
 import AgentStructure from "./AgentStructure";
+import GuidesBox from "./GuidesBox";
 
 type StepState = "wait" | "run" | "confirm" | "done" | "skip";
 interface Step {
@@ -279,6 +280,7 @@ function ReturnsPanel() {
               </form>
             </div>
             {error && <p className="error">{error}</p>}
+            <GuidesBox supplierId={supplier.id} />
             {batches && batches.length > 0 && (
               <div className="chips">
                 {batches.map((b) => (
