@@ -11,10 +11,11 @@ from .models import User
 from . import search as search_index
 from .guide_calc import reset_stale as reset_stale_guides
 from .returns_run import reset_stale as reset_stale_runs
+from .routers.returns import backfill_doc_dates
 from .metric_calc import reset_stale
 from .routers import search as search_router
 from . import changelog as changelog_data
-from .routers import agents, changelog, proxies, auth, board, returns, chat, connections, files, integrations, metrics, tasks, users
+from .routers import agents, changelog, instructions, proxies, auth, board, returns, chat, connections, files, integrations, metrics, tasks, users
 from .scheduler import start_scheduler
 from .security import hash_password
 
@@ -61,6 +62,7 @@ async def lifespan(_: FastAPI):
     reset_stale()
     reset_stale_guides()
     reset_stale_runs()
+    backfill_doc_dates()
     scheduler = start_scheduler() if settings.scheduler_enabled else None
     yield
     if scheduler is not None:
@@ -82,6 +84,7 @@ app.include_router(agents.router)
 app.include_router(proxies.router)
 app.include_router(search_router.router)
 app.include_router(changelog.router)
+app.include_router(instructions.router)
 
 
 @app.get("/api/health")

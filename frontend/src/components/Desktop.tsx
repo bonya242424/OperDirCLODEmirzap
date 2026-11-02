@@ -1,4 +1,5 @@
 import ChangelogApp from "./apps/ChangelogApp";
+import InstructionsApp from "./apps/InstructionsApp";
 import MeApp from "./apps/MeApp";
 import AgentsApp from "./apps/AgentsApp";
 import { CSSProperties, PointerEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -40,6 +41,7 @@ const APPS: AppDef[] = [
   { key: "meetings", title: "Встречи", icon: "🎙️", colors: ["#7fd6e8", "#2f9bb8"], stage: 5 },
   { key: "integrations", title: "Интеграции", icon: "🔌", colors: ["#ff9fc4", "#d6478a"], size: [940, 620] },
   { key: "changes", title: "Изменения", icon: "🧩", colors: ["#c3b5ff", "#7c5ce6"], stage: 6 },
+  { key: "instr1c", title: "Инструкции 1С", icon: "📘", colors: ["#8fb8ff", "#4a6fe0"], size: [1040, 640] },
   { key: "journal", title: "Журнал изменений", icon: "📝", colors: ["#9ad7c0", "#3a9c86"], size: [760, 600] },
   { key: "terminal", title: "Терминал", icon: "⌨️", colors: ["#6b7488", "#2c3344"], stage: 6 },
   { key: "me", title: "Мой кабинет", icon: "🙋", colors: ["#7fd1ff", "#3b8be0"], size: [900, 600] },
@@ -60,6 +62,7 @@ function renderApp(app: AppDef, user: User): ReactNode {
   if (app.key === "integrations") return <IntegrationsApp />;
   if (["gen", "tech", "ops", "fin"].includes(app.key)) return <DirectorApp key={app.key} direction={app.key} title={app.title} />;
   if (app.key === "tasks") return <TasksApp me={user} />;
+  if (app.key === "instr1c") return <InstructionsApp me={user} />;
   if (app.key === "journal") return <ChangelogApp />;
   if (app.key === "me") return <MeApp me={user} />;
   if (app.key === "agents") return <AgentsApp me={user} />;

@@ -11,6 +11,7 @@ from collections import defaultdict
 import httpx
 import json
 import uuid
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile
@@ -102,6 +103,29 @@ def parse_sheet(text: str, need_supplier: bool = True) -> tuple[str, str, list[d
     return supplier, number, lines
 
 
+DOC_DATE_RE = re.compile(r"от\s+(\d{1,2})\.(\d{1,2})\.(\d{4})")
+
+
+def doc_date_of(number: str) -> date | None:
+    m = DOC_DATE_RE.search(number or "")
+    if not m:
+        return None
+    try:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+
+
+def backfill_doc_dates() -> None:
+    """Старые документы без даты сборки: берём её из номера, иначе из даты загрузки."""
+    from ..db import SessionLocal
+
+    with SessionLocal() as db:
+        for b in db.scalars(select(ReturnBatch).where(ReturnBatch.doc_date.is_(None))):
+            b.doc_date = doc_date_of(b.number) or b.created_at.date()
+        db.commit()
+
+
 def _supplier_by_name(db: Session, name: str, me: User) -> ReturnSupplier:
     sup = db.scalar(select(ReturnSupplier).where(ReturnSupplier.name == name))
     if sup is None:
@@ -128,7 +152,7 @@ def _save(db: Session, text: str, source: str, me: User, supplier: ReturnSupplie
                 db.delete(r)
             db.delete(old)
         db.flush()
-    batch = ReturnBatch(supplier=sup.name, supplier_id=sup.id, number=number[:200], source=source[:500], created_by=me.id)
+    batch = ReturnBatch(supplier=sup.name, supplier_id=sup.id, number=number[:200], source=source[:500], created_by=me.id, doc_date=doc_date_of(number) or utcnow().date())
     db.add(batch)
     db.flush()
     for ln in lines:
@@ -206,6 +230,7 @@ def _summary(db: Session, batch: ReturnBatch) -> dict:
     return {
         "id": batch.id,
         "supplier_id": batch.supplier_id,
+        "doc_date": batch.doc_date.isoformat() if batch.doc_date else None,
         "supplier": batch.supplier,
         "number": batch.number,
         "source": batch.source,
@@ -221,10 +246,18 @@ def _summary(db: Session, batch: ReturnBatch) -> dict:
 
 
 @router.get("/batches")
-def batches(supplier_id: int | None = None, db: Session = Depends(get_db), _: User = Depends(current_user)):
-    q = select(ReturnBatch).order_by(ReturnBatch.id.desc()).limit(100)
+def batches(
+    supplier_id: int | None = None, date_from: date | None = None, date_to: date | None = None,
+    db: Session = Depends(get_db), _: User = Depends(current_user),
+):
+    """Документы (сборки по неделям). Период отбирает по дате сборки."""
+    q = select(ReturnBatch).order_by(ReturnBatch.doc_date.desc(), ReturnBatch.id.desc()).limit(100)
     if supplier_id is not None:
         q = q.where(ReturnBatch.supplier_id == supplier_id)
+    if date_from is not None:
+        q = q.where(ReturnBatch.doc_date >= date_from)
+    if date_to is not None:
+        q = q.where(ReturnBatch.doc_date <= date_to)
     rows = db.scalars(q)
     return [_summary(db, b) for b in rows]
 

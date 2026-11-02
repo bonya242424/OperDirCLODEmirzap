@@ -259,6 +259,7 @@ class ReturnBatch(Base):
     number: Mapped[str] = mapped_column(String(200), default="")  # «№000007007 от 02.11.2026»
     source: Mapped[str] = mapped_column(String(500), default="")  # имя файла или id таблицы
     supplier_id: Mapped[int | None] = mapped_column(ForeignKey("return_suppliers.id"), nullable=True, index=True)
+    doc_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)  # дата сборки из номера «№… от 02.11.2026»
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -382,3 +383,31 @@ class ChangeLogEntry(Base):
     title: Mapped[str] = mapped_column(String(200))
     text: Mapped[str] = mapped_column(Text, default="")
     released_on: Mapped[date] = mapped_column(Date)
+
+
+class InstrSection(Base):
+    """Раздел инструкций (например «1С: сборка возвратов»): описание владельца и видео, по которым ИИ составляет шаги."""
+
+    __tablename__ = "instr_sections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    area: Mapped[str] = mapped_column(String(16), default="1c", index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    notes: Mapped[str] = mapped_column(Text, default="")  # что делает владелец своими словами: звук из видео не распознаётся
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class InstrVideo(Base):
+    __tablename__ = "instr_videos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    section_id: Mapped[int] = mapped_column(ForeignKey("instr_sections.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(300))
+    disk_name: Mapped[str] = mapped_column(String(64))
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running | ok | error
+    text: Mapped[str] = mapped_column(Text, default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

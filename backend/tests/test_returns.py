@@ -96,3 +96,31 @@ def test_weekly_documents_are_not_summed_and_reupload_replaces(client, owner):
     assert up(other).status_code == 201  # другая неделя: отдельный документ
     got = next(x for x in client.get("/api/returns/suppliers", headers=owner).json() if x["id"] == sup["id"])
     assert got["batches"] == 2 and got["positions"] == 38  # последний документ, а не 76
+
+
+def test_period_filter_by_document_date(client, owner):
+    sup = _supplier(client, owner, name="Период").json()
+    data = SAMPLE.read_bytes().decode()
+    up = lambda d: client.post(f"/api/returns/import?supplier_id={sup['id']}", headers=owner, files={"file": ("t.csv", d.encode(), "text/csv")})
+    assert up(data).json()["doc_date"] == "2026-11-02"
+    assert up(data.replace("№000007007 от 02.11.2026", "№000006900 от 12.10.2026")).json()["doc_date"] == "2026-10-12"
+    got = lambda q: [b["doc_date"] for b in client.get(f"/api/returns/batches?supplier_id={sup['id']}{q}", headers=owner).json()]
+    assert got("") == ["2026-11-02", "2026-10-12"]
+    assert got("&date_from=2026-10-30") == ["2026-11-02"]
+    assert got("&date_from=2026-10-01&date_to=2026-10-31") == ["2026-10-12"]
+    assert client.get("/api/returns/batches?date_from=bad", headers=owner).status_code == 422
+
+
+def test_backfill_doc_dates(client, owner):
+    from app.db import SessionLocal
+    from app.models import ReturnBatch
+    from app.routers.returns import backfill_doc_dates
+
+    sup = _supplier(client, owner, name="Старый").json()
+    client.post(f"/api/returns/import?supplier_id={sup['id']}", headers=owner, files={"file": ("t.csv", SAMPLE.read_bytes(), "text/csv")})
+    with SessionLocal() as db:
+        for b in db.query(ReturnBatch).all():
+            b.doc_date = None
+        db.commit()
+    backfill_doc_dates()
+    assert client.get("/api/returns/batches", headers=owner).json()[0]["doc_date"] == "2026-11-02"

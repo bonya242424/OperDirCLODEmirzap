@@ -3,6 +3,7 @@ import { api, getToken } from "../../api";
 import type { User } from "../../types";
 import AgentList from "./AgentList";
 import AgentStructure from "./AgentStructure";
+import AssemblyPanel from "./AssemblyPanel";
 import BrowserLogin from "./BrowserLogin";
 import GuidesBox from "./GuidesBox";
 
@@ -68,6 +69,7 @@ const INV_STATUS: Record<string, string> = { pending: "не проверен", c
 interface Summary {
   id: number;
   supplier_id: number | null;
+  doc_date: string | null;
   supplier: string;
   number: string;
   source: string;
@@ -91,9 +93,9 @@ const TEMPLATE: Omit<Step, "state">[] = [
 
 
 /** Агент по возвратам. Таблица и саммари настоящие; шаги работы на сайте пока показаны для примера: запуск на сайте подключим после первой проверки. */
-function ReturnsPanel({ me }: { me: User }) {
+function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number | null }) {
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
-  const [supSel, setSupSel] = useState<number | null>(null);
+  const [supSel, setSupSel] = useState<number | null>(focusSupplier);
   const [supForm, setSupForm] = useState<SupplierForm | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [allBatches, setBatches] = useState<Summary[] | null>(null);
@@ -103,7 +105,10 @@ function ReturnsPanel({ me }: { me: User }) {
   const [busy, setBusy] = useState(false);
   const running = false;
   const supplier = suppliers?.find((x) => x.id === supSel) ?? null;
-  const batches = allBatches?.filter((b) => b.supplier_id === supSel) ?? null;
+  const [dFrom, setDFrom] = useState("");
+  const [dTo, setDTo] = useState("");
+  const batches =
+    allBatches?.filter((b) => b.supplier_id === supSel && (!dFrom || (b.doc_date ?? "") >= dFrom) && (!dTo || (b.doc_date ?? "") <= dTo)) ?? null;
   const current = batches?.find((b) => b.id === selected) ?? null;
 
   const load = useCallback(() => {
@@ -297,7 +302,13 @@ function ReturnsPanel({ me }: { me: User }) {
               </form>
             </div>
             {error && <p className="error">{error}</p>}
-            <GuidesBox supplierId={supplier.id} />
+            <GuidesBox listUrl={`/returns/suppliers/${supplier.id}/guides`} itemUrl="/returns/guides" />
+            <div className="row small muted">
+              Период сборки:
+              <input type="date" value={dFrom} max={dTo || undefined} onChange={(e) => setDFrom(e.target.value)} aria-label="Сборка с" />
+              <input type="date" value={dTo} min={dFrom || undefined} onChange={(e) => setDTo(e.target.value)} aria-label="Сборка по" />
+              {(dFrom || dTo) && <button className="ghost" onClick={() => { setDFrom(""); setDTo(""); }}>Сбросить</button>}
+            </div>
             {batches && batches.length > 0 && (
               <div className="chips">
                 {batches.map((b) => (
@@ -420,15 +431,17 @@ function ReturnsPanel({ me }: { me: User }) {
 }
 
 export default function AgentsApp({ me }: { me: User }) {
-  const [tab, setTab] = useState<"mine" | "structure" | "returns">("mine");
+  const [tab, setTab] = useState<"mine" | "structure" | "returns" | "assembly">("mine");
+  const [openSupplier, setOpenSupplier] = useState<number | null>(null);
   return (
     <div className="ag-shell">
       <div className="chips tabs">
         <button className={`chip${tab === "mine" ? " on" : ""}`} onClick={() => setTab("mine")}>{me.role === "owner" ? "Все агенты" : "Мои агенты"}</button>
         <button className={`chip${tab === "structure" ? " on" : ""}`} onClick={() => setTab("structure")}>Структура</button>
+        <button className={`chip${tab === "assembly" ? " on" : ""}`} onClick={() => setTab("assembly")}>Сборка возвратов</button>
         <button className={`chip${tab === "returns" ? " on" : ""}`} onClick={() => setTab("returns")}>Возвраты поставщикам</button>
       </div>
-      <div className="ag-body">{tab === "mine" ? <AgentList me={me} /> : tab === "structure" ? <AgentStructure /> : <ReturnsPanel me={me} />}</div>
+      <div className="ag-body">{tab === "mine" ? <AgentList me={me} /> : tab === "structure" ? <AgentStructure /> : tab === "assembly" ? <AssemblyPanel onOpen={(id) => { setOpenSupplier(id); setTab("returns"); }} /> : <ReturnsPanel me={me} focusSupplier={openSupplier} />}</div>
     </div>
   );
 }
