@@ -79,3 +79,27 @@ def test_sheet_id_from_link():
 
 def test_requires_login(client):
     assert client.get("/api/connections").status_code == 401
+
+
+def test_model_key_from_interface(client, owner, monkeypatch):
+    from app.llm import get_provider, llm_api_key
+
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "")
+    monkeypatch.setattr("app.connections.check_connection", lambda kind, cfg: __import__("app.integrations.checks", fromlist=["x"]).CheckResult("ok", "ok"))
+    assert llm_api_key() == "" and get_provider() is None
+    r = client.post("/api/connections", headers=owner, json={"kind": "anthropic", "scope": "personal", "config": {"api_key": "sk-ant-secret-123"}})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["scope"] == "company" and body["secrets_set"] == ["api_key"] and "secret-123" not in r.text
+    assert llm_api_key() == "sk-ant-secret-123" and get_provider() is not None
+    assert client.post("/api/connections", headers=owner, json={"kind": "anthropic", "config": {"api_key": "sk-ant-x"}}).status_code == 409
+    client.delete(f"/api/connections/{body['id']}", headers=owner)
+    assert llm_api_key() == ""
+
+
+def test_model_key_only_for_owner(client, owner):
+    from tests.conftest import login
+
+    client.post("/api/users", headers=owner, json={"email": "w@test.local", "password": "worker-pass-1234", "full_name": "Сотрудник"})
+    h = login(client, "w@test.local", "worker-pass-1234")
+    assert client.post("/api/connections", headers=h, json={"kind": "anthropic", "config": {"api_key": "sk-ant-x"}}).status_code == 403

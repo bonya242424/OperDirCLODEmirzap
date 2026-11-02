@@ -40,6 +40,23 @@ class LLMConnectionError(LLMError):
     """Не удалось соединиться (сеть, прокси). Только такую ошибку имеет смысл повторять через другой прокси."""
 
 
+def llm_api_key() -> str:
+    """Ключ модели: сначала подключение компании «Ключ Claude» из интерфейса, затем ANTHROPIC_API_KEY из .env."""
+    from sqlalchemy import select
+
+    from .connections import decrypt
+    from .db import SessionLocal
+    from .models import Connection
+
+    try:
+        with SessionLocal() as db:
+            row = db.scalar(select(Connection).where(Connection.kind == "anthropic", Connection.owner_id.is_(None)).order_by(Connection.id.desc()))
+            key = decrypt(row.config_encrypted).get("api_key", "").strip() if row else ""
+    except Exception:  # noqa: BLE001 - нет таблицы или базы: берём из настроек
+        key = ""
+    return key or settings.anthropic_api_key.strip()
+
+
 class AnthropicProvider:
     def __init__(self, api_key: str, model: str, base_url: str = "", proxy_url: str = "") -> None:
         import httpx
@@ -93,14 +110,15 @@ class AnthropicProvider:
 class FailoverProvider:
     """Пробует прокси по очереди: при ошибке соединения берёт следующий, ошибки самой модели не повторяет."""
 
-    def __init__(self, proxies: list[tuple[int, str]], on_result) -> None:
+    def __init__(self, proxies: list[tuple[int, str]], on_result, api_key: str) -> None:
+        self._key = api_key
         self._proxies = proxies  # [(id, url)]
         self._on_result = on_result  # (proxy_id, ok) -> None, чтобы запомнить состояние
 
     def _run(self, fn):
         last: LLMConnectionError | None = None
         for pid, url in self._proxies:
-            provider = AnthropicProvider(settings.anthropic_api_key, settings.llm_model, settings.llm_base_url, url)
+            provider = AnthropicProvider(self._key, settings.llm_model, settings.llm_base_url, url)
             try:
                 result = fn(provider)
             except LLMConnectionError as exc:
@@ -119,11 +137,12 @@ class FailoverProvider:
 
 
 def get_provider() -> LLMProvider | None:
-    if not settings.anthropic_api_key.strip():
+    key = llm_api_key()
+    if not key:
         return None
     from .proxies import active_proxies, record_result
 
     proxies = active_proxies()
     if proxies:
-        return FailoverProvider(proxies, record_result)
-    return AnthropicProvider(settings.anthropic_api_key, settings.llm_model, settings.llm_base_url)
+        return FailoverProvider(proxies, record_result, key)
+    return AnthropicProvider(key, settings.llm_model, settings.llm_base_url)

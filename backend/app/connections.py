@@ -53,6 +53,12 @@ KINDS: dict[str, Kind] = {
             "Ссылка на таблицу с открытым доступом",
             [Field("spreadsheet_id", "Ссылка или id таблицы")],
         ),
+        Kind(
+            "anthropic",
+            "Ключ Claude",
+            "Ключ API модели для чата, агентов и разбора видео. Только для компании, один на всех",
+            [Field("api_key", "Ключ API (sk-ant-…)", secret=True)],
+        ),
         Kind("yandex_disk", "Яндекс Диск", "Файлы на Диске", [Field("oauth_token", "OAuth-токен", secret=True)]),
         Kind(
             "ftp",
@@ -177,4 +183,13 @@ def _ftp(cfg):
     return CheckResult(OK, "FTP-сервер доступен, папка открывается")
 
 
-_CHECKS = {"telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}
+def _anthropic(cfg):
+    from .integrations.checks import check_anthropic_key
+
+    key = cfg["api_key"].strip()
+    if not key.startswith("sk-ant-"):
+        return CheckResult(ERROR, "Ключ должен начинаться с sk-ant-")
+    return check_anthropic_key(key)
+
+
+_CHECKS = {"anthropic": _anthropic, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}

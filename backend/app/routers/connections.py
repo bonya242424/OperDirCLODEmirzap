@@ -132,6 +132,12 @@ def list_connections(db: Session = Depends(get_db), me: User = Depends(current_u
 def create(body: ConnectionIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
     if body.kind not in conn_lib.KINDS:
         raise HTTPException(status_code=422, detail="Неизвестный тип подключения")
+    if body.kind == "anthropic":
+        if me.role != "owner":
+            raise HTTPException(status_code=403, detail="Ключ модели добавляет только владелец")
+        if db.scalar(select(Connection.id).where(Connection.kind == "anthropic", Connection.owner_id.is_(None))):
+            raise HTTPException(status_code=409, detail="Ключ уже добавлен: измените его в существующем подключении")
+        body = body.model_copy(update={"scope": "company"})
     config = _clean(body.kind, body.config)
     for f in conn_lib.KINDS[body.kind].fields:
         if not config.get(f.name) and f.default:

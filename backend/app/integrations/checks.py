@@ -270,8 +270,15 @@ def check_yandex_webmaster(db, row: Integration) -> CheckResult:
 
 
 def check_llm(db, row: Integration) -> CheckResult:
-    if not settings.anthropic_api_key.strip():
-        return CheckResult(NOT_CONFIGURED, "Не задан ANTHROPIC_API_KEY")
+    from ..llm import llm_api_key
+
+    key = llm_api_key()
+    if not key:
+        return CheckResult(NOT_CONFIGURED, "Не задан ключ модели: добавьте его в «Интеграции» или в ANTHROPIC_API_KEY")
+    return check_anthropic_key(key)
+
+
+def check_anthropic_key(key: str) -> CheckResult:
     import httpx
     from anthropic import Anthropic, APIConnectionError, APIStatusError
 
@@ -281,7 +288,7 @@ def check_llm(db, row: Integration) -> CheckResult:
     routes: list[tuple[int | None, str]] = active_proxies() or [(None, "")]
     for proxy_id, url in routes:
         client = Anthropic(
-            api_key=settings.anthropic_api_key,
+            api_key=key,
             base_url=settings.llm_base_url or None,
             timeout=10.0,
             max_retries=0,
