@@ -6,6 +6,7 @@
 
 import logging
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -85,7 +86,7 @@ class RdpManager:
         if not self.wait_display(display):
             xvfb.terminate()
             raise BrowserError("Не удалось запустить виртуальный экран")
-        args = ["xfreerdp", f"/v:{host}:{port}", f"/u:{user}", f"/p:{password}", f"/size:{W}x{H}", "/cert:ignore", "+clipboard", "+auto-reconnect", "-wallpaper"]
+        args = [shutil.which("xfreerdp3") or "xfreerdp", f"/v:{host}:{port}", f"/u:{user}", f"/p:{password}", f"/size:{W}x{H}", "/cert:ignore", "+clipboard", "+auto-reconnect", "-wallpaper"]
         if domain:
             args.append(f"/d:{domain}")
         try:
