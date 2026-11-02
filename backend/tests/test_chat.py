@@ -1,7 +1,8 @@
 from app.llm import LLMError
+from tests.conftest import CompleteOnly
 
 
-class FakeProvider:
+class FakeProvider(CompleteOnly):
     def __init__(self):
         self.calls = []
 
@@ -43,7 +44,7 @@ def test_chat_history_is_per_user(client, owner, monkeypatch):
 
 
 def test_failed_model_call_saves_nothing(client, owner, monkeypatch):
-    class Broken:
+    class Broken(CompleteOnly):
         def complete(self, system, messages):
             raise LLMError("API модели ответил кодом 529")
 
@@ -62,7 +63,7 @@ def test_chat_gets_company_snapshot(client, owner, monkeypatch):
 
     seen = {}
 
-    class Spy:
+    class Spy(CompleteOnly):
         def complete(self, system, messages):
             seen["system"] = system
             return "ок"
@@ -90,7 +91,7 @@ def test_snapshot_has_monthly_averages(client, owner, monkeypatch):
 
     seen = {}
 
-    class Spy:
+    class Spy(CompleteOnly):
         def complete(self, system, messages):
             seen["system"] = system
             return "ок"

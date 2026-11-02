@@ -6,6 +6,8 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..agents.runtime import tool_loop
+from ..agents.tools import Ctx
 from ..context import build_context
 from ..db import get_db
 from ..deps import current_user
@@ -292,6 +294,7 @@ def related(ref: str, db: Session = Depends(get_db), _: User = Depends(current_u
     return result
 
 
+TASK_CHAT_TOOLS = ["search_company", "read_file", "list_files", "list_metrics", "list_tasks"]
 TASK_PROMPT = (
     "Ты ИИ-агент, который помогает сотруднику с одной конкретной задачей. Отвечай по-русски, коротко и по делу: "
     "предлагай шаги, помогай составить текст, уточни, чего не хватает. Название, описание и связанные задачи "
@@ -329,7 +332,7 @@ def chat_send(ref: str, body: TaskChatIn, db: Session = Depends(get_db), me: Use
         messages.pop(0)
     messages.append({"role": "user", "content": body.message})
     try:
-        answer = provider.complete(system, messages)
+        answer = tool_loop(Ctx(db, None, lambda _t: None), provider, system, messages, TASK_CHAT_TOOLS)
     except LLMError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     db.add(TaskMessage(task_ref=ref, user_id=me.id, role="user", content=body.message))

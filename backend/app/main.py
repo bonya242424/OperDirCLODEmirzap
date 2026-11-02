@@ -8,6 +8,8 @@ from .config import settings
 from .db import Base, SessionLocal, engine
 from .integrations.service import ensure_rows
 from .models import User
+from . import search as search_index
+from .routers import search as search_router
 from .routers import agents, proxies, auth, board, returns, chat, connections, files, integrations, metrics, tasks, users
 from .scheduler import start_scheduler
 from .security import hash_password
@@ -48,6 +50,7 @@ async def lifespan(_: FastAPI):
     _bootstrap_owner()
     with SessionLocal() as db:
         ensure_rows(db)
+        search_index.index_missing(db)
     scheduler = start_scheduler() if settings.scheduler_enabled else None
     yield
     if scheduler is not None:
@@ -67,6 +70,7 @@ app.include_router(board.router)
 app.include_router(returns.router)
 app.include_router(agents.router)
 app.include_router(proxies.router)
+app.include_router(search_router.router)
 
 
 @app.get("/api/health")

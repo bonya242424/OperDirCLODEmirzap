@@ -46,6 +46,14 @@ const APPS: AppDef[] = [
 
 const MIN_CHAT = 300;
 
+interface SearchHit {
+  type: "file" | "task" | "metric" | "return" | "agent_run";
+  id: string;
+  title: string;
+  snippet: string;
+}
+const HIT_APP: Record<SearchHit["type"], string> = { file: "files", task: "tasks", metric: "gen", return: "agents", agent_run: "agents" };
+
 function renderApp(app: AppDef, user: User): ReactNode {
   if (app.key === "integrations") return <IntegrationsApp />;
   if (["gen", "tech", "ops", "fin"].includes(app.key)) return <DirectorApp key={app.key} direction={app.key} title={app.title} />;
@@ -177,6 +185,19 @@ export default function Desktop({ user, onLogout }: { user: User; onLogout: () =
     if (!resizing.current) return;
     setChatWidth(Math.min(Math.max(e.clientX - 12, MIN_CHAT), window.innerWidth - 360));
   }
+
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  useEffect(() => {
+    const q = query.trim();
+    if (!searchOpen || q.length < 2) {
+      setHits([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      api<SearchHit[]>(`/search?q=${encodeURIComponent(q)}&limit=8`).then(setHits).catch(() => setHits([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [query, searchOpen]);
 
   const found = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -329,7 +350,7 @@ export default function Desktop({ user, onLogout }: { user: User; onLogout: () =
                     if (e.key === "Enter" && found[0]) pick(found[0]);
                   }}
                 />
-                <p className="muted">Пока ищем по разделам. Поиск по файлам, задачам и сообщениям появится вместе с ними.</p>
+                <p className="muted">Ищем по разделам и по данным компании: файлам, задачам, показателям, возвратам и итогам агентов.</p>
                 <div className="search-results">
                   {found.map((a) => (
                     <button key={a.key} onClick={() => pick(a)}>
@@ -339,7 +360,15 @@ export default function Desktop({ user, onLogout }: { user: User; onLogout: () =
                       {a.title}
                     </button>
                   ))}
-                  {found.length === 0 && <p className="muted">Ничего не найдено</p>}
+                  {hits.map((h) => (
+                    <button key={`${h.type}-${h.id}`} className="search-hit" onClick={() => { const app = APPS.find((a) => a.key === HIT_APP[h.type]); if (app) pick(app); }}>
+                      <span>
+                        <strong>{h.title}</strong>
+                        <span className="muted small">{h.snippet}</span>
+                      </span>
+                    </button>
+                  ))}
+                  {found.length === 0 && hits.length === 0 && <p className="muted">Ничего не найдено</p>}
                 </div>
               </div>
             </div>

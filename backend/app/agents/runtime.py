@@ -56,13 +56,18 @@ def run_agent(ctx: Ctx) -> str:
         ctx.log("Подтянул отчёты подчинённых агентов")
     when = f"Сейчас {utcnow().isoformat()}. Прошлый запуск этого агента: {agent.last_run_at.isoformat() if agent.last_run_at else 'ещё не было'}."
     messages: list[dict[str, Any]] = [{"role": "user", "content": f"{when}\n\nПоручение:\n{agent.instruction}"}]
+    try:
+        return tool_loop(ctx, provider, system, messages, names)
+    except LLMError as exc:
+        raise AgentError(str(exc)) from exc
+
+
+def tool_loop(ctx: Ctx, provider, system: str, messages: list[dict[str, Any]], names: list[str], max_steps: int = MAX_STEPS) -> str:
+    """Модель сама вызывает разрешённые инструменты, пока не даст итоговый ответ. Бросает LLMError."""
     defs = tool_defs(names)
     last_text = ""
-    for _ in range(MAX_STEPS):
-        try:
-            step = provider.step(system, messages, defs)
-        except LLMError as exc:
-            raise AgentError(str(exc)) from exc
+    for _ in range(max_steps):
+        step = provider.step(system, messages, defs)
         last_text = step.text or last_text
         if not step.calls:
             return step.text or "Готово"

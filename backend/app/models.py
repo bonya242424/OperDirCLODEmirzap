@@ -296,3 +296,15 @@ class Proxy(Base):
     last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SearchChunk(Base):
+    """Кусок текста из файла для общего поиска. Текст лежит дважды: как есть и в нижнем регистре для поиска."""
+
+    __tablename__ = "search_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    file_id: Mapped[int] = mapped_column(Integer, index=True)
+    ord: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text)
+    norm: Mapped[str] = mapped_column(Text)

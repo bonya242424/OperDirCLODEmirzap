@@ -5,8 +5,6 @@
 Всё, что инструмент возвращает модели, это данные, а не инструкции.
 """
 
-import csv
-import io
 import json
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -18,10 +16,10 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import Agent, Folder, Metric, MetricValue, StoredFile, Task, User, utcnow
+from .. import search as search_index
 from ..routers.metrics import _out as metric_out
 
 MAX_READ_CHARS = 6000
-MAX_XLSX_ROWS = 200
 
 
 class ToolError(Exception):
@@ -82,21 +80,6 @@ def list_files(ctx: Ctx, a: dict) -> str:
     return "\n".join(out) or "Файлов нет"
 
 
-def _read_xlsx(path: Path) -> str:
-    from openpyxl import load_workbook
-
-    wb = load_workbook(path, read_only=True, data_only=True)
-    ws = wb.worksheets[0]
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    for i, row in enumerate(ws.iter_rows(values_only=True)):
-        if i >= MAX_XLSX_ROWS:
-            break
-        w.writerow(["" if c is None else c for c in row])
-    wb.close()
-    return buf.getvalue()
-
-
 def read_file(ctx: Ctx, a: dict) -> str:
     f = ctx.db.get(StoredFile, int(a.get("file_id", 0)))
     if f is None:
@@ -107,7 +90,7 @@ def read_file(ctx: Ctx, a: dict) -> str:
     suffix = Path(f.name).suffix.lower()
     try:
         if suffix in (".xlsx", ".xlsm"):
-            text = _read_xlsx(path)
+            text = search_index.extract_text(path, f.name)
         elif suffix in (".csv", ".txt", ".tsv", ".json", ".md", ""):
             text = path.read_bytes()[: MAX_READ_CHARS * 4].decode("utf-8-sig", errors="replace")
         else:
@@ -117,6 +100,16 @@ def read_file(ctx: Ctx, a: dict) -> str:
     except Exception:  # noqa: BLE001
         raise ToolError("Файл не удалось прочитать: возможно, он повреждён") from None
     return text[:MAX_READ_CHARS] + ("\n…(обрезано)" if len(text) > MAX_READ_CHARS else "")
+
+
+def search_company(ctx: Ctx, a: dict) -> str:
+    q = str(a.get("query", "")).strip()
+    if len(q) < 2:
+        raise ToolError("Нужен запрос из двух и более символов")
+    hits = search_index.search(ctx.db, q, int(a.get("limit", 8)))
+    if not hits:
+        return "Ничего не найдено. Попробуйте другие слова или часть слова."
+    return "\n".join(f"[{h['type']} {h['id']}] {h['title']}: {h['snippet']}" for h in hits)
 
 
 def list_tasks(ctx: Ctx, _a: dict) -> str:
@@ -191,6 +184,7 @@ TOOLS: dict[str, Tool] = {
         Tool("get_metric_history", "История показателя", "Последние значения показателя по его id.", _obj({"metric_id": {"type": "integer"}, "limit": {"type": "integer"}}, ["metric_id"]), "read", get_metric_history),
         Tool("list_files", "Список файлов", "Файлы в разделе «Файлы», новые сверху. Можно указать часть названия папки.", _obj({"folder": {"type": "string"}}), "read", list_files),
         Tool("read_file", "Прочитать файл", "Содержимое файла csv, txt или xlsx (первый лист) по file_id.", _obj({"file_id": {"type": "integer"}}, ["file_id"]), "read", read_file),
+        Tool("search_company", "Поиск по данным компании", "Ищет по файлам (csv, xlsx, txt), задачам, показателям, возвратам и итогам агентов. Возвращает найденные места. Файл целиком читает read_file.", _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]), "read", search_company),
         Tool("list_tasks", "Список задач", "Открытые задачи на доске.", _obj({}), "read", list_tasks),
         Tool("set_metric_value", "Записать значение показателя", "Записывает значение показателя за дату. Меняет данные сразу, перезаписывает значение за ту же дату.", _obj({"metric_id": {"type": "integer"}, "period": {"type": "string", "description": "ГГГГ-ММ-ДД"}, "value": {"type": "number"}, "note": {"type": "string"}}, ["metric_id", "period", "value"]), "write", set_metric_value),
         Tool("propose_task", "Предложить задачу", "Предлагает задачу. Создаётся только после подтверждения человеком.", _obj({"title": {"type": "string"}, "description": {"type": "string"}, "assignee_email": {"type": "string"}}, ["title"]), "confirm", propose_task, _task_describe, _task_execute),

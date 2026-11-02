@@ -37,3 +37,13 @@ def login(client: TestClient, email: str, password: str) -> dict[str, str]:
 @pytest.fixture()
 def owner(client):
     return login(client, **OWNER)
+
+
+class CompleteOnly:
+    """База для подставных моделей, у которых есть только complete(): step() отвечает её текстом."""
+
+    def step(self, system, messages, tools):
+        from app.llm import Step
+
+        text = self.complete(system, messages)
+        return Step(text=text, assistant_content=[{"type": "text", "text": text}])

@@ -17,6 +17,7 @@ from ..deps import current_user
 from ..integrations import service
 from ..integrations.registry import BY_KEY
 from ..models import Folder, StoredFile, User, utcnow
+from .. import search as search_index
 from ..schemas import _utc
 
 router = APIRouter(prefix="/api", tags=["files"])
@@ -209,6 +210,7 @@ async def upload(
     )
     db.add(row)
     db.commit()
+    search_index.index_file(db, row)
     if folder.source_key:
         service.record_sync(db, folder.source_key, row.uploaded_at or utcnow())
     names = {me.id: me.full_name or me.email}
@@ -241,5 +243,6 @@ def delete_file(file_id: int, db: Session = Depends(get_db), me: User = Depends(
     if not (me.role == "owner" or row.uploaded_by == me.id):
         raise HTTPException(status_code=403, detail="Удалить файл может тот, кто его загрузил, или владелец")
     (_root() / row.disk_name).unlink(missing_ok=True)
+    search_index.drop_file(db, row.id)
     db.delete(row)
     db.commit()

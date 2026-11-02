@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.db import SessionLocal
 from app.models import BitrixTask, utcnow
-from tests.conftest import login
+from tests.conftest import CompleteOnly, login
 
 
 def _col(board, key):
@@ -103,7 +103,7 @@ def test_task_chat_has_task_context_and_history(client, owner, monkeypatch):
         db.commit()
     seen = {}
 
-    class Fake:
+    class Fake(CompleteOnly):
         def complete(self, system, messages):
             seen["system"], seen["messages"] = system, messages
             return "Начните с акта"

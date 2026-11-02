@@ -466,3 +466,6 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .px-side { display: grid; gap: 6px; justify-items: end; }
 .chipd.st-none { background: var(--panel-2); color: var(--muted); }
 .app-head > button { white-space: nowrap; align-self: flex-start; }
+
+.search-hit > span { display: grid; gap: 2px; text-align: left; }
+.search-hit .small { font-size: 12px; }
