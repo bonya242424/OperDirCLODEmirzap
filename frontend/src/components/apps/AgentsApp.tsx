@@ -1,5 +1,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
+import type { User } from "../../types";
+import AgentList from "./AgentList";
 
 type StepState = "wait" | "run" | "confirm" | "done" | "skip";
 interface Step {
@@ -41,7 +43,7 @@ const fresh = (): Step[] => TEMPLATE.map((s) => ({ ...s, state: "wait" }));
 const ICON: Record<StepState, string> = { wait: "○", run: "◐", confirm: "!", done: "✓", skip: "–" };
 
 /** Агент по возвратам. Таблица и саммари настоящие; шаги работы на сайте пока показаны для примера: запуск на сайте подключим после первой проверки. */
-export default function AgentsApp() {
+function ReturnsPanel() {
   const [batches, setBatches] = useState<Summary[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -285,6 +287,19 @@ export default function AgentsApp() {
           </ul>
         )}
       </aside>
+    </div>
+  );
+}
+
+export default function AgentsApp({ me }: { me: User }) {
+  const [tab, setTab] = useState<"mine" | "returns">("mine");
+  return (
+    <div className="ag-shell">
+      <div className="chips tabs">
+        <button className={`chip${tab === "mine" ? " on" : ""}`} onClick={() => setTab("mine")}>{me.role === "owner" ? "Все агенты" : "Мои агенты"}</button>
+        <button className={`chip${tab === "returns" ? " on" : ""}`} onClick={() => setTab("returns")}>Возвраты поставщикам</button>
+      </div>
+      <div className="ag-body">{tab === "mine" ? <AgentList me={me} /> : <ReturnsPanel />}</div>
     </div>
   );
 }

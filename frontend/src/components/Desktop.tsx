@@ -51,7 +51,7 @@ function renderApp(app: AppDef, user: User): ReactNode {
   if (["gen", "tech", "ops", "fin"].includes(app.key)) return <DirectorApp key={app.key} direction={app.key} title={app.title} />;
   if (app.key === "tasks") return <TasksApp me={user} />;
   if (app.key === "me") return <MeApp me={user} />;
-  if (app.key === "agents") return <AgentsApp />;
+  if (app.key === "agents") return <AgentsApp me={user} />;
   if (app.key === "files") return <FilesApp />;
   if (app.key === "employees") return <EmployeesApp me={user} />;
   return <Placeholder appKey={app.key} title={app.title} stage={app.stage ?? 0} />;

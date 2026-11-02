@@ -219,3 +219,36 @@ class ReturnLine(Base):
     status: Mapped[str] = mapped_column(String(16), default="pending")
     request_no: Mapped[str] = mapped_column(String(100), default="")
     note: Mapped[str] = mapped_column(Text, default="")
+
+
+class Agent(Base):
+    """ИИ-агент сотрудника: что делает, как часто и от чьего имени."""
+
+    __tablename__ = "agents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(32))  # ключ из app/agents/executors.py
+    instruction: Mapped[str] = mapped_column(Text, default="")
+    schedule_kind: Mapped[str] = mapped_column(String(16), default="manual")  # manual | interval | daily
+    interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    daily_time: Mapped[str | None] = mapped_column(String(5), nullable=True)  # «09:30» по Москве
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    trigger: Mapped[str] = mapped_column(String(16), default="manual")  # manual | schedule
+    # queued | running | done | failed | stopped
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    log: Mapped[str] = mapped_column(Text, default="[]")  # JSON: [{"at": iso, "text": "…"}]
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

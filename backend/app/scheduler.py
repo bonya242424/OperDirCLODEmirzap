@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from .agents.service import run_due_agents, stop_stale_runs
 from .bitrix import run_scheduled_sync
 from .config import settings
 from .integrations.service import run_scheduled_checks
@@ -31,5 +32,7 @@ def start_scheduler() -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
     )
+    stop_stale_runs()
+    scheduler.add_job(run_due_agents, "interval", minutes=1, id="agents_due", max_instances=1, coalesce=True)
     scheduler.start()
     return scheduler
