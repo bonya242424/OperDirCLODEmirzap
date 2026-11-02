@@ -29,6 +29,7 @@ function matches(i: Integration, f: Filter): boolean {
 
 export default function IntegrationsApp() {
   const [tab, setTab] = useState<"systems" | "connections">("systems");
+  const [startKind, setStartKind] = useState<string | undefined>(undefined);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [data, setData] = useState<IntegrationsResponse | null>(null);
@@ -105,7 +106,7 @@ export default function IntegrationsApp() {
         <button className={`chip${tab === "systems" ? " on" : ""}`} onClick={() => setTab("systems")}>Системы компании</button>
         <button className={`chip${tab === "connections" ? " on" : ""}`} onClick={() => setTab("connections")}>Подключения: компания и сотрудники</button>
       </div>
-      {tab === "connections" && <ConnectionsPanel />}
+      {tab === "connections" && <ConnectionsPanel startKind={startKind} />}
       {error && tab === "systems" && <div className="error">{error}</div>}
       {tab === "systems" && !data && !error && <p className="muted">Загрузка…</p>}
       {tab === "systems" && (<>
@@ -149,9 +150,16 @@ export default function IntegrationsApp() {
                 </>
               )}
             </dl>
-            <button onClick={() => checkOne(i.key)} disabled={checking !== null}>
-              {checking === i.key ? "Проверяем…" : "Проверить сейчас"}
-            </button>
+            <div className="row">
+              <button onClick={() => checkOne(i.key)} disabled={checking !== null}>
+                {checking === i.key ? "Проверяем…" : "Проверить сейчас"}
+              </button>
+              {i.key === "llm" && (
+                <button className="ghost" onClick={() => { setStartKind("anthropic"); setTab("connections"); }}>
+                  Ввести или изменить ключ
+                </button>
+              )}
+            </div>
           </div>
         )) }
           </div>

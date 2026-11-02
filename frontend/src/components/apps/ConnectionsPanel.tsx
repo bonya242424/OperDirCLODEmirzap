@@ -10,7 +10,7 @@ const STATUS_LABEL: Record<string, string> = {
   unknown: "Не проверялось",
 };
 
-export default function ConnectionsPanel() {
+export default function ConnectionsPanel({ startKind }: { startKind?: string }) {
   const [items, setItems] = useState<Connection[]>([]);
   const [kinds, setKinds] = useState<ConnectionKind[]>([]);
   const [error, setError] = useState("");
@@ -20,12 +20,55 @@ export default function ConnectionsPanel() {
   const [title, setTitle] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<number | "form" | null>(null);
+  const [editing, setEditing] = useState<Connection | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editValues, setEditValues] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(() => {
     api<Connection[]>("/connections")
-      .then(setItems)
+      .then((r) => {
+        setItems(r);
+        setLoaded(true);
+      })
       .catch((e: Error) => setError(e.message));
   }, []);
+
+  function startEdit(c: Connection) {
+    setAdding(false);
+    setEditing(c);
+    setEditTitle(c.title);
+    setEditValues({});
+  }
+
+  // переход из карточки системы «Модель ИИ»: открыть ввод ключа или изменение существующего
+  useEffect(() => {
+    if (!startKind || !loaded) return;
+    const existing = items.find((c) => c.kind === startKind && c.scope === "company");
+    if (existing) startEdit(existing);
+    else {
+      setKind(startKind);
+      setScope("company");
+      setAdding(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startKind, loaded]);
+
+  async function saveEdit(e: FormEvent) {
+    e.preventDefault();
+    if (!editing) return;
+    setBusy(editing.id);
+    try {
+      await api(`/connections/${editing.id}`, { method: "PATCH", body: { title: editTitle, config: editValues } });
+      setEditing(null);
+      setError("");
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось сохранить");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   useEffect(() => {
     load();
@@ -115,6 +158,34 @@ export default function ConnectionsPanel() {
           <button type="submit" disabled={busy === "form"}>{busy === "form" ? "Проверяем…" : "Сохранить и проверить"}</button>
         </form>
       )}
+      {editing && (() => {
+        const es = kinds.find((k) => k.key === editing.kind);
+        return (
+          <form className="form" onSubmit={saveEdit}>
+            <h3>Изменить: {editing.kind_name}</h3>
+            <label>
+              Название
+              <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+            </label>
+            {es?.fields.map((f) => (
+              <label key={f.name}>
+                {f.label}
+                <input
+                  type={f.secret ? "password" : "text"}
+                  autoComplete="off"
+                  placeholder={f.secret ? (editing.secrets_set.includes(f.name) ? "Задано. Оставьте пустым, чтобы не менять" : "Не задано") : editing.values[f.name] ?? f.default}
+                  value={editValues[f.name] ?? (f.secret ? "" : editing.values[f.name] ?? "")}
+                  onChange={(e) => setEditValues((v) => ({ ...v, [f.name]: e.target.value }))}
+                />
+              </label>
+            ))}
+            <div className="row">
+              <button type="submit" disabled={busy === editing.id}>{busy === editing.id ? "Проверяем…" : "Сохранить и проверить"}</button>
+              <button type="button" className="ghost" onClick={() => setEditing(null)}>Отмена</button>
+            </div>
+          </form>
+        );
+      })()}
       {items.length === 0 && !error && <p className="muted">Подключений пока нет.</p>}
       {[...groups.entries()].map(([owner, list]) => (
         <section key={owner}>
@@ -134,6 +205,7 @@ export default function ConnectionsPanel() {
                 </dl>
                 <div className="row">
                   <button disabled={busy !== null} onClick={() => act(c.id, "/check", "POST")}>Проверить</button>
+                  {c.can_edit && <button disabled={busy !== null} onClick={() => startEdit(c)}>Изменить</button>}
                   {c.can_edit && (
                     <button
                       className="ghost"
