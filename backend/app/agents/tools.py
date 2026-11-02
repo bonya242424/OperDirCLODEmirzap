@@ -162,6 +162,61 @@ def set_metric_value(ctx: Ctx, a: dict) -> str:
     return f"Записано: {m.name} за {period} = {value:g}"
 
 
+def create_metric(ctx: Ctx, a: dict) -> str:
+    import json
+
+    from ..metrika_sync import QUERY_KIND, MetrikaError, parse_spec, sync_one
+
+    owner = ctx.user_id or (ctx.agent.owner_id if ctx.agent else None)
+    if owner is None:
+        raise ToolError("Не определён автор показателя")
+    name = str(a.get("name", "")).strip()
+    direction = str(a.get("direction", "gen"))
+    if not name or len(name) > 200:
+        raise ToolError("Нужно название показателя (до 200 символов)")
+    if direction not in ("gen", "tech", "ops", "fin"):
+        raise ToolError("direction: gen (генеральный), tech (технический), ops (операционный) или fin (финансовый)")
+    if ctx.db.scalar(select(Metric.id).where(Metric.name == name, Metric.is_active.is_(True))):
+        raise ToolError("Показатель с таким названием уже есть: используйте его id или другое название")
+    better = "down" if a.get("better") == "down" else "up"
+    m = Metric(
+        direction=direction, name=name, unit=str(a.get("unit", ""))[:32], description=str(a.get("description", ""))[:2000], better=better,
+        warn_threshold=a.get("warn_threshold"), bad_threshold=a.get("bad_threshold"), expected_days=max(1, min(int(a.get("expected_days") or 7), 400)), created_by=owner,
+    )
+    src = a.get("metrika")
+    if src:
+        if not isinstance(src, dict):
+            raise ToolError("metrika: объект с полями metric, filters, period, count")
+        m.source_kind, m.source_prompt = QUERY_KIND, json.dumps({k: src.get(k) for k in ("metric", "filters", "period", "count")}, ensure_ascii=False)
+        try:
+            parse_spec(m)
+        except MetrikaError as exc:
+            raise ToolError(str(exc)) from None
+    ctx.db.add(m)
+    ctx.db.flush()
+    note = ""
+    if src:
+        try:
+            n = sync_one(ctx.db, m)
+            note = f" Значения из Метрики загружены: {n} периодов, дальше обновляются сами раз в 6 часов."
+        except MetrikaError as exc:
+            ctx.db.rollback()
+            raise ToolError(f"Показатель не создан: {exc}") from None
+    ctx.db.commit()
+    ctx.writes += 1
+    return f"Показатель создан: id={m.id}, «{m.name}».{note}"
+
+
+def archive_metric(ctx: Ctx, a: dict) -> str:
+    m = ctx.db.get(Metric, int(a.get("metric_id", 0)))
+    if m is None or not m.is_active:
+        raise ToolError("Показатель не найден")
+    m.is_active = False
+    ctx.db.commit()
+    ctx.writes += 1
+    return f"Показатель «{m.name}» убран в архив, значения сохранены"
+
+
 def run_subordinate(ctx: Ctx, a: dict) -> str:
     from .runtime import run_agent  # циклический импорт: runtime использует инструменты
 
@@ -213,6 +268,15 @@ TOOLS: dict[str, Tool] = {
             "read",
             metrika_query,
         ),
+        Tool(
+            "create_metric",
+            "Создать показатель",
+            "Создаёт показатель в разделе директора. Можно привязать к Метрике: metrika={metric:'ym:s:visits', filters:\"ym:s:lastSearchEngine=='yandex'\", period:'week'|'month', count:12}: значения за завершённые периоды загрузятся сразу и потом обновляются сами раз в 6 часов. direction: gen, tech, ops, fin.",
+            _obj({"name": {"type": "string"}, "direction": {"type": "string"}, "unit": {"type": "string"}, "description": {"type": "string"}, "better": {"type": "string", "description": "up или down"}, "warn_threshold": {"type": "number"}, "bad_threshold": {"type": "number"}, "expected_days": {"type": "integer"}, "metrika": {"type": "object"}}, ["name", "direction"]),
+            "write",
+            create_metric,
+        ),
+        Tool("archive_metric", "Убрать показатель в архив", "Скрывает показатель по id, значения остаются.", _obj({"metric_id": {"type": "integer"}}, ["metric_id"]), "write", archive_metric),
         Tool("list_files", "Список файлов", "Файлы в разделе «Файлы», новые сверху. Можно указать часть названия папки.", _obj({"folder": {"type": "string"}}), "read", list_files),
         Tool("read_file", "Прочитать файл", "Содержимое файла csv, txt или xlsx (первый лист) по file_id.", _obj({"file_id": {"type": "integer"}}, ["file_id"]), "read", read_file),
         Tool("search_company", "Поиск по данным компании", "Ищет по файлам (csv, xlsx, txt), задачам, показателям, возвратам и итогам агентов. Возвращает найденные места. Файл целиком читает read_file.", _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]), "read", search_company),

@@ -83,3 +83,49 @@ def test_tool_is_available_in_chat():
     from app.routers.chat import CHAT_TOOLS
 
     assert "metrika_query" in TOOLS and "metrika_query" in CHAT_TOOLS
+
+
+def _ctx(db, owner_id):
+    from app.agents.tools import Ctx
+
+    return Ctx(db, None, lambda _t: None, user_id=owner_id, label="ИИ-чат")
+
+
+def test_create_metric_from_metrika_with_filter(metrika, owner):
+    from app.agents.tools import TOOLS, ToolError
+    from app.models import User
+
+    with SessionLocal() as db:
+        uid = db.scalar(select(User.id).where(User.role == "owner"))
+        out = TOOLS["create_metric"].handler(_ctx(db, uid), {
+            "name": "Визиты, небренд", "direction": "gen", "unit": "визитов",
+            "metrika": {"metric": "ym:s:visits", "filters": "ym:s:lastSearchEngine=='yandex'", "period": "week", "count": 4},
+        })
+        assert "id=" in out and "4 периодов" in out
+        m = db.scalar(select(Metric).where(Metric.name == "Визиты, небренд"))
+        assert m.source_kind == ms.QUERY_KIND and len(db.scalars(select(MetricValue).where(MetricValue.metric_id == m.id)).all()) == 4
+        sent = [c[1] for c in FakeClient.calls]
+        assert all(p["filters"] == "ym:s:lastSearchEngine=='yandex'" and p["metrics"] == "ym:s:visits" for p in sent)
+        with pytest.raises(ToolError, match="уже есть"):
+            TOOLS["create_metric"].handler(_ctx(db, uid), {"name": "Визиты, небренд", "direction": "gen"})
+        # обновление по расписанию идемпотентно
+        assert ms.sync_custom(db) >= 4
+        assert len(db.scalars(select(MetricValue).where(MetricValue.metric_id == m.id)).all()) >= 4
+
+
+def test_create_metric_rolls_back_on_metrika_error(metrika, owner):
+    from app.agents.tools import TOOLS, ToolError
+    from app.models import User
+
+    FakeClient.reply = Resp(400)
+    with SessionLocal() as db:
+        uid = db.scalar(select(User.id).where(User.role == "owner"))
+        with pytest.raises(ToolError, match="не создан"):
+            TOOLS["create_metric"].handler(_ctx(db, uid), {"name": "Плохой", "direction": "gen", "metrika": {"metric": "ym:s:visits"}})
+        assert db.scalar(select(Metric).where(Metric.name == "Плохой")) is None
+
+
+def test_chat_write_tools_only_for_owner():
+    from app.routers.chat import CHAT_TOOLS, OWNER_CHAT_TOOLS
+
+    assert "create_metric" in OWNER_CHAT_TOOLS and "create_metric" not in CHAT_TOOLS

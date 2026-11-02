@@ -76,4 +76,4 @@ def test_search_tool_for_agents_and_chat(client, owner, monkeypatch):
     r = client.post("/api/chat", headers=owner, json={"message": "сколько заказов?"})
     assert r.json()["reply"]["content"] == "Нашёл: 120"
     assert "search_company" in seen["tools"] and "заказы.csv" in seen["result"]
-    assert "set_metric_value" not in seen["tools"]  # чат ничего не пишет
+    assert "create_metric" in seen["tools"]  # владельцу чат может заводить показатели (обратимо)

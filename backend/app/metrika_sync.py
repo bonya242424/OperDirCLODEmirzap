@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import SessionLocal
 from .integrations.checks import _yandex_headers, _yandex_token, company_cfg
-from .models import Metric, MetricValue, User
+from .models import Metric, MetricValue, User, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ def run_scheduled_metrika() -> None:
         if not _yandex_token("yandex_metrika"):
             return
         try:
-            n = sync_metrika(db)
+            n = sync_metrika(db) + sync_custom(db)
         except MetrikaError as exc:
             log.warning("Выгрузка Метрики не удалась: %s", exc)
             return
@@ -176,3 +176,87 @@ def query_stat(a: dict) -> str:
     if body.get("total_rows", 0) > len(body.get("data", [])):
         lines.append(f"Показано {len(body.get('data', []))} строк из {body['total_rows']}: сузьте период или добавьте фильтр")
     return "\n".join(lines)
+
+
+# ---- показатели с произвольным запросом к Метрике (создаёт ИИ или человек) ----
+QUERY_KIND = "yandex_metrika:query"
+
+
+def parse_spec(m: Metric) -> dict:
+    import json
+
+    try:
+        spec = json.loads(m.source_prompt)
+    except ValueError:
+        raise MetrikaError("Описание источника показателя повреждено") from None
+    if not isinstance(spec, dict) or not _NAME.match(str(spec.get("metric", ""))):
+        raise MetrikaError("В описании источника нет метрики вида ym:s:visits")
+    spec["period"] = spec.get("period") if spec.get("period") in ("week", "month") else "week"
+    spec["count"] = max(1, min(int(spec.get("count") or 12), 60))
+    spec["filters"] = str(spec.get("filters") or "")[:500]
+    return spec
+
+
+def month_starts(today: date, count: int) -> list[date]:
+    first = today.replace(day=1)
+    out = []
+    for _ in range(count):
+        first = (first - timedelta(days=1)).replace(day=1)
+        out.append(first)
+    return out[::-1]
+
+
+def periods(spec: dict, today: date) -> list[tuple[date, date]]:
+    if spec["period"] == "month":
+        return [(d, (d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)) for d in month_starts(today, spec["count"])]
+    return [(d, d + timedelta(days=6)) for d in week_starts(today, spec["count"])]
+
+
+def sync_one(db: Session, m: Metric, today: date | None = None) -> int:
+    """Пересчитывает один показатель из Метрики за последние завершённые периоды."""
+    spec = parse_spec(m)
+    token = _yandex_token("yandex_metrika")
+    counter = company_cfg("yandex_metrika").get("counter_id", "").strip() or settings.yandex_metrika_counter_id.strip()
+    if not token or not counter.isdigit():
+        raise MetrikaError("Не заданы токен и номер счётчика Метрики")
+    have = {v.period: v for v in db.scalars(select(MetricValue).where(MetricValue.metric_id == m.id))}
+    n = 0
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            for d1, d2 in periods(spec, today or date.today()):
+                params = {"ids": counter, "metrics": spec["metric"], "date1": d1.isoformat(), "date2": d2.isoformat(), "accuracy": "full"}
+                if spec["filters"]:
+                    params["filters"] = spec["filters"]
+                resp = client.get("https://api-metrika.yandex.net/stat/v1/data", params=params, headers=_yandex_headers(token))
+                if resp.status_code in (401, 403):
+                    raise MetrikaError("Токен недействителен или нет доступа к счётчику")
+                if resp.status_code == 400:
+                    raise MetrikaError("Метрика не приняла запрос: проверьте имя метрики и фильтр")
+                if resp.status_code != 200:
+                    raise MetrikaError(f"Метрика ответила кодом {resp.status_code}")
+                totals = resp.json().get("totals") or [0]
+                val = float(totals[0] or 0)
+                note = f"Яндекс Метрика {spec['metric']}, {d1:%d.%m}–{d2:%d.%m.%Y}" + (f", фильтр: {spec['filters']}" if spec["filters"] else "")
+                if d1 in have:
+                    have[d1].value, have[d1].note = val, note
+                else:
+                    db.add(MetricValue(metric_id=m.id, period=d1, value=val, note=note, created_by=m.created_by))
+                n += 1
+    except httpx.HTTPError as exc:
+        raise MetrikaError(f"Ошибка сети ({type(exc).__name__})") from None
+    db.commit()
+    return n
+
+
+def sync_custom(db: Session) -> int:
+    total = 0
+    for m in db.scalars(select(Metric).where(Metric.source_kind == QUERY_KIND, Metric.is_active.is_(True))):
+        try:
+            total += sync_one(db, m)
+        except MetrikaError as exc:
+            m.calc_status, m.calc_message = "error", str(exc)
+            db.commit()
+        else:
+            m.calc_status, m.calc_message, m.calc_at = "ok", "", utcnow()
+            db.commit()
+    return total
