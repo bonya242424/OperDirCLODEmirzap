@@ -162,6 +162,8 @@ class Metric(Base):
     calc_message: Mapped[str] = mapped_column(Text, default="")
     calc_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     calc_file_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Внешний источник, например yandex_metrika:visits (значения приходят сами)
+    source_kind: Mapped[str] = mapped_column(String(64), default="", index=True)
 
 
 class MetricValue(Base):

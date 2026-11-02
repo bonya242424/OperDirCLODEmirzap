@@ -46,6 +46,18 @@ def check_all(db: Session = Depends(get_db), _: User = Depends(current_user)):
     return _all(service.check_all(db))
 
 
+@router.post("/yandex_metrika/sync", response_model=IntegrationOut)
+def sync_metrika_now(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    from ..metrika_sync import MetrikaError, sync_metrika
+
+    try:
+        sync_metrika(db)
+    except MetrikaError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    service.record_sync(db, "yandex_metrika")
+    return _out(service.run_check(db, "yandex_metrika"))
+
+
 @router.post("/{key}/check", response_model=IntegrationOut)
 def check_one(key: str, db: Session = Depends(get_db), _: User = Depends(current_user)):
     if key not in BY_KEY:

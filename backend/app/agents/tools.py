@@ -74,6 +74,17 @@ def get_metric_history(ctx: Ctx, a: dict) -> str:
     return "\n".join(f"{v.period}: {v.value}" for v in vals) or "Значений нет"
 
 
+def metrika_query(ctx: Ctx, a: dict) -> str:
+    from ..metrika_sync import MetrikaError, query_stat
+
+    try:
+        return query_stat(a)[:MAX_READ_CHARS]
+    except MetrikaError as exc:
+        raise ToolError(str(exc)) from None
+    except (TypeError, ValueError):
+        raise ToolError("Неверные параметры запроса") from None
+
+
 def list_files(ctx: Ctx, a: dict) -> str:
     q = select(StoredFile, Folder).join(Folder, Folder.id == StoredFile.folder_id).order_by(StoredFile.uploaded_at.desc()).limit(40)
     name = str(a.get("folder", "")).strip().lower()
@@ -194,6 +205,14 @@ TOOLS: dict[str, Tool] = {
     for t in [
         Tool("list_metrics", "Список показателей", "Показатели компании с id, последним значением и статусом.", _obj({}), "read", list_metrics),
         Tool("get_metric_history", "История показателя", "Последние значения показателя по его id.", _obj({"metric_id": {"type": "integer"}, "limit": {"type": "integer"}}, ["metric_id"]), "read", get_metric_history),
+        Tool(
+            "metrika_query",
+            "Запрос к Яндекс Метрике",
+            "Живые данные Метрики за любой период (date1, date2 в виде ГГГГ-ММ-ДД). metrics, например: ym:s:visits, ym:s:users, ym:s:pageviews, ym:s:bounceRate, ym:s:pageDepth, ym:s:avgVisitDurationSeconds, ym:s:goal<ID цели>reaches. dimensions (разрезы), например: ym:s:date (по дням), ym:s:week, ym:s:month, ym:s:lastTrafficSource (источник), ym:s:lastSearchEngine, ym:s:regionCity, ym:s:deviceCategory, ym:s:startURL (страница входа), ym:s:UTMCampaign. sort: -ym:s:visits. filters: например ym:s:deviceCategory=='mobile'. Цифры для ответа берите только отсюда.",
+            _obj({"date1": {"type": "string"}, "date2": {"type": "string"}, "metrics": {"type": "array", "items": {"type": "string"}}, "dimensions": {"type": "array", "items": {"type": "string"}}, "sort": {"type": "string"}, "filters": {"type": "string"}, "limit": {"type": "integer"}}, ["date1", "date2"]),
+            "read",
+            metrika_query,
+        ),
         Tool("list_files", "Список файлов", "Файлы в разделе «Файлы», новые сверху. Можно указать часть названия папки.", _obj({"folder": {"type": "string"}}), "read", list_files),
         Tool("read_file", "Прочитать файл", "Содержимое файла csv, txt или xlsx (первый лист) по file_id.", _obj({"file_id": {"type": "integer"}}, ["file_id"]), "read", read_file),
         Tool("search_company", "Поиск по данным компании", "Ищет по файлам (csv, xlsx, txt), задачам, показателям, возвратам и итогам агентов. Возвращает найденные места. Файл целиком читает read_file.", _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]), "read", search_company),

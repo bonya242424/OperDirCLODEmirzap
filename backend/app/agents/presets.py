@@ -22,7 +22,7 @@ PRESETS = [
         "key": "analyst", "title": "Аналитик", "level": "analyst",
         "description": "Смотрит показатели и отчёты опер-штаба, находит отклонения и делает выводы.",
         "instruction": "Проанализируй показатели и отчёты подчинённых агентов. Найди отклонения от нормы и резкие изменения, объясни возможные причины и скажи, что нужно проверить.",
-        "tools": ["list_metrics", "get_metric_history", "list_tasks", "run_subordinate"],
+        "tools": ["list_metrics", "get_metric_history", "list_tasks", "metrika_query", "run_subordinate"],
     },
     {
         "key": "manager", "title": "Руководитель", "level": "manager",
