@@ -132,3 +132,14 @@ def test_model_errors_are_not_retried_and_all_down(client, owner, monkeypatch):
 def test_no_proxies_goes_direct(client, owner, monkeypatch):
     monkeypatch.setattr("app.config.settings.anthropic_api_key", "k")
     assert isinstance(llm.get_provider(), llm.AnthropicProvider)
+
+
+def test_provider_with_proxy_builds_with_installed_sdk():
+    """Регрессия: SDK anthropic 2.x отвергал обычный httpx.Client, и вся работа через прокси падала с TypeError."""
+    from app.integrations.checks import check_anthropic_key
+    from app.llm import AnthropicProvider
+
+    AnthropicProvider("sk-ant-x", "m", "", "socks5://127.0.0.1:1")
+    AnthropicProvider("sk-ant-x", "m", "", "http://127.0.0.1:1")
+    # проверка ключа без прокси не должна падать TypeError: сеть может быть недоступна, но ответ всегда CheckResult
+    assert check_anthropic_key("sk-ant-x").status in ("ok", "error", "warning", "not_configured")

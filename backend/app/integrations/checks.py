@@ -279,8 +279,7 @@ def check_llm(db, row: Integration) -> CheckResult:
 
 
 def check_anthropic_key(key: str) -> CheckResult:
-    import httpx
-    from anthropic import Anthropic, APIConnectionError, APIStatusError
+    from anthropic import Anthropic, APIConnectionError, APIStatusError, DefaultHttpxClient
 
     from ..proxies import active_proxies, record_result
 
@@ -292,7 +291,7 @@ def check_anthropic_key(key: str) -> CheckResult:
             base_url=settings.llm_base_url or None,
             timeout=10.0,
             max_retries=0,
-            http_client=httpx.Client(proxy=url, timeout=10.0) if url else None,
+            http_client=DefaultHttpxClient(proxy=url, timeout=10.0) if url else None,
         )
         try:
             client.models.list(limit=1)

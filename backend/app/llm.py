@@ -59,10 +59,9 @@ def llm_api_key() -> str:
 
 class AnthropicProvider:
     def __init__(self, api_key: str, model: str, base_url: str = "", proxy_url: str = "") -> None:
-        import httpx
-        from anthropic import Anthropic
+        from anthropic import Anthropic, DefaultHttpxClient  # DefaultHttpxClient: SDK 2.x не принимает обычный httpx.Client
 
-        http_client = httpx.Client(proxy=proxy_url, timeout=60.0) if proxy_url else None
+        http_client = DefaultHttpxClient(proxy=proxy_url, timeout=60.0) if proxy_url else None
         self._client = Anthropic(api_key=api_key, base_url=base_url or None, timeout=60.0, http_client=http_client)
         self._model = model
 
