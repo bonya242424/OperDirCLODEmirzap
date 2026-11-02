@@ -48,7 +48,7 @@ def history(db: Session = Depends(get_db), me: User = Depends(current_user)):
 def send(body: ChatIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
     provider = get_provider()
     if provider is None:
-        raise HTTPException(status_code=503, detail="ИИ не подключён: не задан ключ API модели (ANTHROPIC_API_KEY)")
+        raise HTTPException(status_code=503, detail="ИИ не подключён: добавьте ключ выбранной модели в «Интеграции → Модель ИИ»")
 
     past = db.scalars(
         select(ChatMessage)

@@ -514,3 +514,11 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .remote-view { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: #111; line-height: 0; outline: none; }
 .remote-view:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .remote-view img { width: 100%; height: auto; cursor: crosshair; user-select: none; }
+
+.model-panel { display: grid; gap: 12px; max-width: 640px; }
+.model-choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.model-card { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-md); cursor: pointer; }
+.model-card.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.model-card input { justify-self: start; }
+.model-field { display: grid; gap: 6px; }
+.ok-text { color: var(--ok, #3fb27f); }

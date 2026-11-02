@@ -15,7 +15,7 @@ from .routers.returns import backfill_doc_dates
 from .metric_calc import reset_stale
 from .routers import search as search_router
 from . import changelog as changelog_data
-from .routers import agents, changelog, instructions, proxies, remote, auth, board, returns, chat, connections, files, integrations, metrics, tasks, users
+from .routers import agents, changelog, instructions, proxies, remote, llm_settings, auth, board, returns, chat, connections, files, integrations, metrics, tasks, users
 from .scheduler import start_scheduler
 from .security import hash_password
 
@@ -86,6 +86,7 @@ app.include_router(search_router.router)
 app.include_router(changelog.router)
 app.include_router(instructions.router)
 app.include_router(remote.router)
+app.include_router(llm_settings.router)
 
 
 @app.get("/api/health")

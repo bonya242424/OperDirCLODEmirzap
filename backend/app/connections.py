@@ -60,6 +60,12 @@ KINDS: dict[str, Kind] = {
             [Field("api_key", "Ключ API (sk-ant-…)", secret=True)],
         ),
         Kind(
+            "openai",
+            "Ключ GPT (OpenAI)",
+            "Ключ API OpenAI. Включается переключателем «Модель ИИ» в «Интеграции». Только для компании, один на всех",
+            [Field("api_key", "Ключ API (sk-…)", secret=True)],
+        ),
+        Kind(
             "yandex_metrika",
             "Яндекс Метрика",
             "Визиты, источники, цели, конверсии. Один счётчик на подключение",
@@ -250,4 +256,13 @@ def _anthropic(cfg):
     return check_anthropic_key(key)
 
 
-_CHECKS = {"anthropic": _anthropic, "rdp": _rdp, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}
+def _openai(cfg):
+    from .integrations.checks import check_openai_key
+
+    key = cfg["api_key"].strip()
+    if not key.startswith("sk-"):
+        return CheckResult(ERROR, "Ключ должен начинаться с sk-")
+    return check_openai_key(key)
+
+
+_CHECKS = {"openai": _openai, "anthropic": _anthropic, "rdp": _rdp, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}

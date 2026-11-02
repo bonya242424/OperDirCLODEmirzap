@@ -14,7 +14,7 @@ class FakeProvider(CompleteOnly):
 def test_chat_without_key_is_503(client, owner):
     resp = client.post("/api/chat", headers=owner, json={"message": "привет"})
     assert resp.status_code == 503
-    assert "ANTHROPIC_API_KEY" in resp.json()["detail"]
+    assert "ключ" in resp.json()["detail"]
     assert client.get("/api/chat/history", headers=owner).json() == []
 
 

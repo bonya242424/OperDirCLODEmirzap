@@ -292,12 +292,42 @@ def check_yandex_webmaster(db, row: Integration) -> CheckResult:
 
 
 def check_llm(db, row: Integration) -> CheckResult:
-    from ..llm import llm_api_key
+    from ..llm import active_model, active_provider, llm_api_key, openai_api_key
 
-    key = llm_api_key()
-    if not key:
-        return CheckResult(NOT_CONFIGURED, "Не задан ключ модели: добавьте его в «Интеграции» или в ANTHROPIC_API_KEY")
-    return check_anthropic_key(key)
+    if active_provider() == "openai":
+        key = openai_api_key()
+        if not key:
+            return CheckResult(NOT_CONFIGURED, "Выбран GPT, но ключ не задан: добавьте «Ключ GPT» в «Интеграции»")
+        res = check_openai_key(key)
+    else:
+        key = llm_api_key()
+        if not key:
+            return CheckResult(NOT_CONFIGURED, "Не задан ключ модели: добавьте его в «Интеграции» или в ANTHROPIC_API_KEY")
+        res = check_anthropic_key(key)
+    if res.status == OK:
+        res = CheckResult(OK, f"{res.message}. Модель: {active_model()}")
+    return res
+
+
+def check_openai_key(key: str) -> CheckResult:
+    from ..proxies import active_proxies, record_result
+
+    routes: list[tuple[int | None, str]] = active_proxies() or [(None, "")]
+    for proxy_id, url in routes:
+        try:
+            resp = httpx.get(settings.openai_base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {key}"}, timeout=10.0, proxy=url or None)
+        except httpx.TransportError:
+            if proxy_id is not None:
+                record_result(proxy_id, False)
+            continue
+        if proxy_id is not None:
+            record_result(proxy_id, True)
+        if resp.status_code in (401, 403):
+            return CheckResult(ERROR, "Ключ GPT недействителен или нет доступа")
+        if resp.status_code != 200:
+            return CheckResult(ERROR, f"API модели ответил кодом {resp.status_code}")
+        return CheckResult(OK, "API GPT отвечает" + (" через прокси" if proxy_id is not None else ""))
+    return CheckResult(ERROR, "Нет соединения с API модели" + (": ни один прокси не отвечает" if routes[0][0] is not None else ""))
 
 
 def check_anthropic_key(key: str) -> CheckResult:

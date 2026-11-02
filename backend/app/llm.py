@@ -57,6 +57,159 @@ def llm_api_key() -> str:
     return key or settings.anthropic_api_key.strip()
 
 
+def get_setting(key: str, default: str = "") -> str:
+    from .db import SessionLocal
+    from .models import AppSetting
+
+    try:
+        with SessionLocal() as db:
+            row = db.get(AppSetting, key)
+            return row.value if row and row.value else default
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def set_setting(db, key: str, value: str) -> None:
+    from .models import AppSetting
+
+    row = db.get(AppSetting, key)
+    if row is None:
+        db.add(AppSetting(key=key, value=value))
+    else:
+        row.value = value
+    db.commit()
+
+
+def openai_api_key() -> str:
+    from sqlalchemy import select
+
+    from .connections import decrypt
+    from .db import SessionLocal
+    from .models import Connection
+
+    try:
+        with SessionLocal() as db:
+            row = db.scalar(select(Connection).where(Connection.kind == "openai", Connection.owner_id.is_(None)).order_by(Connection.id.desc()))
+            key = decrypt(row.config_encrypted).get("api_key", "").strip() if row else ""
+    except Exception:  # noqa: BLE001
+        key = ""
+    return key or settings.openai_api_key.strip()
+
+
+def active_provider() -> str:
+    return "openai" if get_setting("llm_provider", "anthropic") == "openai" else "anthropic"
+
+
+def active_model(provider: str | None = None) -> str:
+    provider = provider or active_provider()
+    if provider == "openai":
+        return get_setting("llm_model_openai", settings.openai_model)
+    return get_setting("llm_model_anthropic", settings.llm_model)
+
+
+def _to_openai_messages(system: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Внутренний формат диалога (как у Claude) в формат Chat Completions."""
+    import json
+
+    def part(b: dict[str, Any]) -> dict[str, Any] | None:
+        if b.get("type") == "text":
+            return {"type": "text", "text": b.get("text", "")}
+        if b.get("type") == "image":
+            src = b.get("source", {})
+            return {"type": "image_url", "image_url": {"url": f"data:{src.get('media_type', 'image/jpeg')};base64,{src.get('data', '')}"}}
+        return None
+
+    out: list[dict[str, Any]] = [{"role": "system", "content": system}]
+    for m in messages:
+        c = m["content"]
+        if isinstance(c, str):
+            out.append({"role": m["role"], "content": c})
+            continue
+        if m["role"] == "assistant":
+            text = "".join(b.get("text", "") for b in c if b.get("type") == "text")
+            calls = [
+                {"id": b["id"], "type": "function", "function": {"name": b["name"], "arguments": json.dumps(b.get("input", {}), ensure_ascii=False)}}
+                for b in c
+                if b.get("type") == "tool_use"
+            ]
+            msg: dict[str, Any] = {"role": "assistant", "content": text or None}
+            if calls:
+                msg["tool_calls"] = calls
+            out.append(msg)
+            continue
+        extra: list[dict[str, Any]] = []
+        for b in c:
+            if b.get("type") == "tool_result":
+                inner = b.get("content", "")
+                if isinstance(inner, list):
+                    text = "\n".join(x.get("text", "") for x in inner if x.get("type") == "text") or "Результат: изображение ниже"
+                    extra += [p for x in inner if x.get("type") == "image" and (p := part(x))]
+                else:
+                    text = str(inner)
+                out.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": text})
+            elif (p := part(b)) is not None:
+                extra.append(p)
+        if extra:
+            out.append({"role": "user", "content": extra})
+    return out
+
+
+class OpenAIProvider:
+    """GPT и совместимые API (Chat Completions) через httpx, чтобы не тянуть лишнюю библиотеку."""
+
+    def __init__(self, api_key: str, model: str, base_url: str = "", proxy_url: str = "") -> None:
+        self._key, self._model = api_key, model
+        self._base = (base_url or settings.openai_base_url).rstrip("/")
+        self._proxy = proxy_url
+
+    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+        import httpx
+
+        try:
+            with httpx.Client(timeout=90.0, proxy=self._proxy or None) as client:
+                resp = client.post(f"{self._base}/chat/completions", json=body, headers={"Authorization": f"Bearer {self._key}"})
+        except httpx.TransportError as exc:
+            raise LLMConnectionError("Нет соединения с API модели") from exc
+        if resp.status_code != 200:
+            detail = ""
+            try:
+                detail = str(resp.json().get("error", {}).get("message", ""))[:160]
+            except Exception:  # noqa: BLE001
+                pass
+            raise LLMError(f"API модели ответил кодом {resp.status_code}" + (f": {detail}" if detail else ""))
+        return resp.json()
+
+    def _call(self, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> Step:
+        import json
+
+        body: dict[str, Any] = {"model": self._model, "max_completion_tokens": 8000, "messages": _to_openai_messages(system, messages)}
+        if tools:
+            body["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}} for t in tools]
+        data = self._post(body)
+        choice = (data.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        out = Step(text=(msg.get("content") or "").strip())
+        if out.text:
+            out.assistant_content.append({"type": "text", "text": out.text})
+        for c in msg.get("tool_calls") or []:
+            try:
+                args = json.loads(c["function"].get("arguments") or "{}")
+            except ValueError:
+                args = {}
+            out.calls.append(ToolCall(c["id"], c["function"]["name"], args if isinstance(args, dict) else {}))
+            out.assistant_content.append({"type": "tool_use", "id": c["id"], "name": c["function"]["name"], "input": args if isinstance(args, dict) else {}})
+        return out
+
+    def complete(self, system: str, messages: list[dict[str, Any]]) -> str:
+        out = self._call(system, messages, None)
+        if not out.text:
+            raise LLMError("Модель вернула пустой ответ")
+        return out.text
+
+    def step(self, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Step:
+        return self._call(system, messages, tools)
+
+
 class AnthropicProvider:
     def __init__(self, api_key: str, model: str, base_url: str = "", proxy_url: str = "") -> None:
         from anthropic import Anthropic, DefaultHttpxClient  # DefaultHttpxClient: SDK 2.x не принимает обычный httpx.Client
@@ -112,15 +265,16 @@ class AnthropicProvider:
 class FailoverProvider:
     """Пробует прокси по очереди: при ошибке соединения берёт следующий, ошибки самой модели не повторяет."""
 
-    def __init__(self, proxies: list[tuple[int, str]], on_result, api_key: str) -> None:
+    def __init__(self, proxies: list[tuple[int, str]], on_result, api_key: str, make=None) -> None:
         self._key = api_key
+        self._make = make or (lambda url: AnthropicProvider(api_key, active_model("anthropic"), settings.llm_base_url, url))
         self._proxies = proxies  # [(id, url)]
         self._on_result = on_result  # (proxy_id, ok) -> None, чтобы запомнить состояние
 
     def _run(self, fn):
         last: LLMConnectionError | None = None
         for pid, url in self._proxies:
-            provider = AnthropicProvider(self._key, settings.llm_model, settings.llm_base_url, url)
+            provider = self._make(url)
             try:
                 result = fn(provider)
             except LLMConnectionError as exc:
@@ -139,12 +293,26 @@ class FailoverProvider:
 
 
 def get_provider() -> LLMProvider | None:
-    key = llm_api_key()
-    if not key:
-        return None
     from .proxies import active_proxies, record_result
+
+    if active_provider() == "openai":
+        key = openai_api_key()
+        if not key:
+            return None
+        model = active_model("openai")
+
+        def make(url: str = ""):
+            return OpenAIProvider(key, model, "", url)
+    else:
+        key = llm_api_key()
+        if not key:
+            return None
+        model = active_model("anthropic")
+
+        def make(url: str = ""):
+            return AnthropicProvider(key, model, settings.llm_base_url, url)
 
     proxies = active_proxies()
     if proxies:
-        return FailoverProvider(proxies, record_result, key)
-    return AnthropicProvider(key, settings.llm_model, settings.llm_base_url)
+        return FailoverProvider(proxies, record_result, key, make)
+    return make()

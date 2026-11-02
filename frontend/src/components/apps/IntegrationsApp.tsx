@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, formatAgo, formatDate } from "../../api";
 import ConnectionsPanel from "./ConnectionsPanel";
+import ModelPanel from "./ModelPanel";
 import type { Integration, IntegrationStatus, IntegrationsResponse } from "../../types";
 
 const STATUS_LABEL: Record<IntegrationStatus, string> = {
@@ -36,7 +37,7 @@ const SETUP_KIND: Record<string, string> = {
 };
 
 export default function IntegrationsApp() {
-  const [tab, setTab] = useState<"systems" | "connections">("systems");
+  const [tab, setTab] = useState<"systems" | "connections" | "model">("systems");
   const [startKind, setStartKind] = useState<string | undefined>(undefined);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
@@ -112,8 +113,10 @@ export default function IntegrationsApp() {
       </div>
       <div className="chips tabs">
         <button className={`chip${tab === "systems" ? " on" : ""}`} onClick={() => setTab("systems")}>Системы компании</button>
+        <button className={`chip${tab === "model" ? " on" : ""}`} onClick={() => setTab("model")}>Модель ИИ</button>
         <button className={`chip${tab === "connections" ? " on" : ""}`} onClick={() => setTab("connections")}>Подключения: компания и сотрудники</button>
       </div>
+      {tab === "model" && <ModelPanel onAddKey={(k) => { setStartKind(k); setTab("connections"); }} onChecked={load} />}
       {tab === "connections" && <ConnectionsPanel startKind={startKind} />}
       {error && tab === "systems" && <div className="error">{error}</div>}
       {tab === "systems" && !data && !error && <p className="muted">Загрузка…</p>}

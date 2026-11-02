@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     llm_model: str = "claude-sonnet-5-5"
     llm_base_url: str = ""
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5"
+    openai_base_url: str = "https://api.openai.com/v1"
 
     # Интеграции
     bitrix24_webhook_url: str = ""

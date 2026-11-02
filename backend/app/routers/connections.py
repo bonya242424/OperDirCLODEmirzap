@@ -136,10 +136,10 @@ def create(body: ConnectionIn, db: Session = Depends(get_db), me: User = Depends
         if me.role != "owner":
             raise HTTPException(status_code=403, detail="Доступ к терминалу добавляет только владелец")
         body = body.model_copy(update={"scope": "company"})
-    if body.kind == "anthropic":
+    if body.kind in ("anthropic", "openai"):
         if me.role != "owner":
             raise HTTPException(status_code=403, detail="Ключ модели добавляет только владелец")
-        if db.scalar(select(Connection.id).where(Connection.kind == "anthropic", Connection.owner_id.is_(None))):
+        if db.scalar(select(Connection.id).where(Connection.kind == body.kind, Connection.owner_id.is_(None))):
             raise HTTPException(status_code=409, detail="Ключ уже добавлен: измените его в существующем подключении")
         body = body.model_copy(update={"scope": "company"})
     config = _clean(body.kind, body.config)
