@@ -16,7 +16,17 @@ log = logging.getLogger(__name__)
 
 VIEW_W, VIEW_H = 1100, 700
 IDLE_SECONDS = 15 * 60
-KEYS = {"Enter", "Tab", "Backspace", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Delete", "Space"}
+KEYS = {"Enter", "Tab", "Backspace", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Delete", "Space", "Home", "End", "PageUp", "PageDown"}
+MODS = {"Control", "Shift", "Alt", "Meta"}
+
+
+def valid_key(name: str) -> bool:
+    """Клавиша или сочетание: Enter, Control+a, Shift+Tab, F5. Лишнего не пропускаем."""
+    parts = name.split("+")
+    if not parts or len(set(parts)) != len(parts) or not set(parts[:-1]) <= MODS:
+        return False
+    last = parts[-1]
+    return last in KEYS or (len(last) == 1 and last.isprintable()) or (last.startswith("F") and last[1:].isdigit() and 1 <= int(last[1:]) <= 12)
 
 
 class BrowserError(Exception):
@@ -119,13 +129,15 @@ class BrowserManager:
     async def _shot(self, key: int) -> bytes:
         return await self._get(key).page.screenshot(type="jpeg", quality=70)
 
-    def click(self, key: int, x: float, y: float) -> None:
+    def click(self, key: int, x: float, y: float, button: str = "left", double: bool = False) -> None:
         if not (0 <= x <= VIEW_W and 0 <= y <= VIEW_H):
             raise BrowserError("Клик за пределами окна")
-        self._run(lambda: self._click(key, x, y))
+        if button not in ("left", "right", "middle"):
+            raise BrowserError("Неизвестная кнопка мыши")
+        self._run(lambda: self._click(key, x, y, button, double))
 
-    async def _click(self, key: int, x: float, y: float) -> None:
-        await self._get(key).page.mouse.click(x, y)
+    async def _click(self, key: int, x: float, y: float, button: str = "left", double: bool = False) -> None:
+        await self._get(key).page.mouse.click(x, y, button=button, click_count=2 if double else 1)
 
     def type_text(self, key: int, text: str) -> None:
         self._run(lambda: self._type(key, text))
@@ -134,9 +146,9 @@ class BrowserManager:
         await self._get(key).page.keyboard.type(text, delay=20)
 
     def press(self, key: int, name: str) -> None:
-        if name not in KEYS:
+        if not valid_key(name):
             raise BrowserError("Эта клавиша не поддерживается")
-        self._run(lambda: self._press(key, "Space" if name == "Space" else name))
+        self._run(lambda: self._press(key, name))
 
     async def _press(self, key: int, name: str) -> None:
         await self._get(key).page.keyboard.press(name)
@@ -146,6 +158,30 @@ class BrowserManager:
 
     async def _scroll(self, key: int, dy: float) -> None:
         await self._get(key).page.mouse.wheel(0, dy)
+
+    # --- свободная навигация владельца (не для агента) ---
+    def navigate(self, key: int, url: str) -> None:
+        self._run(lambda: self._navigate(key, url), timeout=60.0)
+
+    async def _navigate(self, key: int, url: str) -> None:
+        page = self._get(key).page
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as exc:  # noqa: BLE001
+            msg = (str(exc).strip().splitlines() or [""])[0][:200]
+            raise BrowserError(f"Страница не открылась: {msg}") from None
+
+    def history(self, key: int, action: str) -> None:
+        if action not in ("back", "forward", "reload"):
+            raise BrowserError("Неизвестное действие")
+        self._run(lambda: self._history(key, action), timeout=60.0)
+
+    async def _history(self, key: int, action: str) -> None:
+        page = self._get(key).page
+        try:
+            await {"back": page.go_back, "forward": page.go_forward, "reload": page.reload}[action](wait_until="domcontentloaded", timeout=30000)
+        except Exception:  # noqa: BLE001 - нет истории или страница не успела
+            pass
 
     # --- режим проверки для агента: опасные действия блокируются кодом, а не просьбой к модели ---
     RISKY = r"отправ|подтверд|создать заяв|удал|submit|send|confirm|delete"

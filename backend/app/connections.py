@@ -66,6 +66,18 @@ KINDS: dict[str, Kind] = {
             [Field("oauth_token", "OAuth-токен", secret=True), Field("counter_id", "Номер счётчика")],
         ),
         Kind("yandex_webmaster", "Яндекс Вебмастер", "Индексация и ошибки сайта", [Field("oauth_token", "OAuth-токен", secret=True)]),
+        Kind(
+            "rdp",
+            "Терминал (RDP)",
+            "Удалённый рабочий стол, например терминал 1С. Открывается в разделе «Удалённые окна»",
+            [
+                Field("host", "Адрес сервера"),
+                Field("port", "Порт", default="3389"),
+                Field("user", "Логин"),
+                Field("password", "Пароль", secret=True),
+                Field("domain", "Домен", required=False),
+            ],
+        ),
         Kind("yandex_disk", "Яндекс Диск", "Файлы на Диске", [Field("oauth_token", "OAuth-токен", secret=True)]),
         Kind(
             "ftp",
@@ -214,6 +226,21 @@ def _webmaster(cfg):
     return _yandex_check("https://api.webmaster.yandex.net/v4/user", cfg, "Вебмастер")
 
 
+def _rdp(cfg):
+    import socket
+
+    try:
+        port = int(cfg.get("port") or 3389)
+    except ValueError:
+        return CheckResult(ERROR, "Порт должен быть числом")
+    try:
+        with socket.create_connection((cfg["host"].strip(), port), timeout=6):
+            pass
+    except OSError as exc:
+        return CheckResult(ERROR, f"Сервер не отвечает на порту {port} ({type(exc).__name__}): проверьте адрес, порт и доступ с нашего сервера")
+    return CheckResult(OK, f"Сервер отвечает на порту {port}. Логин и пароль проверяются при подключении")
+
+
 def _anthropic(cfg):
     from .integrations.checks import check_anthropic_key
 
@@ -223,4 +250,4 @@ def _anthropic(cfg):
     return check_anthropic_key(key)
 
 
-_CHECKS = {"anthropic": _anthropic, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}
+_CHECKS = {"anthropic": _anthropic, "rdp": _rdp, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}

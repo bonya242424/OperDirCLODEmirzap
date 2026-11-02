@@ -132,6 +132,10 @@ def list_connections(db: Session = Depends(get_db), me: User = Depends(current_u
 def create(body: ConnectionIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
     if body.kind not in conn_lib.KINDS:
         raise HTTPException(status_code=422, detail="Неизвестный тип подключения")
+    if body.kind == "rdp":
+        if me.role != "owner":
+            raise HTTPException(status_code=403, detail="Доступ к терминалу добавляет только владелец")
+        body = body.model_copy(update={"scope": "company"})
     if body.kind == "anthropic":
         if me.role != "owner":
             raise HTTPException(status_code=403, detail="Ключ модели добавляет только владелец")

@@ -507,3 +507,10 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .inv-checked { color: var(--good); }
 .inv-failed { color: var(--bad); }
 .run-shot { width: 100%; border: 1px solid var(--line); border-radius: var(--r-md); margin: 6px 0; }
+
+.remote { display: grid; gap: 8px; }
+.remote-bar { display: flex; gap: 6px; align-items: center; }
+.remote-bar input { flex: 1; }
+.remote-view { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: #111; line-height: 0; outline: none; }
+.remote-view:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.remote-view img { width: 100%; height: auto; cursor: crosshair; user-select: none; }
