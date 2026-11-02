@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import type { User } from "../../types";
 import AgentList from "./AgentList";
@@ -55,9 +55,6 @@ const TEMPLATE: Omit<Step, "state">[] = [
   { title: "Записать номер заявки в таблицу", detail: "Номер заявки и статус вносятся в строки счёта" },
 ];
 
-const stamp = () => new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const fresh = (): Step[] => TEMPLATE.map((s) => ({ ...s, state: "wait" }));
-const ICON: Record<StepState, string> = { wait: "○", run: "◐", confirm: "!", done: "✓", skip: "–" };
 
 /** Агент по возвратам. Таблица и саммари настоящие; шаги работы на сайте пока показаны для примера: запуск на сайте подключим после первой проверки. */
 function ReturnsPanel() {
@@ -69,16 +66,11 @@ function ReturnsPanel() {
   const [error, setError] = useState("");
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
-  const [steps, setSteps] = useState<Step[]>(fresh);
   const [log, setLog] = useState<LogLine[]>([]);
-  const [running, setRunning] = useState(false);
-  const [finished, setFinished] = useState(false);
-  const timer = useRef<number | undefined>(undefined);
-  const confirmRef = useRef<HTMLDivElement>(null);
+  const running = false;
   const supplier = suppliers?.find((x) => x.id === supSel) ?? null;
   const batches = allBatches?.filter((b) => b.supplier_id === supSel) ?? null;
   const current = batches?.find((b) => b.id === selected) ?? null;
-  const awaiting = steps.findIndex((s) => s.state === "confirm");
 
   const load = useCallback(() => {
     Promise.all([api<Supplier[]>("/returns/suppliers"), api<Summary[]>("/returns/batches")])
@@ -90,16 +82,10 @@ function ReturnsPanel() {
       .catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, []);
   useEffect(load, [load]);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
   useEffect(() => {
     setSelected((cur) => (cur !== null && batches?.some((x) => x.id === cur) ? cur : batches?.[0]?.id ?? null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supSel, allBatches]);
-  useEffect(() => {
-    if (awaiting >= 0) confirmRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [awaiting]);
-
-  const add = (text: string) => setLog((l) => [{ at: stamp(), text }, ...l]);
 
   async function upload(e: ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -133,65 +119,7 @@ function ReturnsPanel() {
     }
   }
 
-  function reset() {
-    window.clearTimeout(timer.current);
-    setSteps(fresh());
-    setLog([]);
-    setRunning(false);
-    setFinished(false);
-  }
-
-  function advance(from: number, list: Step[]) {
-    if (from >= list.length) {
-      setRunning(false);
-      setFinished(true);
-      add("Готово (пример): номер заявки записан в таблицу");
-      return;
-    }
-    const next = list.map((s, i) => (i === from ? { ...s, state: (s.needsConfirm ? "confirm" : "run") as StepState } : s));
-    setSteps(next);
-    if (next[from].needsConfirm) {
-      add(`Жду подтверждения: «${next[from].title}»`);
-      return;
-    }
-    add(next[from].title);
-    timer.current = window.setTimeout(() => {
-      const done = next.map((s, i) => (i === from ? { ...s, state: "done" as StepState } : s));
-      setSteps(done);
-      advance(from + 1, done);
-    }, 1400);
-  }
-
-  function start() {
-    if (!current) return;
-    const list = fresh();
-    setSteps(list);
-    setLog([]);
-    setFinished(false);
-    setRunning(true);
-    add(`Пример запуска для «${current.supplier}», сборка ${current.number}: счетов ${current.invoices.length}`);
-    advance(0, list);
-  }
-
-  function stop() {
-    window.clearTimeout(timer.current);
-    setRunning(false);
-    setSteps((s) => s.map((x) => (x.state === "run" || x.state === "confirm" ? { ...x, state: "wait" } : x)));
-    add("Остановлено владельцем. Ничего необратимого не отправлено");
-  }
-
-  function confirm(yes: boolean) {
-    if (awaiting < 0) return;
-    if (!yes) {
-      stop();
-      add("Отправка отклонена");
-      return;
-    }
-    add("Подтверждено владельцем");
-    const done = steps.map((s, i) => (i === awaiting ? { ...s, state: "done" as StepState } : s));
-    setSteps(done);
-    advance(awaiting + 1, done);
-  }
+  const reset = () => setLog([]);
 
   async function remove(b: Summary) {
     if (!window.confirm(`Удалить сборку ${b.number || b.id} из системы? Сама таблица не изменится.`)) return;
@@ -304,11 +232,7 @@ function ReturnsPanel() {
               </div>
               <div className="ag-actions">
                 <button className="ghost" onClick={() => remove(current)} disabled={running}>Удалить</button>
-                {running ? (
-                  <button className="danger" onClick={stop}>Остановить</button>
-                ) : (
-                  <button className="primary" onClick={start}>{finished ? "Показать снова" : "Показать запуск"}</button>
-                )}
+                <button className="primary" disabled title="Запуск на сайте ещё не подключён: сначала браузер на сервере и вход в кабинет">Запустить на сайте</button>
               </div>
             </header>
 
@@ -335,29 +259,21 @@ function ReturnsPanel() {
               Причина: {current.reasons.map((r) => `${r.reason} (${r.qty} шт.)`).join(", ")}. Склады: {current.warehouses.map((w) => `${w.warehouse} ${w.qty}`).join(", ")}.
             </p>
 
-            {(running || finished || steps.some((s) => s.state !== "wait")) && (
-              <>
-                <h4>Как пройдёт запуск (пример)</h4>
-                <ol className="ag-steps">
-                  {steps.map((s, i) => (
-                    <li key={i} className={`st-${s.state}`}>
-                      <span className="ag-ic">{ICON[s.state]}</span>
-                      <div>
-                        <strong>{s.title}</strong>
-                        <p className="muted small">{s.detail}</p>
-                        {s.state === "confirm" && (
-                          <div className="ag-confirm" role="alert" ref={confirmRef}>
-                            <p>Отправить заявку по счёту {current.invoices[0]?.invoice_no}? Отменить это нельзя.</p>
-                            <button className="primary" onClick={() => confirm(true)}>Подтвердить и отправить</button>
-                            <button onClick={() => confirm(false)}>Отклонить</button>
-                          </div>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ol>
-              </>
-            )}
+            <div className="ag-problem" role="status">
+              Запуск на сайте поставщика ещё не подключён: система ничего не открывала и не отправляла. Сейчас доступны разбор таблицы и видео-инструкция. Ниже план шагов, который агент будет выполнять после подключения.
+            </div>
+            <h4>План запуска (пока не выполняется)</h4>
+            <ol className="ag-steps">
+              {TEMPLATE.map((s, i) => (
+                <li key={i} className="st-wait">
+                  <span className="ag-ic">○</span>
+                  <div>
+                    <strong>{s.title}</strong>
+                    <p className="muted small">{s.detail}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
           </>
         )}
       </section>
