@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { api } from "../../api";
 
 type StepState = "wait" | "run" | "confirm" | "done" | "skip";
 interface Step {
@@ -12,47 +13,98 @@ interface LogLine {
   text: string;
 }
 
-const SUPPLIERS = [
-  { id: "s1", name: "Поставщик А", site: "lk.supplier-a.example", items: 14, note: "Первый запуск: под вашим контролем" },
-  { id: "s2", name: "Поставщик Б", site: "partner.supplier-b.example", items: 6, note: "Ждёт успешного первого запуска" },
-  { id: "s3", name: "Поставщик В", site: "b2b.supplier-v.example", items: 0, note: "Нет возвратов в очереди" },
-];
+interface Summary {
+  id: number;
+  supplier: string;
+  number: string;
+  source: string;
+  positions: number;
+  qty: number;
+  invoices: { invoice_no: string; positions: number; qty: number; date: string }[];
+  warehouses: { warehouse: string; positions: number; qty: number }[];
+  reasons: { reason: string; qty: number }[];
+  status: Record<string, number>;
+  problems: string[];
+}
 
 const TEMPLATE: Omit<Step, "state">[] = [
-  { title: "Войти в личный кабинет", detail: "Открываю сайт поставщика, использую сохранённый доступ сотрудника" },
-  { title: "Найти раздел возвратов", detail: "Перехожу в «Возвраты» → «Новая заявка»" },
-  { title: "Заполнить позиции из таблицы", detail: "Артикул, количество и причина берутся из таблицы возвратов" },
-  { title: "Проверить заявку", detail: "Сверяю сумму и количество с таблицей перед отправкой" },
-  { title: "Отправить заявку поставщику", detail: "Необратимое действие: заявку нельзя отозвать", needsConfirm: true },
-  { title: "Записать номер заявки в таблицу", detail: "Номер и статус вношу в таблицу возвратов" },
+  { title: "Открыть «Оформление возврата»", detail: "Вход уже выполнен вами в браузере; агент пароли не вводит" },
+  { title: "Найти счёт по номеру из таблицы", detail: "Ищу по номеру счёта; если период поиска короче даты счёта, расширяю его" },
+  { title: "Выставить количество «К возврату»", detail: "Для каждой позиции счёта количество берётся из таблицы" },
+  { title: "Заполнить окно возврата", detail: "Причина из таблицы; адрес и контактное лицо сайт подставляет сам; файлы не нужны" },
+  { title: "Отправить заявку", detail: "Необратимое действие: заявку нельзя отозвать", needsConfirm: true },
+  { title: "Записать номер заявки в таблицу", detail: "Номер заявки и статус вносятся в строки счёта" },
 ];
 
 const stamp = () => new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const fresh = (): Step[] => TEMPLATE.map((s) => ({ ...s, state: "wait" }));
 const ICON: Record<StepState, string> = { wait: "○", run: "◐", confirm: "!", done: "✓", skip: "–" };
 
-/** Макет экрана агента по возвратам. Шаги имитируются на странице: реальный запуск подключим после доступа к кабинету поставщика. */
+/** Агент по возвратам. Таблица и саммари настоящие; шаги работы на сайте пока показаны для примера: запуск на сайте подключим после первой проверки. */
 export default function AgentsApp() {
-  const [supplier, setSupplier] = useState(SUPPLIERS[0].id);
+  const [batches, setBatches] = useState<Summary[] | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [link, setLink] = useState("");
+  const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<Step[]>(fresh);
   const [log, setLog] = useState<LogLine[]>([]);
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
   const timer = useRef<number | undefined>(undefined);
-  const current = SUPPLIERS.find((s) => s.id === supplier)!;
+  const confirmRef = useRef<HTMLDivElement>(null);
+  const current = batches?.find((b) => b.id === selected) ?? null;
   const awaiting = steps.findIndex((s) => s.state === "confirm");
 
-  const confirmRef = useRef<HTMLDivElement>(null);
+  const load = useCallback(() => {
+    api<Summary[]>("/returns/batches")
+      .then((b) => {
+        setBatches(b);
+        setSelected((cur) => (cur !== null && b.some((x) => x.id === cur) ? cur : b[0]?.id ?? null));
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
+  }, []);
+  useEffect(load, [load]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   useEffect(() => {
     if (awaiting >= 0) confirmRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [awaiting]);
 
   const add = (text: string) => setLog((l) => [{ at: stamp(), text }, ...l]);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
 
-  function reset(id: string) {
+  async function upload(e: ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    const fd = new FormData();
+    fd.append("file", f);
+    await send(() => api<Summary>("/returns/import", { method: "POST", body: fd }));
+  }
+
+  async function importLink(e: FormEvent) {
+    e.preventDefault();
+    if (!link.trim()) return;
+    await send(() => api<Summary>("/returns/import-url", { method: "POST", body: { url: link.trim() } }));
+    setLink("");
+  }
+
+  async function send(fn: () => Promise<Summary>) {
+    setBusy(true);
+    setError("");
+    try {
+      const s = await fn();
+      setSelected(s.id);
+      reset();
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function reset() {
     window.clearTimeout(timer.current);
-    setSupplier(id);
     setSteps(fresh());
     setLog([]);
     setRunning(false);
@@ -63,7 +115,7 @@ export default function AgentsApp() {
     if (from >= list.length) {
       setRunning(false);
       setFinished(true);
-      add("Готово: заявка отправлена, номер записан в таблицу");
+      add("Готово (пример): номер заявки записан в таблицу");
       return;
     }
     const next = list.map((s, i) => (i === from ? { ...s, state: (s.needsConfirm ? "confirm" : "run") as StepState } : s));
@@ -81,12 +133,13 @@ export default function AgentsApp() {
   }
 
   function start() {
+    if (!current) return;
     const list = fresh();
     setSteps(list);
     setLog([]);
     setFinished(false);
     setRunning(true);
-    add(`Запуск для «${current.name}»: ${current.items} позиций`);
+    add(`Пример запуска для «${current.supplier}», сборка ${current.number}: счетов ${current.invoices.length}`);
     advance(0, list);
   }
 
@@ -110,63 +163,114 @@ export default function AgentsApp() {
     advance(awaiting + 1, done);
   }
 
+  async function remove(b: Summary) {
+    if (!window.confirm(`Удалить сборку ${b.number || b.id} из системы? Сама таблица не изменится.`)) return;
+    try {
+      await api(`/returns/batches/${b.id}`, { method: "DELETE" });
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    }
+  }
+
+  const done = current?.status.submitted ?? 0;
+
   return (
     <div className="agents">
       <aside className="ag-left">
         <h3>Возвраты поставщикам</h3>
-        <p className="muted small">Агент работает в личных кабинетах с доступами сотрудника и просит подтверждения перед необратимым.</p>
+        <p className="muted small">Загрузите таблицу со сборкой, и здесь появится саммари по поставщику.</p>
         <ul>
-          {SUPPLIERS.map((s) => (
-            <li key={s.id}>
-              <button className={s.id === supplier ? "on" : ""} onClick={() => reset(s.id)} disabled={running}>
-                <strong>{s.name}</strong>
-                <span className="muted small">{s.items ? `${s.items} позиций к возврату` : "нет позиций"}</span>
+          {batches?.map((b) => (
+            <li key={b.id}>
+              <button className={b.id === selected ? "on" : ""} onClick={() => { setSelected(b.id); reset(); }} disabled={running}>
+                <strong>{b.supplier}</strong>
+                <span className="muted small">{b.number || "без номера"}</span>
+                <span className="muted small">{b.positions} поз. · {b.qty} шт.</span>
               </button>
             </li>
           ))}
         </ul>
-        <p className="ag-demo">Макет: шаги показаны для примера, данные демонстрационные.</p>
+        {batches && batches.length === 0 && <p className="muted small">Сборок пока нет.</p>}
+        <label className="ag-file">
+          + Загрузить CSV
+          <input type="file" accept=".csv,text/csv" onChange={upload} disabled={busy} hidden />
+        </label>
+        <form onSubmit={importLink} className="ag-link">
+          <input placeholder="Ссылка на Google Таблицу" value={link} onChange={(e) => setLink(e.target.value)} />
+          <button disabled={busy || !link.trim()}>Загрузить</button>
+        </form>
+        {error && <p className="error">{error}</p>}
       </aside>
 
       <section className="ag-main">
-        <header>
-          <div>
-            <h2>{current.name}</h2>
-            <p className="muted small">{current.site} · {current.note}</p>
-          </div>
-          {running ? (
-            <button className="danger" onClick={stop}>Остановить</button>
-          ) : (
-            <button className="primary" onClick={start} disabled={!current.items}>{finished ? "Запустить снова" : "Запустить"}</button>
-          )}
-        </header>
-
-        {!running && !finished && steps.every((s) => s.state === "wait") && (
-          <p className="ag-hint">
-            {current.items
-              ? "Нажмите «Запустить». Агент пройдёт шаги ниже и остановится перед отправкой заявки, чтобы вы её подтвердили."
-              : "Для этого поставщика нет возвратов. Добавьте позиции в таблицу возвратов."}
-          </p>
-        )}
-
-        <ol className="ag-steps">
-          {steps.map((s, i) => (
-            <li key={i} className={`st-${s.state}`}>
-              <span className="ag-ic">{ICON[s.state]}</span>
+        {!current ? (
+          <p className="ag-hint">Выберите сборку слева или загрузите таблицу. Нужны колонки: Товар, Кол. по документу, Номер счета, причина возврата. Строки «Поставщик» и «Сборка» сверху.</p>
+        ) : (
+          <>
+            <header>
               <div>
-                <strong>{s.title}</strong>
-                <p className="muted small">{s.detail}</p>
-                {s.state === "confirm" && (
-                  <div className="ag-confirm" role="alert" ref={confirmRef}>
-                    <p>Отправить заявку на {current.items} позиций поставщику «{current.name}»? Отменить это нельзя.</p>
-                    <button className="primary" onClick={() => confirm(true)}>Подтвердить и отправить</button>
-                    <button onClick={() => confirm(false)}>Отклонить</button>
-                  </div>
+                <h2>{current.supplier}</h2>
+                <p className="muted small">Сборка {current.number || "без номера"} · источник: {current.source}</p>
+              </div>
+              <div className="ag-actions">
+                <button className="ghost" onClick={() => remove(current)} disabled={running}>Удалить</button>
+                {running ? (
+                  <button className="danger" onClick={stop}>Остановить</button>
+                ) : (
+                  <button className="primary" onClick={start}>{finished ? "Показать снова" : "Показать запуск"}</button>
                 )}
               </div>
-            </li>
-          ))}
-        </ol>
+            </header>
+
+            <div className="ag-sum">
+              <div><b>{current.positions}</b><span>позиций</span></div>
+              <div><b>{current.qty}</b><span>штук</span></div>
+              <div><b>{current.invoices.length}</b><span>счетов = заявок</span></div>
+              <div><b>{done}</b><span>отправлено</span></div>
+            </div>
+            {current.problems.map((p) => (
+              <p key={p} className="ag-problem">{p}</p>
+            ))}
+
+            <h4>По счетам: одна заявка на счёт</h4>
+            <table className="ag-table">
+              <thead><tr><th>Счёт</th><th>Дата</th><th>Позиций</th><th>Штук</th></tr></thead>
+              <tbody>
+                {current.invoices.map((i) => (
+                  <tr key={i.invoice_no}><td>{i.invoice_no}</td><td>{i.date}</td><td>{i.positions}</td><td>{i.qty}</td></tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted small">
+              Причина: {current.reasons.map((r) => `${r.reason} (${r.qty} шт.)`).join(", ")}. Склады: {current.warehouses.map((w) => `${w.warehouse} ${w.qty}`).join(", ")}.
+            </p>
+
+            {(running || finished || steps.some((s) => s.state !== "wait")) && (
+              <>
+                <h4>Как пройдёт запуск (пример)</h4>
+                <ol className="ag-steps">
+                  {steps.map((s, i) => (
+                    <li key={i} className={`st-${s.state}`}>
+                      <span className="ag-ic">{ICON[s.state]}</span>
+                      <div>
+                        <strong>{s.title}</strong>
+                        <p className="muted small">{s.detail}</p>
+                        {s.state === "confirm" && (
+                          <div className="ag-confirm" role="alert" ref={confirmRef}>
+                            <p>Отправить заявку по счёту {current.invoices[0]?.invoice_no}? Отменить это нельзя.</p>
+                            <button className="primary" onClick={() => confirm(true)}>Подтвердить и отправить</button>
+                            <button onClick={() => confirm(false)}>Отклонить</button>
+                          </div>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </>
+        )}
       </section>
 
       <aside className="ag-log">

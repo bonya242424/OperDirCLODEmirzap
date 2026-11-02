@@ -404,3 +404,17 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 /* Док не переносится: иконки сжимаются под ширину рабочего стола */
 .dock { flex-wrap: nowrap; gap: 6px; padding: 8px 10px; max-width: calc(100% - 24px); }
 .dock .tile { width: clamp(36px, 3.6vw, 46px); height: clamp(36px, 3.6vw, 46px); font-size: clamp(18px, 1.9vw, 24px); }
+
+.ag-sum { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; }
+.ag-sum > div { padding: 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2); display: grid; }
+.ag-sum b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.ag-sum span { font-size: 12px; color: var(--muted); }
+.ag-problem { margin: 6px 0; padding: 8px 10px; border-radius: var(--r-md); background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); font-size: 13px; }
+.ag-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 8px; }
+.ag-table th, .ag-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.ag-table th { color: var(--muted); font-weight: 500; }
+.ag-actions { display: flex; gap: 8px; }
+.ag-file { display: block; margin: 10px 0 6px; padding: 8px 10px; text-align: center; border: 1px dashed var(--line); border-radius: var(--r-md); cursor: pointer; font-size: 13px; }
+.ag-file:hover { border-color: var(--accent); }
+.ag-link { display: grid; gap: 6px; }
+.ag-main h4 { margin: 14px 0 6px; font-size: 13px; }

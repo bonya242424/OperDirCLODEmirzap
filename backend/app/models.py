@@ -187,3 +187,35 @@ class Task(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ReturnBatch(Base):
+    """Сборка возвратов одному поставщику, загруженная из таблицы."""
+
+    __tablename__ = "return_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier: Mapped[str] = mapped_column(String(200), index=True)
+    number: Mapped[str] = mapped_column(String(200), default="")  # «№000007007 от 02.11.2026»
+    source: Mapped[str] = mapped_column(String(500), default="")  # имя файла или id таблицы
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReturnLine(Base):
+    __tablename__ = "return_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("return_batches.id", ondelete="CASCADE"), index=True)
+    article: Mapped[str] = mapped_column(String(100))
+    name: Mapped[str] = mapped_column(String(500), default="")
+    brand: Mapped[str] = mapped_column(String(200), default="")
+    qty: Mapped[int] = mapped_column(Integer)
+    warehouse: Mapped[str] = mapped_column(String(200), default="")
+    invoice_date: Mapped[str] = mapped_column(String(32), default="")
+    invoice_no: Mapped[str] = mapped_column(String(100), default="", index=True)
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    # pending | submitted | skipped | failed
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    request_no: Mapped[str] = mapped_column(String(100), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
