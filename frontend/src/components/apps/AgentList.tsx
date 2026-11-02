@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, formatAgo, formatDate } from "../../api";
 import type { User } from "../../types";
+import { LEVELS } from "./AgentStructure";
 
 interface Run {
   id: number;
@@ -22,6 +23,8 @@ interface Agent {
   interval_minutes: number | null;
   daily_time: string | null;
   enabled: boolean;
+  level: "manager" | "analyst" | "ops";
+  parent_id: number | null;
   next_run_at: string | null;
   last_run: Run | null;
   editable: boolean;
@@ -41,6 +44,8 @@ interface Form {
   interval_minutes: string;
   daily_time: string;
   enabled: boolean;
+  level: Agent["level"];
+  parent_id: string;
 }
 
 const STATUS: Record<Run["status"], string> = { queued: "в очереди", running: "работает", done: "готово", failed: "ошибка", stopped: "остановлен" };
@@ -75,7 +80,7 @@ export default function AgentList({ me }: { me: User }) {
   }, [open, agents]);
 
   const kind = (key: string) => kinds.find((k) => k.key === key);
-  const blank = (): Form => ({ id: null, name: "", kind: kinds[0]?.key ?? "onec_files", instruction: "", schedule_kind: "manual", interval_minutes: "60", daily_time: "09:00", enabled: true });
+  const blank = (): Form => ({ id: null, name: "", kind: kinds[0]?.key ?? "onec_files", instruction: "", schedule_kind: "manual", interval_minutes: "60", daily_time: "09:00", enabled: true, level: "ops", parent_id: "" });
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -88,6 +93,8 @@ export default function AgentList({ me }: { me: User }) {
       interval_minutes: form.schedule_kind === "interval" ? Number(form.interval_minutes) : null,
       daily_time: form.schedule_kind === "daily" ? form.daily_time : null,
       enabled: form.enabled,
+      level: form.level,
+      parent_id: form.level === "manager" || !form.parent_id ? null : Number(form.parent_id),
     };
     try {
       if (form.id === null) await api("/agents", { method: "POST", body });
@@ -111,7 +118,7 @@ export default function AgentList({ me }: { me: User }) {
 
   async function toggle(a: Agent) {
     try {
-      await api(`/agents/${a.id}`, { method: "PUT", body: { name: a.name, kind: a.kind, instruction: a.instruction, schedule_kind: a.schedule_kind, interval_minutes: a.interval_minutes, daily_time: a.daily_time, enabled: !a.enabled } });
+      await api(`/agents/${a.id}`, { method: "PUT", body: { name: a.name, kind: a.kind, instruction: a.instruction, schedule_kind: a.schedule_kind, interval_minutes: a.interval_minutes, daily_time: a.daily_time, enabled: !a.enabled, level: a.level, parent_id: a.parent_id } });
       load();
     } catch (err) {
       fail(err);
@@ -151,7 +158,7 @@ export default function AgentList({ me }: { me: User }) {
               <div>
                 <strong>{a.name}</strong>
                 <p className="muted small">
-                  {a.kind_title} · {scheduleText(a)}{!a.enabled ? " · выключен" : ""}
+                  {LEVELS[a.level].title} · {a.kind_title} · {scheduleText(a)}{!a.enabled ? " · выключен" : ""}
                   {me.role === "owner" ? ` · ${a.owner}` : ""}
                 </p>
               </div>
@@ -171,7 +178,7 @@ export default function AgentList({ me }: { me: User }) {
                   <button className="primary" onClick={() => run(a)} disabled={!a.editable || a.last_run?.status === "running" || a.last_run?.status === "queued"}>Запустить сейчас</button>
                   {a.editable && (
                     <>
-                      <button onClick={() => setForm({ id: a.id, name: a.name, kind: a.kind, instruction: a.instruction, schedule_kind: a.schedule_kind, interval_minutes: String(a.interval_minutes ?? 60), daily_time: a.daily_time ?? "09:00", enabled: a.enabled })}>Изменить</button>
+                      <button onClick={() => setForm({ id: a.id, name: a.name, kind: a.kind, instruction: a.instruction, schedule_kind: a.schedule_kind, interval_minutes: String(a.interval_minutes ?? 60), daily_time: a.daily_time ?? "09:00", enabled: a.enabled, level: a.level, parent_id: a.parent_id ? String(a.parent_id) : "" })}>Изменить</button>
                       <button onClick={() => toggle(a)}>{a.enabled ? "Выключить" : "Включить"}</button>
                       <button className="ghost danger" onClick={() => remove(a)}>Удалить</button>
                     </>
@@ -212,6 +219,26 @@ export default function AgentList({ me }: { me: User }) {
           <form className="modal" onSubmit={save} onPointerDown={(e) => e.stopPropagation()}>
             <h3>{form.id === null ? "Новый агент" : "Агент"}</h3>
             <input autoFocus required placeholder="Название, например «Выгрузки 1С по утрам»" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <label>
+              Уровень в структуре
+              <select value={form.level} onChange={(e) => setForm({ ...form, level: e.target.value as Agent["level"], parent_id: "" })}>
+                {(Object.keys(LEVELS) as Agent["level"][]).map((l) => (
+                  <option key={l} value={l}>{LEVELS[l].title}</option>
+                ))}
+              </select>
+            </label>
+            <p className="muted small">{LEVELS[form.level].role}</p>
+            {form.level !== "manager" && (
+              <label>
+                Подчиняется
+                <select value={form.parent_id} onChange={(e) => setForm({ ...form, parent_id: e.target.value })}>
+                  <option value="">Никому</option>
+                  {agents?.filter((x) => x.level === (form.level === "ops" ? "analyst" : "manager") && x.id !== form.id).map((x) => (
+                    <option key={x.id} value={x.id}>{x.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label>
               Что делает
               <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} disabled={form.id !== null}>

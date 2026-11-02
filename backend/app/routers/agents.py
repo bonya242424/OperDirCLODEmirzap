@@ -27,6 +27,8 @@ class AgentIn(BaseModel):
     interval_minutes: int | None = None
     daily_time: str | None = None
     enabled: bool = True
+    level: Literal["manager", "analyst", "ops"] = "ops"
+    parent_id: int | None = None
 
     @field_validator("name")
     @classmethod
@@ -87,6 +89,8 @@ class AgentOut(BaseModel):
     interval_minutes: int | None
     daily_time: str | None
     enabled: bool
+    level: str
+    parent_id: int | None
     next_run_at: datetime | None
     last_run_at: datetime | None
     last_run: RunOut | None
@@ -108,7 +112,7 @@ def _out(db: Session, a: Agent, me: User) -> AgentOut:
     return AgentOut(
         id=a.id, owner_id=a.owner_id, owner=(owner.full_name or owner.email) if owner else "", name=a.name, kind=a.kind,
         kind_title=EXECUTORS[a.kind]["title"] if a.kind in EXECUTORS else a.kind, instruction=a.instruction,
-        schedule_kind=a.schedule_kind, interval_minutes=a.interval_minutes, daily_time=a.daily_time, enabled=a.enabled,
+        schedule_kind=a.schedule_kind, interval_minutes=a.interval_minutes, daily_time=a.daily_time, enabled=a.enabled, level=a.level, parent_id=a.parent_id,
         next_run_at=a.next_run_at, last_run_at=a.last_run_at, last_run=_run_out(last) if last else None,
         editable=me.role == "owner" or a.owner_id == me.id,
     )
@@ -120,6 +124,23 @@ def _get(db: Session, agent_id: int, me: User) -> Agent:
     if a is None or (a.owner_id != me.id and me.role != "owner"):
         raise HTTPException(status_code=404, detail="Агент не найден")
     return a
+
+
+PARENT_LEVEL = {"ops": "analyst", "analyst": "manager"}
+
+
+def _check_parent(db: Session, body: AgentIn, me: User, self_id: int | None = None) -> None:
+    if body.level == "manager":
+        body.parent_id = None
+        return
+    if body.parent_id is None:
+        return
+    parent = db.get(Agent, body.parent_id)
+    if parent is None or (parent.owner_id != me.id and me.role != "owner"):
+        raise HTTPException(status_code=422, detail="Руководитель не найден")
+    if parent.id == self_id or parent.level != PARENT_LEVEL[body.level]:
+        names = {"analyst": "аналитику", "manager": "руководителю"}
+        raise HTTPException(status_code=422, detail=f"Агент этого уровня подчиняется только {names[PARENT_LEVEL[body.level]]}")
 
 
 @router.get("/kinds")
@@ -137,6 +158,7 @@ def list_agents(db: Session = Depends(get_db), me: User = Depends(current_user))
 
 @router.post("", response_model=AgentOut, status_code=201)
 def create(body: AgentIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _check_parent(db, body, me)
     a = Agent(owner_id=me.id, **body.model_dump())
     a.next_run_at = compute_next(a)
     db.add(a)
@@ -147,6 +169,7 @@ def create(body: AgentIn, db: Session = Depends(get_db), me: User = Depends(curr
 @router.put("/{agent_id}", response_model=AgentOut)
 def update(agent_id: int, body: AgentIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
     a = _get(db, agent_id, me)
+    _check_parent(db, body, me, a.id)
     for k, v in body.model_dump().items():
         setattr(a, k, v)
     a.next_run_at = compute_next(a)
@@ -159,6 +182,8 @@ def delete(agent_id: int, db: Session = Depends(get_db), me: User = Depends(curr
     a = _get(db, agent_id, me)
     for r in db.scalars(select(AgentRun).where(AgentRun.agent_id == a.id)):
         db.delete(r)
+    for child in db.scalars(select(Agent).where(Agent.parent_id == a.id)):
+        child.parent_id = None  # подчинённые остаются без руководителя
     db.delete(a)
     db.commit()
 

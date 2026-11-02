@@ -2,6 +2,7 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from
 import { api } from "../../api";
 import type { User } from "../../types";
 import AgentList from "./AgentList";
+import AgentStructure from "./AgentStructure";
 
 type StepState = "wait" | "run" | "confirm" | "done" | "skip";
 interface Step {
@@ -292,14 +293,15 @@ function ReturnsPanel() {
 }
 
 export default function AgentsApp({ me }: { me: User }) {
-  const [tab, setTab] = useState<"mine" | "returns">("mine");
+  const [tab, setTab] = useState<"mine" | "structure" | "returns">("mine");
   return (
     <div className="ag-shell">
       <div className="chips tabs">
         <button className={`chip${tab === "mine" ? " on" : ""}`} onClick={() => setTab("mine")}>{me.role === "owner" ? "Все агенты" : "Мои агенты"}</button>
+        <button className={`chip${tab === "structure" ? " on" : ""}`} onClick={() => setTab("structure")}>Структура</button>
         <button className={`chip${tab === "returns" ? " on" : ""}`} onClick={() => setTab("returns")}>Возвраты поставщикам</button>
       </div>
-      <div className="ag-body">{tab === "mine" ? <AgentList me={me} /> : <ReturnsPanel />}</div>
+      <div className="ag-body">{tab === "mine" ? <AgentList me={me} /> : tab === "structure" ? <AgentStructure /> : <ReturnsPanel />}</div>
     </div>
   );
 }

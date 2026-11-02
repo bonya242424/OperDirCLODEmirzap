@@ -435,3 +435,16 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .chipd.st-done { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
 .chipd.st-failed { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
 .chipd.st-running, .chipd.st-queued { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+
+.ag-struct { height: 100%; overflow-y: auto; padding: 14px 16px; }
+.st-levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+.st-level { display: grid; gap: 2px; padding: 10px 12px; border-radius: var(--r-md); border: 1px solid var(--line); border-left-width: 4px; background: var(--panel-2); }
+.lv-manager { border-left-color: #7a52e0; }
+.lv-analyst { border-left-color: var(--accent); }
+.lv-ops { border-left-color: var(--good); }
+.st-tree, .st-tree ul { list-style: none; margin: 0; padding: 0; }
+.st-tree ul { margin-left: 22px; padding-left: 14px; border-left: 1px dashed var(--line); }
+.st-tree li { margin: 8px 0; }
+.st-node { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border-radius: var(--r-md); border: 1px solid var(--line); border-left-width: 4px; background: var(--panel); }
+.st-node.off { opacity: .6; }
+.st-node strong { flex: 1; min-width: 120px; }

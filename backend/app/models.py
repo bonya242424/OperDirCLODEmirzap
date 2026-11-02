@@ -235,6 +235,9 @@ class Agent(Base):
     interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     daily_time: Mapped[str | None] = mapped_column(String(5), nullable=True)  # «09:30» по Москве
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Структура: manager (ставит задачи) → analyst (анализирует) → ops (собирает данные по расписанию)
+    level: Mapped[str] = mapped_column(String(16), default="ops")
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # кому подчиняется
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -114,3 +114,30 @@ def test_access_own_agents_only(client, owner):
     assert client.delete(f"/api/agents/{theirs}", headers=emp).status_code == 404
     assert len(client.get("/api/agents", headers=owner).json()) == 2  # владелец видит всех
     assert client.delete(f"/api/agents/{mine}", headers=owner).status_code == 204
+
+
+def test_structure_levels_and_reports(client, owner, monkeypatch):
+    mgr = _create(client, owner, name="Руководитель", kind="llm_task", instruction="Поставь задачи", level="manager").json()
+    ana = _create(client, owner, name="Аналитик заказов", kind="llm_task", instruction="Проанализируй", level="analyst", parent_id=mgr["id"]).json()
+    ops = _create(client, owner, name="Опер-штаб 1С", level="ops", parent_id=ana["id"]).json()
+    assert ops["parent_id"] == ana["id"] and ana["level"] == "analyst"
+    # неверная подчинённость: опер-штаб не подчиняется руководителю напрямую, руководитель никому
+    assert _create(client, owner, level="ops", parent_id=mgr["id"]).status_code == 422
+    assert _create(client, owner, level="manager", parent_id=ana["id"]).json()["parent_id"] is None
+    with SessionLocal() as db:  # у опер-штаба есть готовый отчёт
+        db.add(AgentRun(agent_id=ops["id"], status="done", summary="Заказов за день: 120"))
+        db.commit()
+    seen = {}
+
+    class Fake:
+        def complete(self, system, messages):
+            seen["system"] = system
+            return "Вывод"
+
+    monkeypatch.setattr("app.agents.executors.get_provider", lambda: Fake())
+    client.post(f"/api/agents/{ana['id']}/run", headers=owner)
+    assert "Заказов за день: 120" in seen["system"] and "subordinate_reports" in seen["system"]
+    # удаление аналитика отвязывает подчинённых
+    client.delete(f"/api/agents/{ana['id']}", headers=owner)
+    ops_now = next(a for a in client.get("/api/agents", headers=owner).json() if a["id"] == ops["id"])
+    assert ops_now["parent_id"] is None
