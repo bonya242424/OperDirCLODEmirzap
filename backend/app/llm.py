@@ -4,13 +4,32 @@
 достаточно написать класс с методом complete() и вернуть его из get_provider().
 """
 
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 from .config import settings
 
 
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+@dataclass
+class Step:
+    """Один ход модели: текст и/или вызовы инструментов. assistant_content возвращается в диалог как есть."""
+
+    text: str = ""
+    calls: list[ToolCall] = field(default_factory=list)
+    assistant_content: list[dict[str, Any]] = field(default_factory=list)
+
+
 class LLMProvider(Protocol):
     def complete(self, system: str, messages: list[dict[str, str]]) -> str: ...
+
+    def step(self, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Step: ...
 
 
 class LLMError(Exception):
@@ -39,6 +58,30 @@ class AnthropicProvider:
         if not text:
             raise LLMError("Модель вернула пустой ответ")
         return text
+
+
+    def step(self, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Step:
+        from anthropic import APIConnectionError, APIStatusError
+
+        try:
+            kwargs: dict[str, Any] = {"model": self._model, "max_tokens": 3000, "system": system, "messages": messages}
+            if tools:
+                kwargs["tools"] = tools
+            response = self._client.messages.create(**kwargs)
+        except APIStatusError as exc:
+            raise LLMError(f"API модели ответил кодом {exc.status_code}") from exc
+        except APIConnectionError as exc:
+            raise LLMError("Нет соединения с API модели") from exc
+        out = Step()
+        for block in response.content:
+            if block.type == "text":
+                out.text += block.text
+                out.assistant_content.append({"type": "text", "text": block.text})
+            elif block.type == "tool_use":
+                out.calls.append(ToolCall(block.id, block.name, dict(block.input)))
+                out.assistant_content.append({"type": "tool_use", "id": block.id, "name": block.name, "input": dict(block.input)})
+        out.text = out.text.strip()
+        return out
 
 
 def get_provider() -> LLMProvider | None:

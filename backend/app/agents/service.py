@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models import Agent, AgentRun, utcnow
-from .executors import EXECUTORS, Ctx, ExecutorError
+from .runtime import AgentError, run_agent
+from .tools import Ctx
 
 log = logging.getLogger(__name__)
 TZ = ZoneInfo("Europe/Moscow")
@@ -56,13 +57,10 @@ def execute_run(run_id: int) -> None:
         db.commit()
         add("Запуск" + (" по расписанию" if run.trigger == "schedule" else " вручную"))
         try:
-            spec = EXECUTORS.get(agent.kind)
-            if spec is None:
-                raise ExecutorError("Неизвестный тип агента")
-            run.summary = spec["run"](Ctx(db=db, agent=agent, log=add))[:MAX_SUMMARY]
+            run.summary = run_agent(Ctx(db=db, agent=agent, log=add, run_id=run.id))[:MAX_SUMMARY]
             run.status = "done"
             add("Готово")
-        except ExecutorError as exc:
+        except AgentError as exc:
             run.status, run.summary = "failed", str(exc)
             add(f"Остановлено: {exc}")
         except Exception:  # noqa: BLE001

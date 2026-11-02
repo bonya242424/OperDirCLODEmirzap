@@ -448,3 +448,13 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .st-node { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border-radius: var(--r-md); border: 1px solid var(--line); border-left-width: 4px; background: var(--panel); }
 .st-node.off { opacity: .6; }
 .st-node strong { flex: 1; min-width: 120px; }
+
+.ag-actionsbox { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--warn); border-radius: var(--r-lg); background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.ag-actionsbox h4 { margin: 0 0 8px; font-size: 13px; }
+.ag-act { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+.ag-act p { margin: 2px 0 0; }
+.ag-tools { border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 10px; display: grid; gap: 4px; margin: 0; }
+.ag-tools legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.ag-tool { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.ag-tool input { margin-top: 3px; }
+.tk-write { color: var(--warn); }

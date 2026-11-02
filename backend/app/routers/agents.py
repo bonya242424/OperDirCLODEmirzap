@@ -8,11 +8,12 @@ from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..agents.executors import EXECUTORS
+from ..agents.presets import PRESETS
 from ..agents.service import compute_next, execute_run, start_run
+from ..agents.tools import TOOLS, Ctx, ToolError, parse_tools
 from ..db import get_db
 from ..deps import current_user
-from ..models import Agent, AgentRun, User, utcnow
+from ..models import Agent, AgentAction, AgentRun, User, utcnow
 from ..schemas import _utc
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -21,8 +22,9 @@ MIN_INTERVAL = 5
 
 class AgentIn(BaseModel):
     name: str
-    kind: str
-    instruction: str = ""
+    kind: str = "custom"
+    instruction: str
+    tools: list[str] = []
     schedule_kind: Literal["manual", "interval", "daily"] = "manual"
     interval_minutes: int | None = None
     daily_time: str | None = None
@@ -47,11 +49,12 @@ class AgentIn(BaseModel):
 
     @model_validator(mode="after")
     def _check(self):
-        spec = EXECUTORS.get(self.kind)
-        if spec is None:
-            raise ValueError("Неизвестный тип агента")
-        if spec["needs_instruction"] and not self.instruction:
+        if not self.instruction:
             raise ValueError("Напишите поручение для агента")
+        unknown = [t for t in self.tools if t not in TOOLS]
+        if unknown:
+            raise ValueError(f"Неизвестный инструмент: {unknown[0]}")
+        self.tools = list(dict.fromkeys(self.tools))
         if self.schedule_kind == "interval":
             if not self.interval_minutes or self.interval_minutes < MIN_INTERVAL or self.interval_minutes > 60 * 24 * 31:
                 raise ValueError(f"Интервал: от {MIN_INTERVAL} минут до 31 дня")
@@ -85,6 +88,8 @@ class AgentOut(BaseModel):
     kind: str
     kind_title: str
     instruction: str
+    tools: list[str]
+    pending_actions: int
     schedule_kind: str
     interval_minutes: int | None
     daily_time: str | None
@@ -111,7 +116,9 @@ def _out(db: Session, a: Agent, me: User) -> AgentOut:
     last = db.scalar(select(AgentRun).where(AgentRun.agent_id == a.id).order_by(AgentRun.id.desc()).limit(1))
     return AgentOut(
         id=a.id, owner_id=a.owner_id, owner=(owner.full_name or owner.email) if owner else "", name=a.name, kind=a.kind,
-        kind_title=EXECUTORS[a.kind]["title"] if a.kind in EXECUTORS else a.kind, instruction=a.instruction,
+        kind_title=next((p["title"] for p in PRESETS if p["key"] == a.kind), "Свой агент"), instruction=a.instruction,
+        tools=parse_tools(a.tools),
+        pending_actions=len(db.scalars(select(AgentAction.id).where(AgentAction.agent_id == a.id, AgentAction.status == "pending")).all()),
         schedule_kind=a.schedule_kind, interval_minutes=a.interval_minutes, daily_time=a.daily_time, enabled=a.enabled, level=a.level, parent_id=a.parent_id,
         next_run_at=a.next_run_at, last_run_at=a.last_run_at, last_run=_run_out(last) if last else None,
         editable=me.role == "owner" or a.owner_id == me.id,
@@ -143,9 +150,14 @@ def _check_parent(db: Session, body: AgentIn, me: User, self_id: int | None = No
         raise HTTPException(status_code=422, detail=f"Агент этого уровня подчиняется только {names[PARENT_LEVEL[body.level]]}")
 
 
-@router.get("/kinds")
-def kinds(_: User = Depends(current_user)):
-    return [{"key": k, "title": v["title"], "description": v["description"], "needs_instruction": v["needs_instruction"]} for k, v in EXECUTORS.items()]
+@router.get("/presets")
+def presets(_: User = Depends(current_user)):
+    return PRESETS
+
+
+@router.get("/tools")
+def tools(_: User = Depends(current_user)):
+    return [{"key": t.name, "title": t.title, "description": t.description, "kind": t.kind} for t in TOOLS.values()]
 
 
 @router.get("", response_model=list[AgentOut])
@@ -159,7 +171,7 @@ def list_agents(db: Session = Depends(get_db), me: User = Depends(current_user))
 @router.post("", response_model=AgentOut, status_code=201)
 def create(body: AgentIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
     _check_parent(db, body, me)
-    a = Agent(owner_id=me.id, **body.model_dump())
+    a = Agent(owner_id=me.id, **{**body.model_dump(), "tools": json.dumps(body.tools)})
     a.next_run_at = compute_next(a)
     db.add(a)
     db.commit()
@@ -170,7 +182,7 @@ def create(body: AgentIn, db: Session = Depends(get_db), me: User = Depends(curr
 def update(agent_id: int, body: AgentIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
     a = _get(db, agent_id, me)
     _check_parent(db, body, me, a.id)
-    for k, v in body.model_dump().items():
+    for k, v in {**body.model_dump(), "tools": json.dumps(body.tools)}.items():
         setattr(a, k, v)
     a.next_run_at = compute_next(a)
     db.commit()
@@ -180,6 +192,8 @@ def update(agent_id: int, body: AgentIn, db: Session = Depends(get_db), me: User
 @router.delete("/{agent_id}", status_code=204)
 def delete(agent_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
     a = _get(db, agent_id, me)
+    for x in db.scalars(select(AgentAction).where(AgentAction.agent_id == a.id)):
+        db.delete(x)
     for r in db.scalars(select(AgentRun).where(AgentRun.agent_id == a.id)):
         db.delete(r)
     for child in db.scalars(select(Agent).where(Agent.parent_id == a.id)):
@@ -218,3 +232,69 @@ def runs(agent_id: int, limit: int = 20, db: Session = Depends(get_db), me: User
     _get(db, agent_id, me)
     rows = db.scalars(select(AgentRun).where(AgentRun.agent_id == agent_id).order_by(AgentRun.id.desc()).limit(max(1, min(limit, 100))))
     return [_run_out(r) for r in rows]
+
+
+# ---- Предложения агентов: выполняет человек ----
+
+
+class ActionOut(BaseModel):
+    id: int
+    agent_id: int
+    agent: str
+    title: str
+    tool: str
+    args: dict
+    status: str
+    result: str
+    created_at: datetime
+
+    _fix = field_validator("created_at")(_utc)
+
+
+def _action_out(db: Session, x: AgentAction) -> ActionOut:
+    agent = db.get(Agent, x.agent_id)
+    return ActionOut(id=x.id, agent_id=x.agent_id, agent=agent.name if agent else "", title=x.title, tool=x.tool,
+                     args=json.loads(x.args or "{}"), status=x.status, result=x.result, created_at=x.created_at)
+
+
+def _visible_action(db: Session, action_id: int, me: User) -> AgentAction:
+    x = db.get(AgentAction, action_id)
+    if x is None:
+        raise HTTPException(status_code=404, detail="Предложение не найдено")
+    _get(db, x.agent_id, me)
+    return x
+
+
+@router.get("/actions", response_model=list[ActionOut])
+def actions(status: str = "pending", db: Session = Depends(get_db), me: User = Depends(current_user)):
+    q = select(AgentAction).where(AgentAction.status == status).order_by(AgentAction.id.desc()).limit(100)
+    if me.role != "owner":
+        q = q.join(Agent, Agent.id == AgentAction.agent_id).where(Agent.owner_id == me.id)
+    return [_action_out(db, x) for x in db.scalars(q)]
+
+
+@router.post("/actions/{action_id}/approve", response_model=ActionOut)
+def approve(action_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    x = _visible_action(db, action_id, me)
+    if x.status != "pending":
+        raise HTTPException(status_code=409, detail="Предложение уже обработано")
+    tool = TOOLS.get(x.tool)
+    try:
+        if tool is None or tool.execute is None:
+            raise ToolError("Это действие больше не поддерживается")
+        x.result, x.status = tool.execute(db, me, json.loads(x.args or "{}")), "done"
+    except ToolError as exc:
+        x.result, x.status = str(exc), "failed"
+    x.decided_by, x.decided_at = me.id, utcnow()
+    db.commit()
+    return _action_out(db, x)
+
+
+@router.post("/actions/{action_id}/reject", response_model=ActionOut)
+def reject(action_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    x = _visible_action(db, action_id, me)
+    if x.status != "pending":
+        raise HTTPException(status_code=409, detail="Предложение уже обработано")
+    x.status, x.decided_by, x.decided_at = "rejected", me.id, utcnow()
+    db.commit()
+    return _action_out(db, x)

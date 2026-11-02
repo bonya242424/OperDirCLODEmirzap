@@ -231,6 +231,7 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(200))
     kind: Mapped[str] = mapped_column(String(32))  # ключ из app/agents/executors.py
     instruction: Mapped[str] = mapped_column(Text, default="")
+    tools: Mapped[str] = mapped_column(Text, default="[]")  # JSON: какие инструменты разрешены агенту
     schedule_kind: Mapped[str] = mapped_column(String(16), default="manual")  # manual | interval | daily
     interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     daily_time: Mapped[str | None] = mapped_column(String(5), nullable=True)  # «09:30» по Москве
@@ -255,3 +256,21 @@ class AgentRun(Base):
     log: Mapped[str] = mapped_column(Text, default="[]")  # JSON: [{"at": iso, "text": "…"}]
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentAction(Base):
+    """Действие, которое агент предложил, но выполнит только человек после подтверждения."""
+
+    __tablename__ = "agent_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    tool: Mapped[str] = mapped_column(String(64))
+    args: Mapped[str] = mapped_column(Text, default="{}")
+    title: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending | done | rejected | failed
+    result: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    decided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

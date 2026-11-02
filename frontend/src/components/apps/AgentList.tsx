@@ -19,6 +19,8 @@ interface Agent {
   kind: string;
   kind_title: string;
   instruction: string;
+  tools: string[];
+  pending_actions: number;
   schedule_kind: "manual" | "interval" | "daily";
   interval_minutes: number | null;
   daily_time: string | null;
@@ -29,17 +31,32 @@ interface Agent {
   last_run: Run | null;
   editable: boolean;
 }
-interface Kind {
+interface Preset {
   key: string;
   title: string;
   description: string;
-  needs_instruction: boolean;
+  level: "manager" | "analyst" | "ops";
+  instruction: string;
+  tools: string[];
+}
+interface ToolInfo {
+  key: string;
+  title: string;
+  description: string;
+  kind: "read" | "write" | "confirm";
+}
+interface Action {
+  id: number;
+  agent: string;
+  title: string;
+  args: Record<string, unknown>;
 }
 interface Form {
   id: number | null;
   name: string;
   kind: string;
   instruction: string;
+  tools: string[];
   schedule_kind: Agent["schedule_kind"];
   interval_minutes: string;
   daily_time: string;
@@ -59,7 +76,9 @@ function scheduleText(a: Agent): string {
 
 export default function AgentList({ me }: { me: User }) {
   const [agents, setAgents] = useState<Agent[] | null>(null);
-  const [kinds, setKinds] = useState<Kind[]>([]);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [tools, setTools] = useState<ToolInfo[]>([]);
+  const [actions, setActions] = useState<Action[]>([]);
   const [form, setForm] = useState<Form | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -68,10 +87,12 @@ export default function AgentList({ me }: { me: User }) {
 
   const load = useCallback(() => {
     api<Agent[]>("/agents").then((a) => { setAgents(a); setError(""); }).catch(fail);
+    api<Action[]>("/agents/actions").then(setActions).catch(() => {});
   }, []);
   useEffect(() => {
     load();
-    api<Kind[]>("/agents/kinds").then(setKinds).catch(() => {});
+    api<Preset[]>("/agents/presets").then(setPresets).catch(() => {});
+    api<ToolInfo[]>("/agents/tools").then(setTools).catch(() => {});
     const t = setInterval(load, 10_000);
     return () => clearInterval(t);
   }, [load]);
@@ -79,8 +100,7 @@ export default function AgentList({ me }: { me: User }) {
     if (open !== null) api<Run[]>(`/agents/${open}/runs`).then(setRuns).catch(() => {});
   }, [open, agents]);
 
-  const kind = (key: string) => kinds.find((k) => k.key === key);
-  const blank = (): Form => ({ id: null, name: "", kind: kinds[0]?.key ?? "onec_files", instruction: "", schedule_kind: "manual", interval_minutes: "60", daily_time: "09:00", enabled: true, level: "ops", parent_id: "" });
+  const blank = (): Form => ({ id: null, name: "", kind: "custom", instruction: "", tools: [], schedule_kind: "manual", interval_minutes: "60", daily_time: "09:00", enabled: true, level: "ops", parent_id: "" });
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -89,6 +109,7 @@ export default function AgentList({ me }: { me: User }) {
       name: form.name,
       kind: form.kind,
       instruction: form.instruction,
+      tools: form.tools,
       schedule_kind: form.schedule_kind,
       interval_minutes: form.schedule_kind === "interval" ? Number(form.interval_minutes) : null,
       daily_time: form.schedule_kind === "daily" ? form.daily_time : null,
@@ -118,7 +139,7 @@ export default function AgentList({ me }: { me: User }) {
 
   async function toggle(a: Agent) {
     try {
-      await api(`/agents/${a.id}`, { method: "PUT", body: { name: a.name, kind: a.kind, instruction: a.instruction, schedule_kind: a.schedule_kind, interval_minutes: a.interval_minutes, daily_time: a.daily_time, enabled: !a.enabled, level: a.level, parent_id: a.parent_id } });
+      await api(`/agents/${a.id}`, { method: "PUT", body: { name: a.name, kind: a.kind, instruction: a.instruction, tools: a.tools, schedule_kind: a.schedule_kind, interval_minutes: a.interval_minutes, daily_time: a.daily_time, enabled: !a.enabled, level: a.level, parent_id: a.parent_id } });
       load();
     } catch (err) {
       fail(err);
@@ -136,7 +157,22 @@ export default function AgentList({ me }: { me: User }) {
     }
   }
 
-  const k = form ? kind(form.kind) : undefined;
+  function applyPreset(key: string) {
+    const p = presets.find((x) => x.key === key);
+    if (!p || !form) return;
+    setForm({ ...form, kind: p.key, level: p.level, parent_id: "", instruction: p.instruction, tools: p.tools, name: form.name || (p.key === "custom" ? "" : p.title) });
+  }
+
+  async function decide(x: Action, yes: boolean) {
+    try {
+      await api(`/agents/actions/${x.id}/${yes ? "approve" : "reject"}`, { method: "POST" });
+      load();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  const TOOL_NOTE: Record<ToolInfo["kind"], string> = { read: "читает", write: "записывает данные", confirm: "только после вашего подтверждения" };
 
   return (
     <div className="ag-list">
@@ -148,6 +184,23 @@ export default function AgentList({ me }: { me: User }) {
         <button className="primary" onClick={() => setForm(blank())}>+ Новый агент</button>
       </div>
       {error && <div className="error">{error}</div>}
+      {actions.length > 0 && (
+        <div className="ag-actionsbox" role="region" aria-label="Ждут подтверждения">
+          <h4>Агенты предлагают, решение за вами ({actions.length})</h4>
+          {actions.map((x) => (
+            <div key={x.id} className="ag-act">
+              <div>
+                <strong>{x.title}</strong>
+                <p className="muted small">Предложил агент «{x.agent}»{typeof x.args.description === "string" && x.args.description ? `: ${x.args.description}` : ""}</p>
+              </div>
+              <div className="ag-actions">
+                <button className="primary" onClick={() => decide(x, true)}>Подтвердить</button>
+                <button onClick={() => decide(x, false)}>Отклонить</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {agents && agents.length === 0 && (
         <div className="ag-hint">Агентов пока нет. Создайте первого, например «Выгрузки из 1С» каждый день в 09:00: он проверит, пришли ли новые файлы, и запишет итог в журнал.</div>
       )}
@@ -158,7 +211,7 @@ export default function AgentList({ me }: { me: User }) {
               <div>
                 <strong>{a.name}</strong>
                 <p className="muted small">
-                  {LEVELS[a.level].title} · {a.kind_title} · {scheduleText(a)}{!a.enabled ? " · выключен" : ""}
+                  {LEVELS[a.level].title} · {scheduleText(a)}{!a.enabled ? " · выключен" : ""}
                   {me.role === "owner" ? ` · ${a.owner}` : ""}
                 </p>
               </div>
@@ -178,7 +231,7 @@ export default function AgentList({ me }: { me: User }) {
                   <button className="primary" onClick={() => run(a)} disabled={!a.editable || a.last_run?.status === "running" || a.last_run?.status === "queued"}>Запустить сейчас</button>
                   {a.editable && (
                     <>
-                      <button onClick={() => setForm({ id: a.id, name: a.name, kind: a.kind, instruction: a.instruction, schedule_kind: a.schedule_kind, interval_minutes: String(a.interval_minutes ?? 60), daily_time: a.daily_time ?? "09:00", enabled: a.enabled, level: a.level, parent_id: a.parent_id ? String(a.parent_id) : "" })}>Изменить</button>
+                      <button onClick={() => setForm({ id: a.id, name: a.name, kind: a.kind, instruction: a.instruction, tools: a.tools, schedule_kind: a.schedule_kind, interval_minutes: String(a.interval_minutes ?? 60), daily_time: a.daily_time ?? "09:00", enabled: a.enabled, level: a.level, parent_id: a.parent_id ? String(a.parent_id) : "" })}>Изменить</button>
                       <button onClick={() => toggle(a)}>{a.enabled ? "Выключить" : "Включить"}</button>
                       <button className="ghost danger" onClick={() => remove(a)}>Удалить</button>
                     </>
@@ -239,18 +292,26 @@ export default function AgentList({ me }: { me: User }) {
                 </select>
               </label>
             )}
-            <label>
-              Что делает
-              <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} disabled={form.id !== null}>
-                {kinds.map((x) => (
-                  <option key={x.key} value={x.key}>{x.title}</option>
-                ))}
-              </select>
-            </label>
-            {k && <p className="muted small">{k.description}</p>}
-            {k?.needs_instruction && (
-              <textarea rows={4} placeholder="Поручение: что нужно сделать и в каком виде показать результат" value={form.instruction} onChange={(e) => setForm({ ...form, instruction: e.target.value })} />
+            {form.id === null && (
+              <label>
+                Начать с заготовки
+                <select value={form.kind} onChange={(e) => applyPreset(e.target.value)}>
+                  {presets.map((x) => (
+                    <option key={x.key} value={x.key}>{x.title}</option>
+                  ))}
+                </select>
+              </label>
             )}
+            <textarea rows={5} required placeholder="Поручение своими словами: что делать, где смотреть, как показать результат" value={form.instruction} onChange={(e) => setForm({ ...form, instruction: e.target.value })} />
+            <fieldset className="ag-tools">
+              <legend>Что агенту можно делать</legend>
+              {tools.map((t) => (
+                <label key={t.key} className="ag-tool" title={t.description}>
+                  <input type="checkbox" checked={form.tools.includes(t.key)} onChange={(e) => setForm({ ...form, tools: e.target.checked ? [...form.tools, t.key] : form.tools.filter((x) => x !== t.key) })} />
+                  <span>{t.title} <small className={`muted tk-${t.kind}`}>{TOOL_NOTE[t.kind]}</small></span>
+                </label>
+              ))}
+            </fieldset>
             <label>
               Когда запускать
               <select value={form.schedule_kind} onChange={(e) => setForm({ ...form, schedule_kind: e.target.value as Form["schedule_kind"] })}>
