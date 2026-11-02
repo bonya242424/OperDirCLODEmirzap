@@ -274,3 +274,25 @@ class AgentAction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     decided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Proxy(Base):
+    """Прокси для запросов системы к ИИ: сервер в РФ, прямой доступ к API модели закрыт."""
+
+    __tablename__ = "proxies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    scheme: Mapped[str] = mapped_column(String(10), default="http")  # http | https | socks5
+    host: Mapped[str] = mapped_column(String(255))
+    port: Mapped[int] = mapped_column(Integer)
+    username: Mapped[str] = mapped_column(String(255), default="")
+    password_encrypted: Mapped[str] = mapped_column(Text, default="")
+    priority: Mapped[int] = mapped_column(Integer, default=100)  # меньше число, раньше пробуем
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_status: Mapped[str] = mapped_column(String(16), default="unknown")  # ok | error | unknown
+    last_message: Mapped[str] = mapped_column(String(300), default="")
+    last_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

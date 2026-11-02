@@ -458,3 +458,11 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .ag-tool { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
 .ag-tool input { margin-top: 3px; }
 .tk-write { color: var(--warn); }
+
+.px-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.px-item { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); }
+.px-item.off { opacity: .6; }
+.px-item p { margin: 2px 0 0; }
+.px-side { display: grid; gap: 6px; justify-items: end; }
+.chipd.st-none { background: var(--panel-2); color: var(--muted); }
+.app-head > button { white-space: nowrap; align-self: flex-start; }

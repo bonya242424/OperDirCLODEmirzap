@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
 import type { Board, User } from "../../types";
 import ConnectionsPanel from "./ConnectionsPanel";
+import ProxiesPanel from "./ProxiesPanel";
 
-type Tab = "overview" | "connections" | "profile";
+type Tab = "overview" | "connections" | "proxies" | "profile";
 
 export default function MeApp({ me }: { me: User }) {
   const [tab, setTab] = useState<Tab>("overview");
@@ -31,6 +32,7 @@ export default function MeApp({ me }: { me: User }) {
       <div className="chips tabs">
         <button className={`chip${tab === "overview" ? " on" : ""}`} onClick={() => setTab("overview")}>Обзор</button>
         <button className={`chip${tab === "connections" ? " on" : ""}`} onClick={() => setTab("connections")}>Мои подключения</button>
+        <button className={`chip${tab === "proxies" ? " on" : ""}`} onClick={() => setTab("proxies")}>Прокси</button>
         <button className={`chip${tab === "profile" ? " on" : ""}`} onClick={() => setTab("profile")}>Профиль</button>
       </div>
 
@@ -60,6 +62,7 @@ export default function MeApp({ me }: { me: User }) {
       )}
 
       {tab === "connections" && <ConnectionsPanel />}
+      {tab === "proxies" && <ProxiesPanel />}
 
       {tab === "profile" && (
         <dl className="me-dl">

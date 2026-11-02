@@ -272,18 +272,30 @@ def check_yandex_webmaster(db, row: Integration) -> CheckResult:
 def check_llm(db, row: Integration) -> CheckResult:
     if not settings.anthropic_api_key.strip():
         return CheckResult(NOT_CONFIGURED, "Не задан ANTHROPIC_API_KEY")
-    try:
-        from anthropic import Anthropic, APIConnectionError, APIStatusError
+    import httpx
+    from anthropic import Anthropic, APIConnectionError, APIStatusError
 
+    from ..proxies import active_proxies, record_result
+
+    # Если прокси заданы, прямого доступа нет (сервер в РФ): проверяем через них по очереди.
+    routes: list[tuple[int | None, str]] = active_proxies() or [(None, "")]
+    for proxy_id, url in routes:
         client = Anthropic(
             api_key=settings.anthropic_api_key,
             base_url=settings.llm_base_url or None,
             timeout=10.0,
             max_retries=0,
+            http_client=httpx.Client(proxy=url, timeout=10.0) if url else None,
         )
-        client.models.list(limit=1)
-    except APIStatusError as exc:
-        return CheckResult(ERROR, f"API модели ответил кодом {exc.status_code}")
-    except APIConnectionError:
-        return CheckResult(ERROR, "Нет соединения с API модели")
-    return CheckResult(OK, "API модели отвечает")
+        try:
+            client.models.list(limit=1)
+        except APIStatusError as exc:
+            return CheckResult(ERROR, f"API модели ответил кодом {exc.status_code}")
+        except APIConnectionError:
+            if proxy_id is not None:
+                record_result(proxy_id, False)
+            continue
+        if proxy_id is not None:
+            record_result(proxy_id, True)
+        return CheckResult(OK, "API модели отвечает" + (" через прокси" if proxy_id is not None else ""))
+    return CheckResult(ERROR, "Нет соединения с API модели" + (": ни один прокси не отвечает" if routes[0][0] is not None else ""))
