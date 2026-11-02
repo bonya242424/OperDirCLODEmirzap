@@ -203,3 +203,32 @@ def test_public_sheet_by_link(client, owner, monkeypatch):
     monkeypatch.setattr(httpx, "get", closed)
     item = client.post("/api/integrations/google_sheets_rnp/check", headers=owner).json()
     assert item["status"] == "error" and "доступ" in item["message"]
+
+
+def test_metrika_and_webmaster_from_interface(client, owner, monkeypatch):
+    import app.integrations.checks as checks
+
+    monkeypatch.setattr(settings, "yandex_oauth_token", "")
+    monkeypatch.setattr(settings, "yandex_metrika_counter_id", "")
+    assert client.post("/api/integrations/yandex_metrika/check", headers=owner).json()["status"] == "not_configured"
+    seen = []
+
+    class R:
+        status_code = 200
+
+    def fake_get(url, headers=None):
+        seen.append((url, headers))
+        return R(), None
+
+    monkeypatch.setattr(checks, "_get", fake_get)
+    monkeypatch.setattr("app.connections._get", fake_get)
+    r = client.post("/api/connections", headers=owner, json={"kind": "yandex_metrika", "scope": "company", "config": {"oauth_token": "tok-m", "counter_id": "12345"}})
+    assert r.status_code == 201 and r.json()["status"] == "ok" and "tok-m" not in r.text
+    assert client.post("/api/connections", headers=owner, json={"kind": "yandex_webmaster", "scope": "company", "config": {"oauth_token": "tok-w"}}).json()["status"] == "ok"
+    seen.clear()
+    assert client.post("/api/integrations/yandex_metrika/check", headers=owner).json()["status"] in ("ok", "warning")
+    assert seen[0][0].endswith("/counter/12345") and seen[0][1]["Authorization"] == "OAuth tok-m"
+    client.post("/api/integrations/yandex_webmaster/check", headers=owner)
+    assert seen[-1][1]["Authorization"] == "OAuth tok-w"
+    bad = client.post("/api/connections", headers=owner, json={"kind": "yandex_metrika", "scope": "company", "config": {"oauth_token": "t", "counter_id": "abc"}})
+    assert bad.json()["status"] == "error" and "цифр" in bad.json()["message"]

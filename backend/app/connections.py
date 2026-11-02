@@ -59,6 +59,13 @@ KINDS: dict[str, Kind] = {
             "Ключ API модели для чата, агентов и разбора видео. Только для компании, один на всех",
             [Field("api_key", "Ключ API (sk-ant-…)", secret=True)],
         ),
+        Kind(
+            "yandex_metrika",
+            "Яндекс Метрика",
+            "Визиты, источники, цели, конверсии. Один счётчик на подключение",
+            [Field("oauth_token", "OAuth-токен", secret=True), Field("counter_id", "Номер счётчика")],
+        ),
+        Kind("yandex_webmaster", "Яндекс Вебмастер", "Индексация и ошибки сайта", [Field("oauth_token", "OAuth-токен", secret=True)]),
         Kind("yandex_disk", "Яндекс Диск", "Файлы на Диске", [Field("oauth_token", "OAuth-токен", secret=True)]),
         Kind(
             "ftp",
@@ -183,6 +190,30 @@ def _ftp(cfg):
     return CheckResult(OK, "FTP-сервер доступен, папка открывается")
 
 
+def _yandex_check(url: str, cfg: dict[str, str], what: str) -> CheckResult:
+    resp, err = _get(url, {"Authorization": f"OAuth {cfg['oauth_token'].strip()}"})
+    if err:
+        return CheckResult(ERROR, err)
+    if resp.status_code in (401, 403):
+        return CheckResult(ERROR, f"Токен недействителен или нет доступа: {what}")
+    if resp.status_code == 404:
+        return CheckResult(ERROR, f"{what}: не найдено, проверьте номер")
+    if resp.status_code != 200:
+        return CheckResult(ERROR, f"{what} ответил кодом {resp.status_code}")
+    return CheckResult(OK, f"{what}: подключение работает")
+
+
+def _metrika(cfg):
+    counter = cfg["counter_id"].strip()
+    if not counter.isdigit():
+        return CheckResult(ERROR, "Номер счётчика состоит только из цифр")
+    return _yandex_check(f"https://api-metrika.yandex.net/management/v1/counter/{counter}", cfg, "Метрика")
+
+
+def _webmaster(cfg):
+    return _yandex_check("https://api.webmaster.yandex.net/v4/user", cfg, "Вебмастер")
+
+
 def _anthropic(cfg):
     from .integrations.checks import check_anthropic_key
 
@@ -192,4 +223,4 @@ def _anthropic(cfg):
     return check_anthropic_key(key)
 
 
-_CHECKS = {"anthropic": _anthropic, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}
+_CHECKS = {"anthropic": _anthropic, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}

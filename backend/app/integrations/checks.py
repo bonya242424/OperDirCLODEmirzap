@@ -168,9 +168,10 @@ def check_imap(db, row: Integration) -> CheckResult:
 
 
 def check_yandex_disk(db, row: Integration) -> CheckResult:
-    if not settings.yandex_oauth_token.strip():
-        return CheckResult(NOT_CONFIGURED, "Не задан YANDEX_OAUTH_TOKEN")
-    resp, err = _get("https://cloud-api.yandex.net/v1/disk", _yandex_headers())
+    token = _yandex_token("yandex_disk")
+    if not token:
+        return CheckResult(NOT_CONFIGURED, "Не задан токен: добавьте подключение «Яндекс Диск» или YANDEX_OAUTH_TOKEN")
+    resp, err = _get("https://cloud-api.yandex.net/v1/disk", _yandex_headers(token))
     if err:
         return CheckResult(ERROR, err)
     assert resp is not None
@@ -234,16 +235,37 @@ def check_mirzap_mcp(db, row: Integration) -> CheckResult:
     return _pending(bool(settings.mirzap_mcp_url.strip()), "Не задан MIRZAP_MCP_URL")
 
 
-def _yandex_headers() -> dict[str, str]:
-    return {"Authorization": f"OAuth {settings.yandex_oauth_token.strip()}"}
+def company_cfg(kind: str) -> dict[str, str]:
+    """Настройки из подключения компании (раздел «Интеграции → Подключения»); пусто, если его нет."""
+    from sqlalchemy import select
+
+    from ..connections import decrypt
+    from ..db import SessionLocal
+    from ..models import Connection
+
+    with SessionLocal() as db:
+        row = db.scalar(select(Connection).where(Connection.kind == kind, Connection.owner_id.is_(None)).order_by(Connection.id.desc()))
+        return decrypt(row.config_encrypted) if row else {}
+
+
+def _yandex_token(kind: str) -> str:
+    """Токен Яндекса: из подключения компании данного типа, иначе из YANDEX_OAUTH_TOKEN."""
+    return company_cfg(kind).get("oauth_token", "").strip() or settings.yandex_oauth_token.strip()
+
+
+def _yandex_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"OAuth {token}"}
 
 
 def check_yandex_metrika(db, row: Integration) -> CheckResult:
-    token = settings.yandex_oauth_token.strip()
-    counter = settings.yandex_metrika_counter_id.strip()
+    cfg = company_cfg("yandex_metrika")
+    token = _yandex_token("yandex_metrika")
+    counter = cfg.get("counter_id", "").strip() or settings.yandex_metrika_counter_id.strip()
     if not token or not counter:
-        return CheckResult(NOT_CONFIGURED, "Не заданы YANDEX_OAUTH_TOKEN и YANDEX_METRIKA_COUNTER_ID")
-    resp, err = _get(f"https://api-metrika.yandex.net/management/v1/counter/{counter}", _yandex_headers())
+        return CheckResult(NOT_CONFIGURED, "Не заданы токен и номер счётчика: добавьте подключение «Яндекс Метрика»")
+    if not counter.isdigit():
+        return CheckResult(ERROR, "Номер счётчика состоит только из цифр")
+    resp, err = _get(f"https://api-metrika.yandex.net/management/v1/counter/{counter}", _yandex_headers(token))
     if err:
         return CheckResult(ERROR, err)
     assert resp is not None
@@ -255,10 +277,10 @@ def check_yandex_metrika(db, row: Integration) -> CheckResult:
 
 
 def check_yandex_webmaster(db, row: Integration) -> CheckResult:
-    token = settings.yandex_oauth_token.strip()
+    token = _yandex_token("yandex_webmaster")
     if not token:
-        return CheckResult(NOT_CONFIGURED, "Не задан YANDEX_OAUTH_TOKEN")
-    resp, err = _get("https://api.webmaster.yandex.net/v4/user", _yandex_headers())
+        return CheckResult(NOT_CONFIGURED, "Не задан токен: добавьте подключение «Яндекс Вебмастер»")
+    resp, err = _get("https://api.webmaster.yandex.net/v4/user", _yandex_headers(token))
     if err:
         return CheckResult(ERROR, err)
     assert resp is not None

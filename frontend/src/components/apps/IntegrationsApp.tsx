@@ -27,6 +27,14 @@ function matches(i: Integration, f: Filter): boolean {
   return true;
 }
 
+/** Системы, которые настраиваются из интерфейса: ключ системы -> тип подключения компании. */
+const SETUP_KIND: Record<string, string> = {
+  llm: "anthropic",
+  yandex_metrika: "yandex_metrika",
+  yandex_webmaster: "yandex_webmaster",
+  yandex_disk: "yandex_disk",
+};
+
 export default function IntegrationsApp() {
   const [tab, setTab] = useState<"systems" | "connections">("systems");
   const [startKind, setStartKind] = useState<string | undefined>(undefined);
@@ -154,9 +162,9 @@ export default function IntegrationsApp() {
               <button onClick={() => checkOne(i.key)} disabled={checking !== null}>
                 {checking === i.key ? "Проверяем…" : "Проверить сейчас"}
               </button>
-              {i.key === "llm" && (
-                <button className="ghost" onClick={() => { setStartKind("anthropic"); setTab("connections"); }}>
-                  Ввести или изменить ключ
+              {SETUP_KIND[i.key] && (
+                <button className="ghost" onClick={() => { setStartKind(SETUP_KIND[i.key]); setTab("connections"); }}>
+                  {i.key === "llm" ? "Ввести или изменить ключ" : "Настроить"}
                 </button>
               )}
             </div>
