@@ -175,6 +175,29 @@ def rdp_open(conn_id: int, db: Session = Depends(get_db), me: User = Depends(cur
     return {**info, "address": False}
 
 
+@router.post("/rdp/{conn_id}/connect", status_code=202)
+def rdp_connect(conn_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Подключение в фоне: ход виден через /status, картинка через /screen."""
+    _owner(me)
+    row = _conn(db, conn_id)
+    cfg = conn_lib.decrypt(row.config_encrypted)
+    if not cfg.get("host") or not cfg.get("user") or not cfg.get("password"):
+        raise HTTPException(status_code=422, detail="В подключении не заполнены адрес, логин или пароль: нажмите «Изменить» в «Интеграции → Подключения»")
+    try:
+        port = int(cfg.get("port") or 3389)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Порт должен быть числом") from None
+    rdp_manager.start(RDP_BASE + row.id, cfg["host"].strip(), port, cfg["user"], cfg["password"], cfg.get("domain", "").strip())
+    return rdp_manager.status(RDP_BASE + row.id)
+
+
+@router.get("/rdp/{conn_id}/status")
+def rdp_status(conn_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    _conn(db, conn_id)
+    return rdp_manager.status(RDP_BASE + conn_id)
+
+
 @router.get("/rdp/{conn_id}/screen")
 def rdp_screen(conn_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
     _owner(me)

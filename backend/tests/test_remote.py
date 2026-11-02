@@ -167,3 +167,23 @@ def test_precheck_unreachable_names_our_ip(monkeypatch):
 def test_tail_hides_password():
     out = rdp_manager.tail("a\nERRCONNECT_X pw-secret-1\nlast line", "pw-secret-1")
     assert "pw-secret-1" not in out and "last line" in out
+
+
+def test_connect_in_background_shows_steps(client, owner, fake_rdp):
+    import time
+
+    r = client.post("/api/connections", headers=owner, json={"kind": "rdp", "scope": "company", "config": {"host": "10.0.0.5", "port": "34821", "user": "ivan", "password": "pw-secret-1"}})
+    cid = r.json()["id"]
+    assert client.post(f"/api/remote/rdp/{cid}/connect", headers=owner).status_code == 202
+    for _ in range(50):
+        st = client.get(f"/api/remote/rdp/{cid}/status", headers=owner).json()
+        if st["state"] != "connecting":
+            break
+        time.sleep(0.1)
+    assert st["state"] == "ready" and any("Виртуальный экран" in x["text"] for x in st["steps"])
+    assert "pw-secret-1" not in str(st)
+
+
+def test_explain_activation_failure():
+    msg = rdp_manager.explain("[rdp_client_wait_for_activation]: ERRCONNECT_CONNECT_TRANSPORT_FAILED | freerdp_post_connect failed", "x")
+    assert "подготовке сеанса" in msg

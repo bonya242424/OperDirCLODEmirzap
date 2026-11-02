@@ -25,6 +25,9 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
   const [url, setUrl] = useState("");
   const [paste, setPaste] = useState("");
   const [info, setInfo] = useState("");
+  const [steps, setSteps] = useState<{ at: string; text: string }[]>([]);
+  const [preview, setPreview] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const alive = useRef(true);
   const buf = useRef("");
   const timer = useRef<number | undefined>(undefined);
@@ -46,22 +49,59 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
     alive.current = true;
     setState("opening");
     setError("");
-    api<{ width: number; height: number }>(`${base}/open`, { method: "POST", body: openBody ?? {} })
-      .then((s) => {
-        setSize(s);
-        setState("ready");
-        box.current?.focus();
-      })
-      .catch((e) => {
-        fail(e);
-        setState("error");
-      });
+    setSteps([]);
+    setPreview(false);
+    let t: number | undefined;
+    const isRdp = base.startsWith("/remote/rdp/");
+    if (!isRdp) {
+      api<{ width: number; height: number }>(`${base}/open`, { method: "POST", body: openBody ?? {} })
+        .then((s) => {
+          setSize(s);
+          setState("ready");
+          box.current?.focus();
+        })
+        .catch((e) => {
+          fail(e);
+          setState("error");
+        });
+    } else {
+      // Терминал подключается в фоне: показываем шаги и картинку виртуального экрана
+      const poll = async () => {
+        try {
+          const st = await api<{ state: string; steps: { at: string; text: string }[]; error: string; preview: boolean }>(`${base}/status`);
+          if (!alive.current) return;
+          setSteps(st.steps);
+          setPreview(st.preview);
+          if (st.state === "ready") {
+            setState("ready");
+            box.current?.focus();
+            return;
+          }
+          if (st.state === "error") {
+            setError(st.error);
+            setState("error");
+            return;
+          }
+          if (st.preview) await frame().catch(() => undefined);
+        } catch (e) {
+          if (alive.current) fail(e);
+        }
+        if (alive.current) t = window.setTimeout(poll, 700);
+      };
+      api(`${base}/connect`, { method: "POST" })
+        .then(() => poll())
+        .catch((e) => {
+          fail(e);
+          setState("error");
+        });
+    }
     return () => {
       alive.current = false;
       window.clearTimeout(timer.current);
+      window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base]);
+  }, [base, attempt]);
 
   useEffect(() => {
     if (state !== "ready") return;
@@ -176,7 +216,19 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
           <button type="submit">Перейти</button>
         </form>
       )}
-      {state === "opening" && <p className="muted">Подключаюсь…</p>}
+      {(state === "opening" || (state === "error" && steps.length > 0)) && (
+        <div className="remote-steps">
+          {steps.length === 0 && <p className="muted">Подключаюсь…</p>}
+          <ol>
+            {steps.map((st, i) => (
+              <li key={i} className={state === "error" && i === steps.length - 1 ? "bad" : i === steps.length - 1 && state === "opening" ? "now" : "done"}>
+                <span className="muted small">{st.at}</span> {st.text}
+              </li>
+            ))}
+          </ol>
+          {preview && src && <img className="remote-preview" src={src} alt="Что сейчас на виртуальном экране" />}
+        </div>
+      )}
       {error && <p className="error">{error}</p>}
       {state === "ready" && (
         <>
@@ -203,7 +255,12 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
           </form>
         </>
       )}
-      {state === "error" && <button onClick={onClosed}>Назад</button>}
+      {state === "error" && (
+        <div className="remote-bar">
+          {base.startsWith("/remote/rdp/") && <button className="primary" onClick={() => setAttempt((n) => n + 1)}>Повторить</button>}
+          <button onClick={onClosed}>Назад</button>
+        </div>
+      )}
     </div>
   );
 }

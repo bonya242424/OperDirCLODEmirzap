@@ -47,6 +47,8 @@ class RdpManager:
         self.spawn = lambda args, env=None: subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.spawn_logged = self._spawn_logged
         self.precheck = self._precheck
+        self.progress: dict[int, dict] = {}
+        self._pending: dict[int, int] = {}
         self.run = lambda args, env=None, timeout=10: subprocess.run(args, env=env, capture_output=True, timeout=timeout, check=True).stdout
         self.wait_display = self._wait_display
 
@@ -72,6 +74,7 @@ class RdpManager:
             (("account_restriction", "account_disabled", "password_expired", "password_must_change"), "учётная запись отключена или пароль нужно сменить"),
             (("connection refused", "econnrefused"), "сервер отклонил подключение: проверьте порт"),
             (("timed out", "timeout", "unreachable", "dns", "name or service not known"), "сервер не отвечает с нашей стороны: проверьте адрес и порт и открыт ли доступ для сервера системы"),
+            (("wait_for_activation", "post_connect failed", "activation"), "сервер принял вход, но оборвал соединение при подготовке сеанса (ограничения сервера на сеанс, цвет или экран)"),
             (("connect_transport_failed", "transport_failed", "connect_failed", "tls_connect", "negotiat"), "сервер оборвал соединение при выборе способа защиты (TLS/NLA): нужны другие настройки на стороне терминала"),
             (("credssp", "nla", "authentication failure", "security negotiation", "connect_security"), "ошибка проверки подлинности (NLA/CredSSP): сервер требует другой способ входа"),
             (("certificate", "cert_"), "проблема с сертификатом сервера"),
@@ -108,6 +111,41 @@ class RdpManager:
         s.used = time.time()
         return s
 
+    def _step(self, key: int, text: str, state: str | None = None, error: str = "") -> None:
+        p = self.progress.setdefault(key, {"state": "connecting", "steps": [], "error": ""})
+        if text:
+            p["steps"].append({"at": time.strftime("%H:%M:%S"), "text": text})
+        if state:
+            p["state"] = state
+        if error:
+            p["error"] = error
+
+    def start(self, key: int, host: str, port: int, user: str, password: str, domain: str = "") -> None:
+        """Подключение в фоне: окно показывает шаги и картинку виртуального экрана по ходу дела."""
+        import threading
+
+        if self.progress.get(key, {}).get("state") == "connecting":
+            return
+        self.progress[key] = {"state": "connecting", "steps": [], "error": ""}
+
+        def work() -> None:
+            try:
+                self.open(key, host, port, user, password, domain)
+            except BrowserError as exc:
+                self._step(key, "", "error", str(exc))
+            except Exception:  # noqa: BLE001
+                log.exception("Сбой подключения RDP")
+                self._step(key, "", "error", "Внутренняя ошибка подключения")
+
+        threading.Thread(target=work, daemon=True, name=f"rdp-open-{key}").start()
+
+    def status(self, key: int) -> dict:
+        p = dict(self.progress.get(key) or {"state": "idle", "steps": [], "error": ""})
+        if p["state"] == "ready" and not self.is_open(key):
+            p = {"state": "idle", "steps": [], "error": ""}
+        p["preview"] = key in self._pending
+        return p
+
     def _precheck(self, host: str, port: int) -> None:
         import socket
 
@@ -133,7 +171,13 @@ class RdpManager:
     def open(self, key: int, host: str, port: int, user: str, password: str, domain: str = "") -> dict:
         self._reap()
         self.close(key)
-        self.precheck(host, port)
+        self._step(key, f"Проверяю, отвечает ли {host}:{port}")
+        try:
+            self.precheck(host, port)
+        except BrowserError as exc:
+            self._step(key, "Порт недоступен", "error", str(exc))
+            raise
+        self._step(key, "Порт отвечает")
         used = {s.display for s in self._sessions.values()}
         display = next(d for d in range(FIRST_DISPLAY, FIRST_DISPLAY + 50) if d not in used)
         try:
@@ -143,15 +187,21 @@ class RdpManager:
         if not self.wait_display(display):
             xvfb.terminate()
             raise BrowserError("Не удалось запустить виртуальный экран")
-        base = [shutil.which("xfreerdp3") or "xfreerdp", f"/v:{host}:{port}", f"/u:{user}", f"/p:{password}", f"/size:{W}x{H}", "/cert:ignore", "+clipboard", "+auto-reconnect", "-wallpaper", "/log-level:INFO"]
+        self._pending[key] = display
+        self._step(key, "Виртуальный экран запущен")
+        base = [shutil.which("xfreerdp3") or "xfreerdp", f"/v:{host}:{port}", f"/u:{user}", f"/p:{password}", f"/size:{W}x{H}", "/cert:ignore", "-wallpaper", "/log-level:INFO"]
         if domain:
             base.append(f"/d:{domain}")
         # Разные серверы требуют разный способ защиты соединения: пробуем по очереди
-        variants = [[], ["/sec:tls", "/tls:seclevel:0"], ["/sec:rdp"], ["/sec:nla"]]
+        full = ["+clipboard", "+auto-reconnect"]
+        # облегчённый профиль: меньше цвета, без буфера обмена и лишних эффектов (некоторые серверы рвут соединение на этапе подготовки сеанса)
+        light = ["/bpp:16", "-themes", "-aero", "-fonts", "/network:lan"]
+        variants = [full, light, light + ["/sec:tls", "/tls:seclevel:0"], light + ["/sec:rdp"], full + ["/sec:tls", "/tls:seclevel:0"]]
         logs: list[str] = []
         rdp = None
         for i, extra in enumerate(variants):
             logpath = Path(f"/tmp/rdp-{display}-{i}.log")
+            self._step(key, f"Подключаюсь, набор настроек {i + 1} из {len(variants)}")
             try:
                 rdp = self.spawn_logged(base + extra, {**os.environ, "DISPLAY": f":{display}"}, str(logpath))
             except OSError:
@@ -171,19 +221,25 @@ class RdpManager:
                 break  # другой способ защиты пароль не исправит
         if rdp is None or rdp.poll() is not None:
             xvfb.terminate()
+            self._pending.pop(key, None)
             reason = self.explain(logs[0] if logs else "", password)
             if len(logs) > 1 and not reason.startswith("неверный логин"):
-                reason += f" (пробовали {len(logs)} способа защиты соединения)"
+                reason += f" (пробовали {len(logs)} наборов настроек соединения)"
             raw = self.tail(logs[-1] if logs else "", password)
             ip = self.egress_ip()
             raise BrowserError("Не удалось подключиться к терминалу: " + reason + (f". Ответ клиента: {raw}" if raw else "") + (f". Наши подключения идут с адреса {ip}: он должен быть в списке разрешённых" if ip else ""))
         self._sessions[key] = _Session(display, xvfb, rdp)
+        self._pending.pop(key, None)
+        self._step(key, "Подключено", "ready")
         return {"width": W, "height": H}
 
     def screenshot(self, key: int) -> bytes:
-        s = self._get(key)
+        if key not in self._sessions and key in self._pending:
+            display = self._pending[key]
+        else:
+            display = self._get(key).display
         try:
-            return self.run(["import", "-display", f":{s.display}", "-window", "root", "-quality", "70", "jpeg:-"], timeout=15)
+            return self.run(["import", "-display", f":{display}", "-window", "root", "-quality", "70", "jpeg:-"], timeout=15)
         except (subprocess.SubprocessError, OSError):
             raise BrowserError("Не удалось получить картинку терминала") from None
 
