@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 VIEW_W, VIEW_H = 1100, 700
 IDLE_SECONDS = 15 * 60
-KEYS = {"Enter", "Tab", "Backspace", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Delete", "Space", "Home", "End", "PageUp", "PageDown"}
+KEYS = {"Enter", "Tab", "Backspace", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Delete", "Space", "Home", "End", "PageUp", "PageDown", "Insert", "ContextMenu", "CapsLock"}
 MODS = {"Control", "Shift", "Alt", "Meta"}
 
 

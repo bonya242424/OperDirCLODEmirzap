@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ClipboardEvent, FormEvent, KeyboardEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api, getToken } from "../../api";
 
 interface Props {
@@ -13,7 +13,7 @@ interface Props {
 const NAMED: Record<string, string> = {
   Enter: "Enter", Backspace: "Backspace", Tab: "Tab", Escape: "Escape", Delete: "Delete", " ": "Space",
   ArrowDown: "ArrowDown", ArrowUp: "ArrowUp", ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
-  Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown",
+  Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown", Insert: "Insert", ContextMenu: "ContextMenu", CapsLock: "CapsLock",
 };
 
 /** Окно удалённого экрана: картинка с сервера, клики, колесо, клавиатура с компьютера. */
@@ -108,21 +108,38 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
 
   function onKey(e: KeyboardEvent<HTMLDivElement>) {
     if (state !== "ready" || e.nativeEvent.isComposing) return;
+    const ctrl = e.ctrlKey || e.metaKey;
+    // Ctrl+V: вставку обработает событие paste (берёт текст из буфера обмена компьютера)
+    if (ctrl && e.code === "KeyV" && !e.shiftKey) return;
     const mods = [e.ctrlKey && "Control", e.altKey && "Alt", e.metaKey && "Meta"].filter(Boolean) as string[];
     const named = NAMED[e.key];
     if (e.key.length === 1 && mods.length === 0) {
+      // обычный ввод, в том числе русская раскладка и заглавные буквы
       e.preventDefault();
       buf.current += e.key;
       window.clearTimeout(timer.current);
       timer.current = window.setTimeout(flush, 120);
       return;
     }
-    const base_ = named ?? (e.key.length === 1 ? e.key.toLowerCase() : /^F([1-9]|1[0-2])$/.test(e.key) ? e.key : "");
-    if (!base_) return;
+    // сочетания считаем по физической клавише, чтобы Ctrl+С на русской раскладке работал как Ctrl+C
+    let key = named ?? "";
+    if (!key && /^Key[A-Z]$/.test(e.code)) key = e.code.slice(3).toLowerCase();
+    else if (!key && /^Digit\d$/.test(e.code)) key = e.code.slice(5);
+    else if (!key && /^F([1-9]|1[0-2])$/.test(e.key)) key = e.key;
+    else if (!key && e.key.length === 1) key = e.key.toLowerCase();
+    if (!key) return;
     if (e.shiftKey && (named || mods.length)) mods.push("Shift");
     e.preventDefault();
     flush();
-    void act("key", { key: [...mods, base_].join("+") });
+    void act("key", { key: [...mods, key].join("+") });
+  }
+
+  function onPaste(e: ClipboardEvent<HTMLDivElement>) {
+    const text = e.clipboardData.getData("text");
+    if (!text) return;
+    e.preventDefault();
+    flush();
+    void act("type", { text });
   }
 
   async function go(e: FormEvent) {
@@ -163,7 +180,7 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
       {error && <p className="error">{error}</p>}
       {state === "ready" && (
         <>
-          <div className="remote-view" ref={box} tabIndex={0} onKeyDown={onKey} role="application" aria-label="Удалённый экран: кликните и печатайте с клавиатуры">
+          <div className="remote-view" ref={box} tabIndex={0} onKeyDown={onKey} onPaste={onPaste} role="application" aria-label="Удалённый экран: кликните и печатайте с клавиатуры">
             {src ? (
               <img
                 src={src}
@@ -178,7 +195,7 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
               <p className="muted">Загружаю картинку…</p>
             )}
           </div>
-          <p className="muted small">{info ? `${info} · ` : ""}Кликните по экрану и печатайте: клавиши идут в удалённое окно. Двойной клик и правая кнопка работают. Для вставки текста используйте строку ниже.</p>
+          <p className="muted small">{info ? `${info} · ` : ""}Кликните по экрану и печатайте: клавиши идут в удалённое окно. Двойной клик и правая кнопка работают. Ctrl+V вставляет текст из буфера вашего компьютера, русская раскладка и сочетания (Ctrl+C, Alt+Tab, F-клавиши) работают. Копирование из удалённого окна к вам не передаётся.</p>
           <form className="remote-bar" onSubmit={sendPaste}>
             <input type="password" autoComplete="off" value={paste} onChange={(e) => setPaste(e.target.value)} placeholder="Вставить текст в выбранное поле" />
             <button type="submit" disabled={!paste}>Ввести</button>

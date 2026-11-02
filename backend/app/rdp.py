@@ -22,7 +22,7 @@ FIRST_DISPLAY = 100
 XKEYS = {
     "Enter": "Return", "Backspace": "BackSpace", "Escape": "Escape", "Tab": "Tab", "Delete": "Delete", "Space": "space",
     "ArrowDown": "Down", "ArrowUp": "Up", "ArrowLeft": "Left", "ArrowRight": "Right",
-    "Home": "Home", "End": "End", "PageUp": "Prior", "PageDown": "Next",
+    "Home": "Home", "End": "End", "PageUp": "Prior", "PageDown": "Next", "Insert": "Insert", "ContextMenu": "Menu", "CapsLock": "Caps_Lock",
 }
 XMODS = {"Control": "ctrl", "Shift": "shift", "Alt": "alt", "Meta": "super"}
 
