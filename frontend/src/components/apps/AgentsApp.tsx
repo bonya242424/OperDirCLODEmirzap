@@ -16,8 +16,23 @@ interface LogLine {
   text: string;
 }
 
+interface Supplier {
+  id: number;
+  name: string;
+  portal_url: string;
+  contact: string;
+  rules: string;
+  default_reason: string;
+  notes: string;
+  batches: number;
+  positions: number;
+}
+type SupplierForm = Omit<Supplier, "id" | "batches" | "positions"> & { id: number | null };
+const EMPTY_SUP: SupplierForm = { id: null, name: "", portal_url: "", contact: "", rules: "", default_reason: "", notes: "" };
+
 interface Summary {
   id: number;
+  supplier_id: number | null;
   supplier: string;
   number: string;
   source: string;
@@ -45,7 +60,10 @@ const ICON: Record<StepState, string> = { wait: "○", run: "◐", confirm: "!",
 
 /** Агент по возвратам. Таблица и саммари настоящие; шаги работы на сайте пока показаны для примера: запуск на сайте подключим после первой проверки. */
 function ReturnsPanel() {
-  const [batches, setBatches] = useState<Summary[] | null>(null);
+  const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
+  const [supSel, setSupSel] = useState<number | null>(null);
+  const [supForm, setSupForm] = useState<SupplierForm | null>(null);
+  const [allBatches, setBatches] = useState<Summary[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [link, setLink] = useState("");
@@ -56,19 +74,26 @@ function ReturnsPanel() {
   const [finished, setFinished] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   const confirmRef = useRef<HTMLDivElement>(null);
+  const supplier = suppliers?.find((x) => x.id === supSel) ?? null;
+  const batches = allBatches?.filter((b) => b.supplier_id === supSel) ?? null;
   const current = batches?.find((b) => b.id === selected) ?? null;
   const awaiting = steps.findIndex((s) => s.state === "confirm");
 
   const load = useCallback(() => {
-    api<Summary[]>("/returns/batches")
-      .then((b) => {
+    Promise.all([api<Supplier[]>("/returns/suppliers"), api<Summary[]>("/returns/batches")])
+      .then(([sup, b]) => {
+        setSuppliers(sup);
         setBatches(b);
-        setSelected((cur) => (cur !== null && b.some((x) => x.id === cur) ? cur : b[0]?.id ?? null));
+        setSupSel((cur) => (cur !== null && sup.some((x) => x.id === cur) ? cur : sup[0]?.id ?? null));
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, []);
   useEffect(load, [load]);
   useEffect(() => () => window.clearTimeout(timer.current), []);
+  useEffect(() => {
+    setSelected((cur) => (cur !== null && batches?.some((x) => x.id === cur) ? cur : batches?.[0]?.id ?? null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supSel, allBatches]);
   useEffect(() => {
     if (awaiting >= 0) confirmRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [awaiting]);
@@ -81,13 +106,14 @@ function ReturnsPanel() {
     if (!f) return;
     const fd = new FormData();
     fd.append("file", f);
-    await send(() => api<Summary>("/returns/import", { method: "POST", body: fd }));
+    if (!supplier) return;
+    await send(() => api<Summary>(`/returns/import?supplier_id=${supplier.id}`, { method: "POST", body: fd }));
   }
 
   async function importLink(e: FormEvent) {
     e.preventDefault();
-    if (!link.trim()) return;
-    await send(() => api<Summary>("/returns/import-url", { method: "POST", body: { url: link.trim() } }));
+    if (!link.trim() || !supplier) return;
+    await send(() => api<Summary>("/returns/import-url", { method: "POST", body: { url: link.trim(), supplier_id: supplier.id } }));
     setLink("");
   }
 
@@ -176,45 +202,103 @@ function ReturnsPanel() {
     }
   }
 
+  async function saveSupplier(e: FormEvent) {
+    e.preventDefault();
+    if (!supForm) return;
+    const { id, ...body } = supForm;
+    try {
+      const saved = id === null ? await api<Supplier>("/returns/suppliers", { method: "POST", body }) : await api<Supplier>(`/returns/suppliers/${id}`, { method: "PATCH", body });
+      setSupForm(null);
+      setSupSel(saved.id);
+      setError("");
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    }
+  }
+
+  async function removeSupplier(x: Supplier) {
+    if (!window.confirm(`Убрать поставщика «${x.name}»? Загруженные документы останутся в базе.`)) return;
+    try {
+      await api(`/returns/suppliers/${x.id}`, { method: "DELETE" });
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    }
+  }
+
   const done = current?.status.submitted ?? 0;
 
   return (
     <div className="agents">
       <aside className="ag-left">
-        <h3>Возвраты поставщикам</h3>
-        <p className="muted small">Загрузите таблицу со сборкой, и здесь появится саммари по поставщику.</p>
+        <h3>Поставщики</h3>
+        <p className="muted small">Создайте поставщика, загрузите в него документ с возвратами и запустите работу.</p>
         <ul>
-          {batches?.map((b) => (
-            <li key={b.id}>
-              <button className={b.id === selected ? "on" : ""} onClick={() => { setSelected(b.id); reset(); }} disabled={running}>
-                <strong>{b.supplier}</strong>
-                <span className="muted small">{b.number || "без номера"}</span>
-                <span className="muted small">{b.positions} поз. · {b.qty} шт.</span>
+          {suppliers?.map((x) => (
+            <li key={x.id}>
+              <button className={x.id === supSel ? "on" : ""} onClick={() => { setSupSel(x.id); reset(); }} disabled={running}>
+                <strong>{x.name}</strong>
+                <span className="muted small">{x.batches} док. · {x.positions} поз.</span>
               </button>
             </li>
           ))}
         </ul>
-        {batches && batches.length === 0 && <p className="muted small">Сборок пока нет.</p>}
-        <label className="ag-file">
-          + Загрузить CSV
-          <input type="file" accept=".csv,text/csv" onChange={upload} disabled={busy} hidden />
-        </label>
-        <form onSubmit={importLink} className="ag-link">
-          <input placeholder="Ссылка на Google Таблицу" value={link} onChange={(e) => setLink(e.target.value)} />
-          <button disabled={busy || !link.trim()}>Загрузить</button>
-        </form>
+        {suppliers && suppliers.length === 0 && <p className="muted small">Поставщиков пока нет.</p>}
+        <button className="primary" onClick={() => setSupForm({ ...EMPTY_SUP })}>+ Поставщик</button>
         {error && <p className="error">{error}</p>}
       </aside>
 
       <section className="ag-main">
-        {!current ? (
-          <p className="ag-hint">Выберите сборку слева или загрузите таблицу. Нужны колонки: Товар, Кол. по документу, Номер счета, причина возврата. Строки «Поставщик» и «Сборка» сверху.</p>
+        {!supplier ? (
+          <p className="ag-hint">Создайте первого поставщика кнопкой «+ Поставщик» слева: название, сайт кабинета, контакты и правила возврата.</p>
         ) : (
           <>
             <header>
               <div>
-                <h2>{current.supplier}</h2>
-                <p className="muted small">Сборка {current.number || "без номера"} · источник: {current.source}</p>
+                <h2>{supplier.name}</h2>
+                <p className="muted small">
+                  {supplier.portal_url ? <a href={supplier.portal_url} target="_blank" rel="noreferrer noopener">{supplier.portal_url}</a> : "Сайт кабинета не указан"}
+                  {supplier.contact && <> · {supplier.contact}</>}
+                </p>
+              </div>
+              <div className="ag-actions">
+                <button className="ghost" onClick={() => removeSupplier(supplier)} disabled={running}>Убрать</button>
+                <button onClick={() => setSupForm({ ...supplier })} disabled={running}>Данные поставщика</button>
+              </div>
+            </header>
+            {supplier.rules && <p className="muted small">Правила: {supplier.rules}</p>}
+            <div className="ag-upload">
+              <label className="ag-file">
+                + Загрузить CSV
+                <input type="file" accept=".csv,text/csv" onChange={upload} disabled={busy} hidden />
+              </label>
+              <form onSubmit={importLink} className="ag-link">
+                <input placeholder="или ссылка на Google Таблицу" value={link} onChange={(e) => setLink(e.target.value)} />
+                <button disabled={busy || !link.trim()}>Загрузить</button>
+              </form>
+            </div>
+            {error && <p className="error">{error}</p>}
+            {batches && batches.length > 0 && (
+              <div className="chips">
+                {batches.map((b) => (
+                  <button key={b.id} className={`chip${b.id === selected ? " on" : ""}`} onClick={() => { setSelected(b.id); reset(); }} disabled={running}>
+                    {b.number || `Документ ${b.id}`} · {b.positions} поз.
+                  </button>
+                ))}
+              </div>
+            )}
+            {batches && batches.length === 0 && (
+              <p className="ag-hint">Документов пока нет. Загрузите CSV или вставьте ссылку на Google Таблицу. Нужны колонки: Товар, Кол. по документу, Номер счета, причина возврата.</p>
+            )}
+          </>
+        )}
+        {supplier && current && (
+          <>
+            <header>
+              <div>
+                <h3>Документ {current.number || current.id}</h3>
+                <p className="muted small">Источник: {current.source}</p>
               </div>
               <div className="ag-actions">
                 <button className="ghost" onClick={() => remove(current)} disabled={running}>Удалить</button>
@@ -275,6 +359,27 @@ function ReturnsPanel() {
           </>
         )}
       </section>
+
+      {supForm && (
+        <div className="modal-bg" onPointerDown={() => setSupForm(null)}>
+          <form className="modal" onSubmit={saveSupplier} onPointerDown={(e) => e.stopPropagation()}>
+            <h3>{supForm.id === null ? "Новый поставщик" : "Данные поставщика"}</h3>
+            <input autoFocus required placeholder="Название, например «Армтек»" value={supForm.name} onChange={(e) => setSupForm({ ...supForm, name: e.target.value })} />
+            <input placeholder="Адрес кабинета, https://etp.armtek.ru" value={supForm.portal_url} onChange={(e) => setSupForm({ ...supForm, portal_url: e.target.value })} />
+            <textarea rows={2} placeholder="Контакты: менеджер, телефон, почта" value={supForm.contact} onChange={(e) => setSupForm({ ...supForm, contact: e.target.value })} />
+            <input placeholder="Причина возврата по умолчанию (если в таблице пусто)" value={supForm.default_reason} onChange={(e) => setSupForm({ ...supForm, default_reason: e.target.value })} />
+            <textarea rows={4} placeholder="Как оформлять возврат на этом сайте: одна заявка на счёт, что подставляется само, когда спросить владельца" value={supForm.rules} onChange={(e) => setSupForm({ ...supForm, rules: e.target.value })} />
+            <textarea rows={2} placeholder="Заметки" value={supForm.notes} onChange={(e) => setSupForm({ ...supForm, notes: e.target.value })} />
+            <p className="muted small">Логин и пароль кабинета здесь не хранятся: вход в кабинет выполняете вы сами.</p>
+            {error && <p className="error">{error}</p>}
+            <div className="modal-actions">
+              <span className="grow" />
+              <button type="button" onClick={() => setSupForm(null)}>Отмена</button>
+              <button type="submit" className="primary">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       <aside className="ag-log">
         <h3>Журнал запуска</h3>

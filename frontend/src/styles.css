@@ -484,3 +484,6 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .changelog .chip.improved { border-color: var(--accent); }
 .changelog .chip.removed { border-color: var(--bad); }
 .changelog .chip.fixed { border-color: var(--warn); }
+
+.ag-upload { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.ag-upload .ag-link { flex: 1; min-width: 220px; }

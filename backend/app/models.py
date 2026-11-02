@@ -196,6 +196,23 @@ class Task(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ReturnSupplier(Base):
+    """Поставщик, которому оформляем возвраты: данные для агента и документы с позициями."""
+
+    __tablename__ = "return_suppliers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True)
+    portal_url: Mapped[str] = mapped_column(String(500), default="")  # сайт кабинета, где оформляется возврат
+    contact: Mapped[str] = mapped_column(Text, default="")  # менеджер, телефон, почта
+    rules: Mapped[str] = mapped_column(Text, default="")  # как оформлять возврат на этом сайте, своими словами
+    default_reason: Mapped[str] = mapped_column(String(300), default="")  # если в строке нет причины
+    notes: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ReturnBatch(Base):
     """Сборка возвратов одному поставщику, загруженная из таблицы."""
 
@@ -205,6 +222,7 @@ class ReturnBatch(Base):
     supplier: Mapped[str] = mapped_column(String(200), index=True)
     number: Mapped[str] = mapped_column(String(200), default="")  # «№000007007 от 02.11.2026»
     source: Mapped[str] = mapped_column(String(500), default="")  # имя файла или id таблицы
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("return_suppliers.id"), nullable=True, index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

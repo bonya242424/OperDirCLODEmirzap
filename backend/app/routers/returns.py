@@ -10,13 +10,13 @@ from collections import defaultdict
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
-from sqlalchemy import select
+from pydantic import BaseModel, ValidationError, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import current_user
-from ..models import ReturnBatch, ReturnLine, User
+from ..models import ReturnBatch, ReturnLine, ReturnSupplier, User
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
@@ -41,7 +41,7 @@ COLS = {
 }
 
 
-def parse_sheet(text: str) -> tuple[str, str, list[dict]]:
+def parse_sheet(text: str, need_supplier: bool = True) -> tuple[str, str, list[dict]]:
     """Возвращает (поставщик, номер сборки, строки). Бросает ValueError с понятным текстом."""
     rows = list(csv.reader(io.StringIO(text.lstrip("﻿"))))
     supplier, number = "", ""
@@ -57,7 +57,7 @@ def parse_sheet(text: str) -> tuple[str, str, list[dict]]:
             break
     if header_at < 0:
         raise ValueError("Не нашли строку заголовков: нужны колонки «Товар» и «Кол. по документу»")
-    if not supplier:
+    if need_supplier and not supplier:
         raise ValueError("В таблице нет строки «Поставщик»")
     index: dict[str, int] = {}
     for key, names in COLS.items():
@@ -93,26 +93,41 @@ def parse_sheet(text: str) -> tuple[str, str, list[dict]]:
     return supplier, number, lines
 
 
-def _save(db: Session, text: str, source: str, me: User) -> ReturnBatch:
+def _supplier_by_name(db: Session, name: str, me: User) -> ReturnSupplier:
+    sup = db.scalar(select(ReturnSupplier).where(ReturnSupplier.name == name))
+    if sup is None:
+        sup = ReturnSupplier(name=name[:200], created_by=me.id)
+        db.add(sup)
+        db.flush()
+    return sup
+
+
+def _save(db: Session, text: str, source: str, me: User, supplier: ReturnSupplier | None = None) -> ReturnBatch:
     try:
-        supplier, number, lines = parse_sheet(text)
+        name, number, lines = parse_sheet(text, need_supplier=supplier is None)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    batch = ReturnBatch(supplier=supplier[:200], number=number[:200], source=source[:500], created_by=me.id)
+    sup = supplier or _supplier_by_name(db, name, me)
+    batch = ReturnBatch(supplier=sup.name, supplier_id=sup.id, number=number[:200], source=source[:500], created_by=me.id)
     db.add(batch)
     db.flush()
     for ln in lines:
-        db.add(ReturnLine(batch_id=batch.id, **{k: (v[:500] if isinstance(v, str) else v) for k, v in ln.items()}))
+        row = {k: (v[:500] if isinstance(v, str) else v) for k, v in ln.items()}
+        if not row.get("reason") and sup.default_reason:
+            row["reason"] = sup.default_reason
+        db.add(ReturnLine(batch_id=batch.id, **row))
     db.commit()
     return batch
 
 
 class UrlIn(BaseModel):
     url: str
+    supplier_id: int | None = None
 
 
 @router.post("/import", status_code=201)
-async def import_file(file: UploadFile = File(...), db: Session = Depends(get_db), me: User = Depends(current_user)):
+async def import_file(supplier_id: int | None = None, file: UploadFile = File(...), db: Session = Depends(get_db), me: User = Depends(current_user)):
+    sup = _get_supplier(db, supplier_id) if supplier_id else None
     data = await file.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="Файл больше 5 МБ")
@@ -120,11 +135,12 @@ async def import_file(file: UploadFile = File(...), db: Session = Depends(get_db
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise HTTPException(status_code=422, detail="Нужен CSV в кодировке UTF-8: в Google Таблицах «Файл → Скачать → CSV»") from None
-    return _summary(db, _save(db, text, file.filename or "файл", me))
+    return _summary(db, _save(db, text, file.filename or "файл", me, sup))
 
 
 @router.post("/import-url", status_code=201)
 def import_url(body: UrlIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    sup = _get_supplier(db, body.supplier_id) if body.supplier_id else None
     m = SHEET_RE.match(body.url.strip())
     if not m:
         raise HTTPException(status_code=422, detail="Нужна ссылка на Google Таблицу вида docs.google.com/spreadsheets/d/…")
@@ -139,7 +155,7 @@ def import_url(body: UrlIn, db: Session = Depends(get_db), me: User = Depends(cu
         raise HTTPException(status_code=502, detail="Таблица недоступна: откройте доступ «Все, у кого есть ссылка» с правом просмотра или редактирования")
     if len(resp.content) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="Таблица больше 5 МБ")
-    return _summary(db, _save(db, resp.content.decode("utf-8-sig"), f"Google Таблица {sheet_id[:8]}…", me))
+    return _summary(db, _save(db, resp.content.decode("utf-8-sig"), f"Google Таблица {sheet_id[:8]}…", me, sup))
 
 
 def _summary(db: Session, batch: ReturnBatch) -> dict:
@@ -167,6 +183,7 @@ def _summary(db: Session, batch: ReturnBatch) -> dict:
         problems.append(f"У {no_inv} строк нет номера счёта")
     return {
         "id": batch.id,
+        "supplier_id": batch.supplier_id,
         "supplier": batch.supplier,
         "number": batch.number,
         "source": batch.source,
@@ -182,8 +199,11 @@ def _summary(db: Session, batch: ReturnBatch) -> dict:
 
 
 @router.get("/batches")
-def batches(db: Session = Depends(get_db), _: User = Depends(current_user)):
-    rows = db.scalars(select(ReturnBatch).order_by(ReturnBatch.id.desc()).limit(100))
+def batches(supplier_id: int | None = None, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    q = select(ReturnBatch).order_by(ReturnBatch.id.desc()).limit(100)
+    if supplier_id is not None:
+        q = q.where(ReturnBatch.supplier_id == supplier_id)
+    rows = db.scalars(q)
     return [_summary(db, b) for b in rows]
 
 
@@ -206,4 +226,102 @@ def delete_batch(batch_id: int, db: Session = Depends(get_db), _: User = Depends
     for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch_id)):
         db.delete(r)
     db.delete(b)
+    db.commit()
+
+
+class SupplierIn(BaseModel):
+    name: str
+    portal_url: str = ""
+    contact: str = ""
+    rules: str = ""
+    default_reason: str = ""
+    notes: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 200:
+            raise ValueError("Название поставщика: от 1 до 200 символов")
+        return v
+
+    @field_validator("portal_url")
+    @classmethod
+    def _url(cls, v: str) -> str:
+        v = v.strip()
+        if v and not re.match(r"^https?://[^\s]+$", v):
+            raise ValueError("Адрес сайта должен начинаться с http:// или https://")
+        return v[:500]
+
+    @field_validator("contact", "rules", "notes")
+    @classmethod
+    def _long(cls, v: str) -> str:
+        return v.strip()[:4000]
+
+    @field_validator("default_reason")
+    @classmethod
+    def _reason(cls, v: str) -> str:
+        return v.strip()[:300]
+
+
+class SupplierPatch(BaseModel):
+    name: str | None = None
+    portal_url: str | None = None
+    contact: str | None = None
+    rules: str | None = None
+    default_reason: str | None = None
+    notes: str | None = None
+
+
+def _get_supplier(db: Session, supplier_id: int) -> ReturnSupplier:
+    sup = db.get(ReturnSupplier, supplier_id)
+    if sup is None or not sup.is_active:
+        raise HTTPException(status_code=404, detail="Поставщик не найден")
+    return sup
+
+
+def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
+    ids = list(db.scalars(select(ReturnBatch.id).where(ReturnBatch.supplier_id == sup.id)))
+    positions = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id.in_(ids))) if ids else 0
+    return {
+        "id": sup.id, "name": sup.name, "portal_url": sup.portal_url, "contact": sup.contact, "rules": sup.rules,
+        "default_reason": sup.default_reason, "notes": sup.notes, "batches": len(ids), "positions": positions or 0,
+    }
+
+
+@router.get("/suppliers")
+def list_suppliers(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    return [_supplier_out(db, s) for s in db.scalars(select(ReturnSupplier).where(ReturnSupplier.is_active.is_(True)).order_by(ReturnSupplier.name))]
+
+
+@router.post("/suppliers", status_code=201)
+def create_supplier(body: SupplierIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    if db.scalar(select(ReturnSupplier).where(ReturnSupplier.name == body.name)):
+        raise HTTPException(status_code=409, detail="Поставщик с таким названием уже есть")
+    sup = ReturnSupplier(**body.model_dump(), created_by=me.id)
+    db.add(sup)
+    db.commit()
+    return _supplier_out(db, sup)
+
+
+@router.patch("/suppliers/{supplier_id}")
+def update_supplier(supplier_id: int, body: SupplierPatch, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    sup = _get_supplier(db, supplier_id)
+    data = body.model_dump(exclude_unset=True)
+    try:
+        merged = SupplierIn(**{**{k: getattr(sup, k) for k in SupplierIn.model_fields}, **{k: v for k, v in data.items() if v is not None}})
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()[0]["msg"].removeprefix("Value error, ")) from None
+    if merged.name != sup.name and db.scalar(select(ReturnSupplier).where(ReturnSupplier.name == merged.name)):
+        raise HTTPException(status_code=409, detail="Поставщик с таким названием уже есть")
+    for k, v in merged.model_dump().items():
+        setattr(sup, k, v)
+    db.commit()
+    return _supplier_out(db, sup)
+
+
+@router.delete("/suppliers/{supplier_id}", status_code=204)
+def archive_supplier(supplier_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    """Поставщик скрывается, загруженные документы остаются."""
+    _get_supplier(db, supplier_id).is_active = False
     db.commit()
