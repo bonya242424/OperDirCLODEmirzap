@@ -82,6 +82,7 @@ def fake_rdp(monkeypatch):
         return b"\xff\xd8jpeg"
 
     monkeypatch.setattr(rdp_manager, "spawn", spawn)
+    monkeypatch.setattr(rdp_manager, "spawn_logged", lambda args, env, logpath: spawn(args, env))
     monkeypatch.setattr(rdp_manager, "run", run)
     monkeypatch.setattr(rdp_manager, "wait_display", lambda d: True)
     monkeypatch.setattr("app.rdp.time.sleep", lambda s: None)
@@ -141,3 +142,12 @@ def test_remote_owner_only_and_missing(client, owner):
         assert getattr(client, method)(path, headers=h, **({"json": {}} if method == "post" else {})).status_code == 403
     assert client.post("/api/connections", headers=h, json={"kind": "rdp", "config": {"host": "h", "user": "u", "password": "p"}}).status_code == 403
     assert client.post("/api/remote/rdp/9999/open", headers=owner).status_code == 404
+
+
+def test_explain_failure_reasons():
+    e = rdp_manager.explain
+    assert "логин или пароль" in e("freerdp_connect failed ERRCONNECT_LOGON_FAILURE", "x")
+    assert "не отвечает" in e("transport connect failed: timed out", "x")
+    assert "NLA" in e("CredSSP: failed", "x")
+    out = e("some strange message with pw-secret-1 inside", "pw-secret-1")
+    assert "pw-secret-1" not in out and "***" in out

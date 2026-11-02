@@ -45,8 +45,33 @@ class RdpManager:
         self._sessions: dict[int, _Session] = {}
         # подменяются в тестах
         self.spawn = lambda args, env=None: subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.spawn_logged = self._spawn_logged
         self.run = lambda args, env=None, timeout=10: subprocess.run(args, env=env, capture_output=True, timeout=timeout, check=True).stdout
         self.wait_display = self._wait_display
+
+    @staticmethod
+    def _spawn_logged(args, env, logpath):
+        with open(logpath, "wb") as f:
+            return subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)
+
+    @staticmethod
+    def explain(log: str, password: str) -> str:
+        """Причина сбоя по журналу клиента RDP. Пароль в текст не попадает."""
+        text = log.replace(password, "***") if password else log
+        low = text.lower()
+        rules = [
+            (("logon_failure", "logon failure", "wrong_password", "account_locked", "status_logon"), "неверный логин или пароль"),
+            (("account_restriction", "account_disabled", "password_expired", "password_must_change"), "учётная запись отключена или пароль нужно сменить"),
+            (("connection refused", "econnrefused"), "сервер отклонил подключение: проверьте порт"),
+            (("timed out", "timeout", "unreachable", "dns", "name or service not known", "connect_transport_failed", "connect_failed"), "сервер не отвечает с нашей стороны: проверьте адрес и порт и открыт ли доступ для сервера системы"),
+            (("credssp", "nla", "authentication failure", "security negotiation", "connect_security"), "ошибка проверки подлинности (NLA/CredSSP): сервер требует другой способ входа"),
+            (("certificate", "cert_"), "проблема с сертификатом сервера"),
+        ]
+        for keys, msg in rules:
+            if any(k in low for k in keys):
+                return msg
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        return ("последнее сообщение клиента: " + lines[-1][:160]) if lines else "клиент RDP закрылся без сообщения"
 
     @staticmethod
     def _wait_display(display: int) -> bool:
@@ -89,16 +114,24 @@ class RdpManager:
         args = [shutil.which("xfreerdp3") or "xfreerdp", f"/v:{host}:{port}", f"/u:{user}", f"/p:{password}", f"/size:{W}x{H}", "/cert:ignore", "+clipboard", "+auto-reconnect", "-wallpaper"]
         if domain:
             args.append(f"/d:{domain}")
+        logpath = Path(f"/tmp/rdp-{display}.log")
         try:
-            rdp = self.spawn(args, {**os.environ, "DISPLAY": f":{display}"})
+            rdp = self.spawn_logged(args, {**os.environ, "DISPLAY": f":{display}"}, str(logpath))
         except OSError:
             xvfb.terminate()
             raise BrowserError("На сервере не установлен клиент RDP (xfreerdp): пересоберите систему") from None
         self._sessions[key] = _Session(display, xvfb, rdp)
-        time.sleep(1.5)
+        for _ in range(16):  # до 8 секунд: ошибка входа или недоступный сервер приходят не сразу
+            time.sleep(0.5)
+            if rdp.poll() is not None:
+                break
         if rdp.poll() is not None:
+            try:
+                log = logpath.read_text(errors="replace")[-3000:]
+            except OSError:
+                log = ""
             self.close(key)
-            raise BrowserError("Не удалось подключиться к терминалу: проверьте адрес, порт, логин и пароль")
+            raise BrowserError("Не удалось подключиться к терминалу: " + self.explain(log, password))
         return {"width": W, "height": H}
 
     def screenshot(self, key: int) -> bytes:
