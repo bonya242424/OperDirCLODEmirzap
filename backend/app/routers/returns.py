@@ -9,19 +9,22 @@ import re
 from collections import defaultdict
 
 import httpx
+import json
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import current_user
+from .. import connections as conn_lib
+from ..browser import VIEW_H, VIEW_W, BrowserError, manager
 from ..config import settings
 from ..guide_calc import analyze_guide, guides_dir
-from ..models import ReturnBatch, ReturnGuide, ReturnLine, ReturnSupplier, User
+from ..models import ReturnBatch, ReturnGuide, ReturnLine, ReturnSupplier, User, utcnow
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
@@ -291,6 +294,8 @@ def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
     return {
         "id": sup.id, "name": sup.name, "portal_url": sup.portal_url, "contact": sup.contact, "rules": sup.rules,
         "default_reason": sup.default_reason, "notes": sup.notes, "batches": len(ids), "positions": positions or 0,
+        "has_session": bool(sup.session_encrypted), "session_saved_at": sup.session_saved_at.isoformat() if sup.session_saved_at else None,
+        "browser_open": manager.is_open(sup.id),
     }
 
 
@@ -424,4 +429,128 @@ def delete_guide(guide_id: int, db: Session = Depends(get_db), _: User = Depends
     g = _get_guide(db, guide_id)
     (guides_dir() / g.disk_name).unlink(missing_ok=True)
     db.delete(g)
+    db.commit()
+
+
+# --- Браузер на сервере: владелец сам входит в кабинет, мы сохраняем только cookies сессии ---
+
+def _owner(me: User) -> None:
+    if me.role != "owner":
+        raise HTTPException(status_code=403, detail="Вход в кабинет поставщика выполняет владелец")
+
+
+def _browser(fn):
+    try:
+        return fn()
+    except BrowserError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@router.post("/suppliers/{supplier_id}/browser/open")
+def browser_open(supplier_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    sup = _get_supplier(db, supplier_id)
+    if not sup.portal_url:
+        raise HTTPException(status_code=422, detail="У поставщика не указан адрес кабинета: заполните его в «Данные поставщика»")
+    state = None
+    if sup.session_encrypted:
+        raw = conn_lib.decrypt(sup.session_encrypted).get("state")
+        state = json.loads(raw) if raw else None
+    _browser(lambda: manager.open(sup.id, sup.portal_url, state))
+    return {"width": VIEW_W, "height": VIEW_H}
+
+
+@router.get("/suppliers/{supplier_id}/browser/screen")
+def browser_screen(supplier_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    _get_supplier(db, supplier_id)
+    img = _browser(lambda: manager.screenshot(supplier_id))
+    return Response(content=img, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/suppliers/{supplier_id}/browser/info")
+def browser_info(supplier_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    _get_supplier(db, supplier_id)
+    return _browser(lambda: manager.info(supplier_id))
+
+
+class ClickIn(BaseModel):
+    x: float
+    y: float
+
+
+class TypeIn(BaseModel):
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def _t(cls, v: str) -> str:
+        if not v or len(v) > 500:
+            raise ValueError("Текст: от 1 до 500 символов")
+        return v
+
+
+class KeyIn(BaseModel):
+    key: str
+
+
+class ScrollIn(BaseModel):
+    dy: float
+
+
+@router.post("/suppliers/{supplier_id}/browser/click", status_code=204)
+def browser_click(supplier_id: int, body: ClickIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    _get_supplier(db, supplier_id)
+    _browser(lambda: manager.click(supplier_id, body.x, body.y))
+
+
+@router.post("/suppliers/{supplier_id}/browser/type", status_code=204)
+def browser_type(supplier_id: int, body: TypeIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Текст уходит прямо в страницу: он может быть паролем, поэтому нигде не сохраняется и не логируется."""
+    _owner(me)
+    _get_supplier(db, supplier_id)
+    _browser(lambda: manager.type_text(supplier_id, body.text))
+
+
+@router.post("/suppliers/{supplier_id}/browser/key", status_code=204)
+def browser_key(supplier_id: int, body: KeyIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    _get_supplier(db, supplier_id)
+    _browser(lambda: manager.press(supplier_id, body.key))
+
+
+@router.post("/suppliers/{supplier_id}/browser/scroll", status_code=204)
+def browser_scroll(supplier_id: int, body: ScrollIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    _get_supplier(db, supplier_id)
+    _browser(lambda: manager.scroll(supplier_id, body.dy))
+
+
+@router.post("/suppliers/{supplier_id}/browser/save")
+def browser_save(supplier_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Сохраняет cookies текущего окна: дальше агент работает под этим входом."""
+    _owner(me)
+    sup = _get_supplier(db, supplier_id)
+    state = _browser(lambda: manager.state(supplier_id))
+    sup.session_encrypted = conn_lib.encrypt({"state": json.dumps(state)})
+    sup.session_saved_at = utcnow()
+    db.commit()
+    return _supplier_out(db, sup)
+
+
+@router.post("/suppliers/{supplier_id}/browser/close", status_code=204)
+def browser_close(supplier_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    _get_supplier(db, supplier_id)
+    _browser(lambda: manager.close(supplier_id))
+
+
+@router.delete("/suppliers/{supplier_id}/browser/session", status_code=204)
+def browser_forget(supplier_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Забыть сохранённый вход: потребуется войти заново."""
+    _owner(me)
+    sup = _get_supplier(db, supplier_id)
+    sup.session_encrypted, sup.session_saved_at = "", None
     db.commit()

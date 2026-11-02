@@ -3,6 +3,7 @@ import { api } from "../../api";
 import type { User } from "../../types";
 import AgentList from "./AgentList";
 import AgentStructure from "./AgentStructure";
+import BrowserLogin from "./BrowserLogin";
 import GuidesBox from "./GuidesBox";
 
 type StepState = "wait" | "run" | "confirm" | "done" | "skip";
@@ -27,8 +28,10 @@ interface Supplier {
   notes: string;
   batches: number;
   positions: number;
+  has_session: boolean;
+  session_saved_at: string | null;
 }
-type SupplierForm = Omit<Supplier, "id" | "batches" | "positions"> & { id: number | null };
+type SupplierForm = Omit<Supplier, "id" | "batches" | "positions" | "has_session" | "session_saved_at"> & { id: number | null };
 const EMPTY_SUP: SupplierForm = { id: null, name: "", portal_url: "", contact: "", rules: "", default_reason: "", notes: "" };
 
 interface Summary {
@@ -57,10 +60,11 @@ const TEMPLATE: Omit<Step, "state">[] = [
 
 
 /** Агент по возвратам. Таблица и саммари настоящие; шаги работы на сайте пока показаны для примера: запуск на сайте подключим после первой проверки. */
-function ReturnsPanel() {
+function ReturnsPanel({ me }: { me: User }) {
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [supSel, setSupSel] = useState<number | null>(null);
   const [supForm, setSupForm] = useState<SupplierForm | null>(null);
+  const [loginOpen, setLoginOpen] = useState(false);
   const [allBatches, setBatches] = useState<Summary[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -197,6 +201,16 @@ function ReturnsPanel() {
               </div>
             </header>
             {supplier.rules && <p className="muted small">Правила: {supplier.rules}</p>}
+            {me.role === "owner" && (
+              <div className="ag-session">
+                <span className={supplier.has_session ? "good" : "muted"}>
+                  {supplier.has_session ? `Вход в кабинет сохранён ${supplier.session_saved_at ? new Date(supplier.session_saved_at).toLocaleString("ru-RU") : ""}` : "Вход в кабинет не выполнен"}
+                </span>
+                <button onClick={() => setLoginOpen(true)} disabled={!supplier.portal_url} title={supplier.portal_url ? "" : "Укажите адрес кабинета в данных поставщика"}>
+                  {supplier.has_session ? "Войти заново" : "Войти в кабинет"}
+                </button>
+              </div>
+            )}
             <div className="ag-upload">
               <label className="ag-file">
                 + Загрузить CSV
@@ -278,6 +292,9 @@ function ReturnsPanel() {
         )}
       </section>
 
+      {loginOpen && supplier && (
+        <BrowserLogin supplierId={supplier.id} name={supplier.name} onClose={() => { setLoginOpen(false); load(); }} />
+      )}
       {supForm && (
         <div className="modal-bg" onPointerDown={() => setSupForm(null)}>
           <form className="modal" onSubmit={saveSupplier} onPointerDown={(e) => e.stopPropagation()}>
@@ -324,7 +341,7 @@ export default function AgentsApp({ me }: { me: User }) {
         <button className={`chip${tab === "structure" ? " on" : ""}`} onClick={() => setTab("structure")}>Структура</button>
         <button className={`chip${tab === "returns" ? " on" : ""}`} onClick={() => setTab("returns")}>Возвраты поставщикам</button>
       </div>
-      <div className="ag-body">{tab === "mine" ? <AgentList me={me} /> : tab === "structure" ? <AgentStructure /> : <ReturnsPanel />}</div>
+      <div className="ag-body">{tab === "mine" ? <AgentList me={me} /> : tab === "structure" ? <AgentStructure /> : <ReturnsPanel me={me} />}</div>
     </div>
   );
 }
