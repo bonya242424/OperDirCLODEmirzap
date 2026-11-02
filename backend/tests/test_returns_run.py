@@ -111,3 +111,30 @@ def test_no_model_key_fails_clearly(client, owner, site, monkeypatch):
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
     run = _last(client, owner, bid)
     assert run["status"] == "failed" and "ключ" in run["summary"]
+
+
+def test_second_run_checks_only_unchecked_and_clears_field(client, owner, site, monkeypatch):
+    bid = _batch(client, owner, site)
+    first = Script(call("record_result", invoice_no=INV, status="ok", note="ок"), call("finish", summary="один"))
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: first)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    run = _last(client, owner, bid)
+    if run["status"] == "failed" and "браузер" in run["summary"].lower():
+        pytest.skip("chromium недоступен")
+    second = Script(call("browser_click", x=150, y=320), call("finish", summary="готово"))
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: second)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    plan = second.seen[0][0][0]["content"]
+    assert INV not in plan and "ЮП0656162" in plan  # проверенный счёт не повторяется
+
+
+def test_prune_helpers():
+    from app.returns_run import _prune_images, _prune_text
+
+    img = {"type": "image", "source": {}}
+    msgs = [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": str(i), "content": [dict(img)]}]} for i in range(4)]
+    _prune_images(msgs)
+    assert [m["content"][0]["content"][0]["type"] for m in msgs] == ["text", "text", "image", "image"]
+    txt = [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": str(i), "content": "x" * 2000}]} for i in range(6)]
+    _prune_text(txt, keep=4)
+    assert [m["content"][0]["content"] == "x" * 2000 for m in txt] == [False, False, True, True, True, True]

@@ -191,14 +191,16 @@ class BrowserManager:
             raise BrowserError(f"Кнопка «{label.strip()}» заблокирована: в режиме проверки ничего не отправляется")
         await page.mouse.click(x, y)
 
-    def safe_type(self, key: int, text: str) -> None:
-        self._run(lambda: self._safe_type(key, text))
+    def safe_type(self, key: int, text: str, clear: bool = True) -> None:
+        self._run(lambda: self._safe_type(key, text, clear))
 
-    async def _safe_type(self, key: int, text: str) -> None:
+    async def _safe_type(self, key: int, text: str, clear: bool = True) -> None:
         page = self._get(key).page
         kind = await page.evaluate("(document.activeElement && document.activeElement.type) || ''")
         if kind == "password":
             raise BrowserError("Пароли агент не вводит: войдите сами через «Войти в кабинет»")
+        if clear:
+            await page.keyboard.press("Control+A")  # заменяем содержимое поля, а не дописываем к нему
         await page.keyboard.type(text, delay=20)
 
     def safe_press(self, key: int, name: str) -> None:
