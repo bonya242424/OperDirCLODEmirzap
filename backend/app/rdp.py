@@ -175,7 +175,8 @@ class RdpManager:
             if len(logs) > 1 and not reason.startswith("неверный логин"):
                 reason += f" (пробовали {len(logs)} способа защиты соединения)"
             raw = self.tail(logs[-1] if logs else "", password)
-            raise BrowserError("Не удалось подключиться к терминалу: " + reason + (f". Ответ клиента: {raw}" if raw else ""))
+            ip = self.egress_ip()
+            raise BrowserError("Не удалось подключиться к терминалу: " + reason + (f". Ответ клиента: {raw}" if raw else "") + (f". Наши подключения идут с адреса {ip}: он должен быть в списке разрешённых" if ip else ""))
         self._sessions[key] = _Session(display, xvfb, rdp)
         return {"width": W, "height": H}
 

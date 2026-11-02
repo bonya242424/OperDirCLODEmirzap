@@ -84,6 +84,7 @@ def fake_rdp(monkeypatch):
     monkeypatch.setattr(rdp_manager, "spawn", spawn)
     monkeypatch.setattr(rdp_manager, "spawn_logged", lambda args, env, logpath: spawn(args, env))
     monkeypatch.setattr(rdp_manager, "precheck", lambda host, port: None)
+    monkeypatch.setattr(rdp_manager, "egress_ip", lambda: "203.0.113.7")
     monkeypatch.setattr(rdp_manager, "run", run)
     monkeypatch.setattr(rdp_manager, "wait_display", lambda d: True)
     monkeypatch.setattr("app.rdp.time.sleep", lambda s: None)
