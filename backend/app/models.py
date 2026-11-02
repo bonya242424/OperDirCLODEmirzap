@@ -215,6 +215,22 @@ class ReturnSupplier(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ReturnRun(Base):
+    """Запуск агента по документу с возвратами. mode=check: только проверка счетов на сайте, ничего не отправляется."""
+
+    __tablename__ = "return_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("return_batches.id", ondelete="CASCADE"), index=True)
+    mode: Mapped[str] = mapped_column(String(16), default="check")
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running | done | failed | stopped
+    summary: Mapped[str] = mapped_column(Text, default="")
+    log: Mapped[str] = mapped_column(Text, default="[]")  # JSON-список строк
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ReturnGuide(Base):
     """Видео «как оформлять возврат» у поставщика и инструкция, которую ИИ составил по кадрам."""
 

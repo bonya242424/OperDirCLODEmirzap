@@ -503,3 +503,6 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .browser-frame img { width: 100%; height: auto; cursor: pointer; user-select: none; }
 .browser-input { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
 .browser-input input[type="password"], .browser-input input[type="text"] { flex: 1; }
+
+.inv-checked { color: var(--good); }
+.inv-failed { color: var(--bad); }

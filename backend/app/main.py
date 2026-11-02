@@ -10,6 +10,7 @@ from .integrations.service import ensure_rows
 from .models import User
 from . import search as search_index
 from .guide_calc import reset_stale as reset_stale_guides
+from .returns_run import reset_stale as reset_stale_runs
 from .metric_calc import reset_stale
 from .routers import search as search_router
 from . import changelog as changelog_data
@@ -59,6 +60,7 @@ async def lifespan(_: FastAPI):
         changelog_data.sync(db)
     reset_stale()
     reset_stale_guides()
+    reset_stale_runs()
     scheduler = start_scheduler() if settings.scheduler_enabled else None
     yield
     if scheduler is not None:

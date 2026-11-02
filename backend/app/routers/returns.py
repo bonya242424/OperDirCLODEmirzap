@@ -24,7 +24,8 @@ from .. import connections as conn_lib
 from ..browser import VIEW_H, VIEW_W, BrowserError, manager
 from ..config import settings
 from ..guide_calc import analyze_guide, guides_dir
-from ..models import ReturnBatch, ReturnGuide, ReturnLine, ReturnSupplier, User, utcnow
+from ..models import ReturnBatch, ReturnGuide, ReturnLine, ReturnRun, ReturnSupplier, User, utcnow
+from ..returns_run import run_check
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
@@ -168,7 +169,7 @@ def import_url(body: UrlIn, db: Session = Depends(get_db), me: User = Depends(cu
 
 def _summary(db: Session, batch: ReturnBatch) -> dict:
     lines = list(db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch.id).order_by(ReturnLine.id)))
-    by_inv: dict[str, dict] = defaultdict(lambda: {"positions": 0, "qty": 0, "date": ""})
+    by_inv: dict[str, dict] = defaultdict(lambda: {"positions": 0, "qty": 0, "date": "", "status": "pending", "note": ""})
     by_wh: dict[str, dict] = defaultdict(lambda: {"positions": 0, "qty": 0})
     by_reason: dict[str, int] = defaultdict(int)
     by_status: dict[str, int] = defaultdict(int)
@@ -177,6 +178,8 @@ def _summary(db: Session, batch: ReturnBatch) -> dict:
         i["positions"] += 1
         i["qty"] += ln.qty
         i["date"] = ln.invoice_date
+        if ln.status != "pending":
+            i["status"], i["note"] = ln.status, ln.note
         w = by_wh[ln.warehouse or "не указан"]
         w["positions"] += 1
         w["qty"] += ln.qty
@@ -554,3 +557,54 @@ def browser_forget(supplier_id: int, db: Session = Depends(get_db), me: User = D
     sup = _get_supplier(db, supplier_id)
     sup.session_encrypted, sup.session_saved_at = "", None
     db.commit()
+
+
+def _run_out(r: ReturnRun) -> dict:
+    return {
+        "id": r.id, "batch_id": r.batch_id, "mode": r.mode, "status": r.status, "summary": r.summary,
+        "log": json.loads(r.log or "[]"), "created_at": r.created_at.isoformat(),
+        "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+    }
+
+
+@router.post("/batches/{batch_id}/check-run", status_code=202)
+def start_check(batch_id: int, tasks: BackgroundTasks, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Проверка счетов на сайте поставщика под сохранённым входом. Ничего не отправляет."""
+    _owner(me)
+    batch = db.get(ReturnBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    sup = db.get(ReturnSupplier, batch.supplier_id) if batch.supplier_id else None
+    if sup is None or not sup.portal_url:
+        raise HTTPException(status_code=422, detail="У поставщика не указан адрес кабинета")
+    if not sup.session_encrypted:
+        raise HTTPException(status_code=422, detail="Сначала войдите в кабинет и сохраните вход")
+    busy = db.scalar(
+        select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)
+    )
+    if busy:
+        raise HTTPException(status_code=409, detail="У этого поставщика проверка уже идёт")
+    run = ReturnRun(batch_id=batch.id, mode="check", created_by=me.id)
+    db.add(run)
+    db.commit()
+    tasks.add_task(run_check, run.id)
+    return _run_out(run)
+
+
+@router.get("/batches/{batch_id}/runs")
+def list_runs(batch_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    if db.get(ReturnBatch, batch_id) is None:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    return [_run_out(r) for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == batch_id).order_by(ReturnRun.id.desc()).limit(10))]
+
+
+@router.post("/runs/{run_id}/stop")
+def stop_run(run_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    r = db.get(ReturnRun, run_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="Запуск не найден")
+    if r.status == "running":
+        r.status = "stopped"
+        db.commit()
+    return _run_out(r)

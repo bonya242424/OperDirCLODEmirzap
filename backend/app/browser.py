@@ -140,6 +140,69 @@ class BrowserManager:
     async def _scroll(self, key: int, dy: float) -> None:
         await self._get(key).page.mouse.wheel(0, dy)
 
+    # --- режим проверки для агента: опасные действия блокируются кодом, а не просьбой к модели ---
+    RISKY = r"отправ|подтверд|создать заяв|удал|submit|send|confirm|delete"
+
+    def goto(self, key: int, url: str) -> None:
+        self._run(self._goto(key, url), timeout=60.0)
+
+    async def _goto(self, key: int, url: str) -> None:
+        await self._get(key).page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+    def read_text(self, key: int, limit: int = 6000) -> str:
+        return self._run(self._read(key, limit))
+
+    async def _read(self, key: int, limit: int) -> str:
+        page = self._get(key).page
+        return (await page.evaluate("document.body ? document.body.innerText : ''"))[:limit]
+
+    def safe_click(self, key: int, x: float, y: float) -> None:
+        if not (0 <= x <= VIEW_W and 0 <= y <= VIEW_H):
+            raise BrowserError("Клик за пределами окна")
+        self._run(self._safe_click(key, x, y))
+
+    async def _safe_click(self, key: int, x: float, y: float) -> None:
+        import re
+
+        page = self._get(key).page
+        label = await page.evaluate(
+            """([x, y]) => { const el = document.elementFromPoint(x, y); if (!el) return '';
+            const t = el.closest('button,a,input,[role=button],label,li,td'); const n = t || el;
+            return ((n.innerText || n.value || n.title || n.getAttribute('aria-label') || '') + '').slice(0, 120); }""",
+            [x, y],
+        )
+        if re.search(self.RISKY, label, re.I):
+            raise BrowserError(f"Кнопка «{label.strip()}» заблокирована: в режиме проверки ничего не отправляется")
+        await page.mouse.click(x, y)
+
+    def safe_type(self, key: int, text: str) -> None:
+        self._run(self._safe_type(key, text))
+
+    async def _safe_type(self, key: int, text: str) -> None:
+        page = self._get(key).page
+        kind = await page.evaluate("(document.activeElement && document.activeElement.type) || ''")
+        if kind == "password":
+            raise BrowserError("Пароли агент не вводит: войдите сами через «Войти в кабинет»")
+        await page.keyboard.type(text, delay=20)
+
+    def safe_press(self, key: int, name: str) -> None:
+        if name not in KEYS:
+            raise BrowserError("Эта клавиша не поддерживается")
+        self._run(self._safe_press(key, name))
+
+    async def _safe_press(self, key: int, name: str) -> None:
+        import re
+
+        page = self._get(key).page
+        if name == "Enter":
+            texts = await page.evaluate(
+                """() => { const f = document.activeElement && document.activeElement.form; if (!f) return [];
+                return [...f.querySelectorAll('button,input[type=submit]')].map(b => (b.innerText || b.value || '') + ''); }"""
+            )
+            if any(re.search(self.RISKY, t, re.I) for t in texts):
+                raise BrowserError("Enter заблокирован: в этой форме есть кнопка отправки")
+        await page.keyboard.press(name)
+
     def info(self, key: int) -> dict:
         return self._run(self._info(key))
 

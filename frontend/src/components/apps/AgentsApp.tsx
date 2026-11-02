@@ -13,10 +13,6 @@ interface Step {
   needsConfirm?: boolean;
   state: StepState;
 }
-interface LogLine {
-  at: string;
-  text: string;
-}
 
 interface Supplier {
   id: number;
@@ -34,6 +30,15 @@ interface Supplier {
 type SupplierForm = Omit<Supplier, "id" | "batches" | "positions" | "has_session" | "session_saved_at"> & { id: number | null };
 const EMPTY_SUP: SupplierForm = { id: null, name: "", portal_url: "", contact: "", rules: "", default_reason: "", notes: "" };
 
+interface Run {
+  id: number;
+  status: "running" | "done" | "failed" | "stopped";
+  summary: string;
+  log: string[];
+  created_at: string;
+}
+const INV_STATUS: Record<string, string> = { pending: "не проверен", checked: "можно оформить", failed: "есть проблема", submitted: "отправлен", skipped: "пропущен" };
+
 interface Summary {
   id: number;
   supplier_id: number | null;
@@ -42,7 +47,7 @@ interface Summary {
   source: string;
   positions: number;
   qty: number;
-  invoices: { invoice_no: string; positions: number; qty: number; date: string }[];
+  invoices: { invoice_no: string; positions: number; qty: number; date: string; status: string; note: string }[];
   warehouses: { warehouse: string; positions: number; qty: number }[];
   reasons: { reason: string; qty: number }[];
   status: Record<string, number>;
@@ -70,7 +75,6 @@ function ReturnsPanel({ me }: { me: User }) {
   const [error, setError] = useState("");
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
-  const [log, setLog] = useState<LogLine[]>([]);
   const running = false;
   const supplier = suppliers?.find((x) => x.id === supSel) ?? null;
   const batches = allBatches?.filter((b) => b.supplier_id === supSel) ?? null;
@@ -123,7 +127,45 @@ function ReturnsPanel({ me }: { me: User }) {
     }
   }
 
-  const reset = () => setLog([]);
+  const reset = () => undefined;
+  const [runs, setRuns] = useState<Run[]>([]);
+  const lastRun = runs[0] ?? null;
+  const checking = lastRun?.status === "running";
+
+  const loadRuns = useCallback(() => {
+    if (selected === null) return setRuns([]);
+    api<Run[]>(`/returns/batches/${selected}/runs`).then(setRuns).catch(() => setRuns([]));
+  }, [selected]);
+  useEffect(loadRuns, [loadRuns]);
+  useEffect(() => {
+    if (!checking) return;
+    const t = setInterval(() => {
+      loadRuns();
+      load();
+    }, 2500);
+    return () => clearInterval(t);
+  }, [checking, loadRuns, load]);
+
+  async function startCheck() {
+    if (!current) return;
+    setError("");
+    try {
+      await api(`/returns/batches/${current.id}/check-run`, { method: "POST" });
+      loadRuns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    }
+  }
+
+  async function stopCheck() {
+    if (!lastRun) return;
+    try {
+      await api(`/returns/runs/${lastRun.id}/stop`, { method: "POST" });
+      loadRuns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    }
+  }
 
   async function remove(b: Summary) {
     if (!window.confirm(`Удалить сборку ${b.number || b.id} из системы? Сама таблица не изменится.`)) return;
@@ -246,7 +288,13 @@ function ReturnsPanel({ me }: { me: User }) {
               </div>
               <div className="ag-actions">
                 <button className="ghost" onClick={() => remove(current)} disabled={running}>Удалить</button>
-                <button className="primary" disabled title="Запуск на сайте ещё не подключён: сначала браузер на сервере и вход в кабинет">Запустить на сайте</button>
+                {me.role === "owner" && (checking ? (
+                  <button className="danger" onClick={stopCheck}>Остановить</button>
+                ) : (
+                  <button className="primary" onClick={startCheck} disabled={!supplier?.has_session} title={supplier?.has_session ? "Агент найдёт счета на сайте и проверит, можно ли вернуть. Ничего не отправляет" : "Сначала войдите в кабинет и сохраните вход"}>
+                    Проверить счета на сайте
+                  </button>
+                ))}
               </div>
             </header>
 
@@ -262,10 +310,10 @@ function ReturnsPanel({ me }: { me: User }) {
 
             <h4>По счетам: одна заявка на счёт</h4>
             <table className="ag-table">
-              <thead><tr><th>Счёт</th><th>Дата</th><th>Позиций</th><th>Штук</th></tr></thead>
+              <thead><tr><th>Счёт</th><th>Дата</th><th>Позиций</th><th>Штук</th><th>Проверка на сайте</th></tr></thead>
               <tbody>
                 {current.invoices.map((i) => (
-                  <tr key={i.invoice_no}><td>{i.invoice_no}</td><td>{i.date}</td><td>{i.positions}</td><td>{i.qty}</td></tr>
+                  <tr key={i.invoice_no}><td>{i.invoice_no}</td><td>{i.date}</td><td>{i.positions}</td><td>{i.qty}</td><td className={`inv-${i.status}`}>{INV_STATUS[i.status] ?? i.status}{i.note && <span className="muted small"> · {i.note}</span>}</td></tr>
                 ))}
               </tbody>
             </table>
@@ -274,9 +322,10 @@ function ReturnsPanel({ me }: { me: User }) {
             </p>
 
             <div className="ag-problem" role="status">
-              Запуск на сайте поставщика ещё не подключён: система ничего не открывала и не отправляла. Сейчас доступны разбор таблицы и видео-инструкция. Ниже план шагов, который агент будет выполнять после подключения.
+              Пока агент только проверяет счета на сайте: что найден, не возвращён ли ранее, сходится ли количество. Оформление и отправка заявок ещё не включены, кнопки отправки заблокированы.
             </div>
-            <h4>План запуска (пока не выполняется)</h4>
+            {lastRun && lastRun.status !== "running" && lastRun.summary && <p className={lastRun.status === "failed" ? "error" : "muted"}>{lastRun.summary}</p>}
+            <h4>Что делает агент</h4>
             <ol className="ag-steps">
               {TEMPLATE.map((s, i) => (
                 <li key={i} className="st-wait">
@@ -318,14 +367,17 @@ function ReturnsPanel({ me }: { me: User }) {
 
       <aside className="ag-log">
         <h3>Журнал запуска</h3>
-        {log.length === 0 ? (
-          <p className="muted small">Здесь появится каждое действие агента со временем. Владелец видит журнал всех сотрудников.</p>
+        {!lastRun ? (
+          <p className="muted small">Здесь появится каждое действие агента во время проверки.</p>
         ) : (
-          <ul>
-            {log.map((l, i) => (
-              <li key={i}><span className="muted small">{l.at}</span> {l.text}</li>
-            ))}
-          </ul>
+          <>
+            <p className="muted small">{checking ? "Идёт проверка…" : { done: "Проверка завершена", failed: "Проверка не удалась", stopped: "Остановлена", running: "" }[lastRun.status]}</p>
+            <ul>
+              {[...lastRun.log].reverse().map((l, i) => (
+                <li key={i}>{l}</li>
+              ))}
+            </ul>
+          </>
         )}
       </aside>
     </div>
