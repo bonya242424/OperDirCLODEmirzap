@@ -70,7 +70,7 @@ class AnthropicProvider:
 
         try:
             response = self._client.messages.create(
-                model=self._model, max_tokens=2000, system=system, messages=messages
+                model=self._model, max_tokens=8000, system=system, messages=messages
             )
         except APIStatusError as exc:
             raise LLMError(f"API модели ответил кодом {exc.status_code}") from exc
@@ -78,7 +78,10 @@ class AnthropicProvider:
             raise LLMConnectionError("Нет соединения с API модели") from exc
         text = "".join(block.text for block in response.content if block.type == "text").strip()
         if not text:
-            raise LLMError("Модель вернула пустой ответ")
+            reason = {"refusal": "модель отказалась отвечать на этот материал", "max_tokens": "ответ не уместился в лимит"}.get(
+                str(response.stop_reason), f"причина: {response.stop_reason}"
+            )
+            raise LLMError(f"Модель вернула пустой ответ ({reason})")
         return text
 
 
@@ -86,7 +89,7 @@ class AnthropicProvider:
         from anthropic import APIConnectionError, APIStatusError
 
         try:
-            kwargs: dict[str, Any] = {"model": self._model, "max_tokens": 3000, "system": system, "messages": messages}
+            kwargs: dict[str, Any] = {"model": self._model, "max_tokens": 8000, "system": system, "messages": messages}
             if tools:
                 kwargs["tools"] = tools
             response = self._client.messages.create(**kwargs)
