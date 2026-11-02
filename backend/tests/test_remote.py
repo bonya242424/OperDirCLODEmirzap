@@ -161,3 +161,8 @@ def test_precheck_unreachable_names_our_ip(monkeypatch):
     with pytest.raises(BrowserError) as e:
         rdp_manager._precheck("127.0.0.1", 1)
     assert "203.0.113.7" in str(e.value) and "не отвечает" in str(e.value)
+
+
+def test_tail_hides_password():
+    out = rdp_manager.tail("a\nERRCONNECT_X pw-secret-1\nlast line", "pw-secret-1")
+    assert "pw-secret-1" not in out and "last line" in out

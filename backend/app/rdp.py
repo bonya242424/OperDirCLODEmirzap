@@ -56,6 +56,13 @@ class RdpManager:
             return subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)
 
     @staticmethod
+    def tail(log: str, password: str, lines: int = 3) -> str:
+        """Последние строки журнала клиента без пароля и логина, чтобы показать настоящий код ошибки."""
+        text = log.replace(password, "***") if password else log
+        rows = [" ".join(r.split())[:140] for r in text.splitlines() if r.strip()]
+        return " | ".join(rows[-lines:])[:400]
+
+    @staticmethod
     def explain(log: str, password: str) -> str:
         """Причина сбоя по журналу клиента RDP. Пароль в текст не попадает."""
         text = log.replace(password, "***") if password else log
@@ -136,7 +143,7 @@ class RdpManager:
         if not self.wait_display(display):
             xvfb.terminate()
             raise BrowserError("Не удалось запустить виртуальный экран")
-        base = [shutil.which("xfreerdp3") or "xfreerdp", f"/v:{host}:{port}", f"/u:{user}", f"/p:{password}", f"/size:{W}x{H}", "/cert:ignore", "+clipboard", "+auto-reconnect", "-wallpaper"]
+        base = [shutil.which("xfreerdp3") or "xfreerdp", f"/v:{host}:{port}", f"/u:{user}", f"/p:{password}", f"/size:{W}x{H}", "/cert:ignore", "+clipboard", "+auto-reconnect", "-wallpaper", "/log-level:INFO"]
         if domain:
             base.append(f"/d:{domain}")
         # Разные серверы требуют разный способ защиты соединения: пробуем по очереди
@@ -167,7 +174,8 @@ class RdpManager:
             reason = self.explain(logs[0] if logs else "", password)
             if len(logs) > 1 and not reason.startswith("неверный логин"):
                 reason += f" (пробовали {len(logs)} способа защиты соединения)"
-            raise BrowserError("Не удалось подключиться к терминалу: " + reason)
+            raw = self.tail(logs[-1] if logs else "", password)
+            raise BrowserError("Не удалось подключиться к терминалу: " + reason + (f". Ответ клиента: {raw}" if raw else ""))
         self._sessions[key] = _Session(display, xvfb, rdp)
         return {"width": W, "height": H}
 
