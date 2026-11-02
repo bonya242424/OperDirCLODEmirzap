@@ -158,10 +158,16 @@ function ReturnsPanel({ me }: { me: User }) {
   const lastRun = runs[0] ?? null;
   const checking = lastRun?.status === "running";
 
+  const [runsError, setRunsError] = useState("");
   const loadRuns = useCallback(() => {
-    if (selected === null) return setRuns([]);
-    api<Run[]>(`/returns/batches/${selected}/runs`).then(setRuns).catch(() => setRuns([]));
-  }, [selected]);
+    if (supSel === null) return setRuns([]);
+    api<Run[]>(`/returns/suppliers/${supSel}/runs`)
+      .then((r) => {
+        setRuns(r);
+        setRunsError("");
+      })
+      .catch((e) => setRunsError(e instanceof Error ? e.message : "Не удалось загрузить журнал"));
+  }, [supSel]);
   useEffect(loadRuns, [loadRuns]);
   useEffect(() => {
     if (!checking) return;
@@ -175,11 +181,12 @@ function ReturnsPanel({ me }: { me: User }) {
   async function startCheck() {
     if (!current) return;
     setError("");
+    setRunsError("");
     try {
       await api(`/returns/batches/${current.id}/check-run`, { method: "POST" });
       loadRuns();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка");
+      setRunsError(err instanceof Error ? err.message : "Ошибка");
     }
   }
 
@@ -393,8 +400,9 @@ function ReturnsPanel({ me }: { me: User }) {
 
       <aside className="ag-log">
         <h3>Журнал запуска</h3>
+        {runsError && <p className="error">{runsError}</p>}
         {!lastRun ? (
-          <p className="muted small">Здесь появится каждое действие агента во время проверки.</p>
+          <p className="muted small">Запусков ещё не было. Нажмите «Проверить счета на сайте»: здесь появится каждое действие агента.</p>
         ) : (
           <>
             <p className="muted small">{checking ? "Идёт проверка…" : { done: "Проверка завершена", failed: "Проверка не удалась", stopped: "Остановлена", running: "" }[lastRun.status]}</p>

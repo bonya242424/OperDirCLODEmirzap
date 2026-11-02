@@ -138,3 +138,13 @@ def test_prune_helpers():
     txt = [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": str(i), "content": "x" * 2000}]} for i in range(6)]
     _prune_text(txt, keep=4)
     assert [m["content"][0]["content"] == "x" * 2000 for m in txt] == [False, False, True, True, True, True]
+
+
+def test_supplier_runs_endpoint(client, owner, site, monkeypatch):
+    bid = _batch(client, owner, site)
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: None)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    sid = client.get("/api/returns/suppliers", headers=owner).json()[0]["id"]
+    runs = client.get(f"/api/returns/suppliers/{sid}/runs", headers=owner).json()
+    assert len(runs) == 1 and runs[0]["batch_id"] == bid
+    assert client.get("/api/returns/suppliers/9999/runs", headers=owner).status_code == 404

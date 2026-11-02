@@ -603,6 +603,17 @@ def start_check(batch_id: int, tasks: BackgroundTasks, db: Session = Depends(get
     return _run_out(run)
 
 
+@router.get("/suppliers/{supplier_id}/runs")
+def supplier_runs(supplier_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    """Последние запуски по всем документам поставщика (журнал не теряется при смене документа)."""
+    _get_supplier(db, supplier_id)
+    q = (
+        select(ReturnRun).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id)
+        .where(ReturnBatch.supplier_id == supplier_id).order_by(ReturnRun.id.desc()).limit(10)
+    )
+    return [_run_out(r) for r in db.scalars(q)]
+
+
 @router.get("/batches/{batch_id}/runs")
 def list_runs(batch_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
     if db.get(ReturnBatch, batch_id) is None:
