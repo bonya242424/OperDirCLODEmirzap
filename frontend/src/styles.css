@@ -506,3 +506,4 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 
 .inv-checked { color: var(--good); }
 .inv-failed { color: var(--bad); }
+.run-shot { width: 100%; border: 1px solid var(--line); border-radius: var(--r-md); margin: 6px 0; }

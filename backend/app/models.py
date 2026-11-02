@@ -229,6 +229,7 @@ class ReturnRun(Base):
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_shot: Mapped[str] = mapped_column(Text, default="")  # последний скриншот окна (base64 jpeg) для разбора, что увидел агент
 
 
 class ReturnGuide(Base):

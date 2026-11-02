@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
-import { api } from "../../api";
+import { api, getToken } from "../../api";
 import type { User } from "../../types";
 import AgentList from "./AgentList";
 import AgentStructure from "./AgentStructure";
@@ -34,9 +34,35 @@ interface Run {
   id: number;
   status: "running" | "done" | "failed" | "stopped";
   summary: string;
+  has_shot: boolean;
   log: string[];
   created_at: string;
 }
+function RunShot({ runId }: { runId: number }) {
+  const [url, setUrl] = useState("");
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    let made = "";
+    fetch(`/api/returns/runs/${runId}/shot`, { headers: { Authorization: `Bearer ${getToken() ?? ""}` } })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error("Скриншота нет"))))
+      .then((b) => {
+        made = URL.createObjectURL(b);
+        setUrl(made);
+      })
+      .catch(() => setUrl(""));
+    return () => {
+      if (made) URL.revokeObjectURL(made);
+    };
+  }, [open, runId]);
+  return (
+    <div>
+      <button className="ghost" onClick={() => setOpen((v) => !v)}>{open ? "Скрыть, что видел агент" : "Что видел агент в конце"}</button>
+      {open && (url ? <img className="run-shot" src={url} alt="Последний экран агента" /> : <p className="muted small">Загружаю…</p>)}
+    </div>
+  );
+}
+
 const INV_STATUS: Record<string, string> = { pending: "не проверен", checked: "можно оформить", failed: "есть проблема", submitted: "отправлен", skipped: "пропущен" };
 
 interface Summary {
@@ -214,7 +240,7 @@ function ReturnsPanel({ me }: { me: User }) {
             <li key={x.id}>
               <button className={x.id === supSel ? "on" : ""} onClick={() => { setSupSel(x.id); reset(); }} disabled={running}>
                 <strong>{x.name}</strong>
-                <span className="muted small">{x.batches} док. · {x.positions} поз.</span>
+                <span className="muted small">{x.batches} док. · в последнем {x.positions} поз.</span>
               </button>
             </li>
           ))}
@@ -372,6 +398,7 @@ function ReturnsPanel({ me }: { me: User }) {
         ) : (
           <>
             <p className="muted small">{checking ? "Идёт проверка…" : { done: "Проверка завершена", failed: "Проверка не удалась", stopped: "Остановлена", running: "" }[lastRun.status]}</p>
+            {lastRun.has_shot && !checking && <RunShot runId={lastRun.id} />}
             <ul>
               {[...lastRun.log].reverse().map((l, i) => (
                 <li key={i}>{l}</li>

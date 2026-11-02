@@ -83,3 +83,16 @@ def test_legacy_import_creates_supplier_by_name(client, owner):
     s = _upload(client, owner, SAMPLE.read_bytes()).json()
     names = [x["name"] for x in client.get("/api/returns/suppliers", headers=owner).json()]
     assert s["supplier"] in names and s["supplier_id"] is not None
+
+
+def test_weekly_documents_are_not_summed_and_reupload_replaces(client, owner):
+    sup = _supplier(client, owner, name="Недели").json()
+    data = SAMPLE.read_bytes()
+    up = lambda d: client.post(f"/api/returns/import?supplier_id={sup['id']}", headers=owner, files={"file": ("t.csv", d, "text/csv")})
+    up(data)
+    up(data)  # тот же документ: заменяется, а не дублируется
+    assert len(client.get(f"/api/returns/batches?supplier_id={sup['id']}", headers=owner).json()) == 1
+    other = data.decode().replace("№000007007", "№000007008").encode()
+    assert up(other).status_code == 201  # другая неделя: отдельный документ
+    got = next(x for x in client.get("/api/returns/suppliers", headers=owner).json() if x["id"] == sup["id"])
+    assert got["batches"] == 2 and got["positions"] == 38  # последний документ, а не 76

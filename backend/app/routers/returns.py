@@ -117,6 +117,17 @@ def _save(db: Session, text: str, source: str, me: User, supplier: ReturnSupplie
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     sup = supplier or _supplier_by_name(db, name, me)
+    if number.strip():
+        # тот же документ загружен повторно (например, обновили таблицу): заменяем, но не затираем отправленное
+        for old in db.scalars(select(ReturnBatch).where(ReturnBatch.supplier_id == sup.id, ReturnBatch.number == number[:200])).all():
+            if db.scalar(select(ReturnLine.id).where(ReturnLine.batch_id == old.id, ReturnLine.status == "submitted").limit(1)):
+                raise HTTPException(status_code=409, detail=f"Документ {number} уже загружен, и по нему есть отправленные заявки: удалить его нельзя")
+            for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == old.id)):
+                db.delete(r)
+            for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == old.id)):
+                db.delete(r)
+            db.delete(old)
+        db.flush()
     batch = ReturnBatch(supplier=sup.name, supplier_id=sup.id, number=number[:200], source=source[:500], created_by=me.id)
     db.add(batch)
     db.flush()
@@ -292,8 +303,9 @@ def _get_supplier(db: Session, supplier_id: int) -> ReturnSupplier:
 
 
 def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
-    ids = list(db.scalars(select(ReturnBatch.id).where(ReturnBatch.supplier_id == sup.id)))
-    positions = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id.in_(ids))) if ids else 0
+    ids = list(db.scalars(select(ReturnBatch.id).where(ReturnBatch.supplier_id == sup.id).order_by(ReturnBatch.id.desc())))
+    # каждый документ это отдельная неделя возвратов: числа не суммируем, показываем последний
+    positions = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == ids[0])) if ids else 0
     return {
         "id": sup.id, "name": sup.name, "portal_url": sup.portal_url, "contact": sup.contact, "rules": sup.rules,
         "default_reason": sup.default_reason, "notes": sup.notes, "batches": len(ids), "positions": positions or 0,
@@ -562,7 +574,7 @@ def browser_forget(supplier_id: int, db: Session = Depends(get_db), me: User = D
 def _run_out(r: ReturnRun) -> dict:
     return {
         "id": r.id, "batch_id": r.batch_id, "mode": r.mode, "status": r.status, "summary": r.summary,
-        "log": json.loads(r.log or "[]"), "created_at": r.created_at.isoformat(),
+        "has_shot": bool(r.last_shot), "log": json.loads(r.log or "[]"), "created_at": r.created_at.isoformat(),
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
     }
 
@@ -596,6 +608,18 @@ def list_runs(batch_id: int, db: Session = Depends(get_db), _: User = Depends(cu
     if db.get(ReturnBatch, batch_id) is None:
         raise HTTPException(status_code=404, detail="Документ не найден")
     return [_run_out(r) for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == batch_id).order_by(ReturnRun.id.desc()).limit(10))]
+
+
+@router.get("/runs/{run_id}/shot")
+def run_shot(run_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Последний скриншот окна агента: что он видел, когда закончил."""
+    _owner(me)
+    r = db.get(ReturnRun, run_id)
+    if r is None or not r.last_shot:
+        raise HTTPException(status_code=404, detail="Скриншота нет")
+    import base64
+
+    return Response(content=base64.b64decode(r.last_shot), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/runs/{run_id}/stop")

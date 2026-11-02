@@ -141,8 +141,10 @@ def run_check(run_id: int) -> None:
                     say("Остановлено владельцем")
                     break
                 step = provider.step(SYSTEM, messages, TOOLS)
+                if step.text:
+                    say("Агент: " + step.text)
                 if not step.calls:
-                    summary = step.text or summary
+                    summary = step.text or summary or "Агент закончил работу, не записав ни одного результата"
                     break
                 messages.append({"role": "assistant", "content": step.assistant_content})
                 results = []
@@ -171,6 +173,11 @@ def run_check(run_id: int) -> None:
             log.exception("Запуск возвратов %s упал", run_id)
             return finish("failed", "Внутренняя ошибка запуска: подробности в журнале сервера")
         finally:
+            try:
+                run.last_shot = base64.b64encode(manager.screenshot(key)).decode()
+                db.commit()
+            except Exception:  # noqa: BLE001 - окна уже может не быть
+                pass
             manager.close(key)
         db.refresh(run)
         left = [i for i in invoices if i not in done]
