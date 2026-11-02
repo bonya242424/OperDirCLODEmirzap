@@ -155,6 +155,13 @@ class Metric(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Источник: значения считаются из последнего файла в папке по поручению (руками ничего не вводим)
+    source_folder_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    source_prompt: Mapped[str] = mapped_column(Text, default="")
+    calc_status: Mapped[str] = mapped_column(String(16), default="none")  # none | running | ok | error
+    calc_message: Mapped[str] = mapped_column(Text, default="")
+    calc_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    calc_file_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class MetricValue(Base):
@@ -308,3 +315,16 @@ class SearchChunk(Base):
     ord: Mapped[int] = mapped_column(Integer, default=0)
     text: Mapped[str] = mapped_column(Text)
     norm: Mapped[str] = mapped_column(Text)
+
+
+class ChangeLogEntry(Base):
+    """Запись журнала изменений системы человеческим языком. Заполняется из app/changelog.py при старте."""
+
+    __tablename__ = "changelog_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), unique=True)
+    kind: Mapped[str] = mapped_column(String(20))  # added | improved | removed | fixed
+    title: Mapped[str] = mapped_column(String(200))
+    text: Mapped[str] = mapped_column(Text, default="")
+    released_on: Mapped[date] = mapped_column(Date)

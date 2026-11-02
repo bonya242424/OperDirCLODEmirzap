@@ -5,12 +5,14 @@ from fastapi import FastAPI
 from sqlalchemy import func, select
 
 from .config import settings
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, add_missing_columns, engine
 from .integrations.service import ensure_rows
 from .models import User
 from . import search as search_index
+from .metric_calc import reset_stale
 from .routers import search as search_router
-from .routers import agents, proxies, auth, board, returns, chat, connections, files, integrations, metrics, tasks, users
+from . import changelog as changelog_data
+from .routers import agents, changelog, proxies, auth, board, returns, chat, connections, files, integrations, metrics, tasks, users
 from .scheduler import start_scheduler
 from .security import hash_password
 
@@ -47,10 +49,14 @@ async def lifespan(_: FastAPI):
     _check_secret_key()
     # Для старта таблицы создаются автоматически; миграции (Alembic) добавим, когда схема устоится.
     Base.metadata.create_all(engine)
+    for col in add_missing_columns():
+        log.warning("В базу добавлена колонка %s", col)
     _bootstrap_owner()
     with SessionLocal() as db:
         ensure_rows(db)
         search_index.index_missing(db)
+        changelog_data.sync(db)
+    reset_stale()
     scheduler = start_scheduler() if settings.scheduler_enabled else None
     yield
     if scheduler is not None:
@@ -71,6 +77,7 @@ app.include_router(returns.router)
 app.include_router(agents.router)
 app.include_router(proxies.router)
 app.include_router(search_router.router)
+app.include_router(changelog.router)
 
 
 @app.get("/api/health")

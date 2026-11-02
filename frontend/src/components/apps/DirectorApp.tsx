@@ -1,10 +1,9 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, formatAgo } from "../../api";
-import type { Metric, MetricValue } from "../../types";
+import type { Folder, Metric, MetricValue } from "../../types";
 
 const STATUS_TEXT: Record<Metric["status"], string> = { ok: "В норме", warning: "Внимание", bad: "Плохо", no_data: "Нет данных" };
 const fmt = (n: number | null): string => (n === null ? "—" : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n));
-const today = (): string => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
 function Spark({ values, status }: { values: number[]; status: Metric["status"] }) {
   if (values.length < 2) return <div className="spark empty">мало данных для графика</div>;
@@ -29,9 +28,12 @@ interface Form {
   warn: string;
   bad: string;
   days: string;
+  folder: string;
+  prompt: string;
 }
 
-const EMPTY: Form = { id: null, name: "", unit: "", description: "", better: "up", warn: "", bad: "", days: "7" };
+const EMPTY: Form = { id: null, name: "", unit: "", description: "", better: "up", warn: "", bad: "", days: "7", folder: "", prompt: "" };
+const CALC_TEXT: Record<Metric["calc_status"], string> = { none: "Ждём первую выгрузку", running: "Считаю по файлу…", ok: "Посчитано по файлу", error: "Не удалось посчитать" };
 
 export default function DirectorApp({ direction, title }: { direction: string; title: string }) {
   const [metrics, setMetrics] = useState<Metric[] | null>(null);
@@ -39,9 +41,7 @@ export default function DirectorApp({ direction, title }: { direction: string; t
   const [form, setForm] = useState<Form | null>(null);
   const [open, setOpen] = useState<Metric | null>(null);
   const [values, setValues] = useState<MetricValue[]>([]);
-  const [period, setPeriod] = useState(today());
-  const [value, setValue] = useState("");
-  const [note, setNote] = useState("");
+  const [folders, setFolders] = useState<Folder[]>([]);
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : "Ошибка");
 
@@ -56,6 +56,18 @@ export default function DirectorApp({ direction, title }: { direction: string; t
   }, [direction]);
 
   useEffect(load, [load]);
+
+  useEffect(() => {
+    api<Folder[]>("/folders").then(setFolders).catch(() => setFolders([]));
+  }, []);
+
+  // пока идёт расчёт по файлу, обновляем плитки раз в 3 секунды
+  const calculating = metrics?.some((m) => m.calc_status === "running") ?? false;
+  useEffect(() => {
+    if (!calculating) return;
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+  }, [calculating, load]);
 
   useEffect(() => {
     if (open) api<MetricValue[]>(`/metrics/${open.id}/values`).then(setValues).catch(fail);
@@ -77,7 +89,11 @@ export default function DirectorApp({ direction, title }: { direction: string; t
       warn_threshold: warn,
       bad_threshold: bad,
       expected_days: Number(form.days) || 7,
+      source_folder_id: Number(form.folder) || null,
+      source_prompt: form.prompt,
     };
+    if (!body.source_folder_id) return setError("Выберите папку с выгрузками");
+    if (!form.prompt.trim()) return setError("Опишите, что считать по файлу");
     try {
       if (form.id === null) await api("/metrics", { method: "POST", body: { ...body, direction } });
       else await api(`/metrics/${form.id}`, { method: "PATCH", body: { ...body, clear_thresholds: warn === null && bad === null } });
@@ -88,17 +104,10 @@ export default function DirectorApp({ direction, title }: { direction: string; t
     }
   }
 
-  async function addValue(e: FormEvent) {
-    e.preventDefault();
-    if (!open) return;
-    const v = num(value);
-    if (v === null || Number.isNaN(v)) return setError("Введите число");
+  async function recalc(m: Metric) {
     try {
-      await api(`/metrics/${open.id}/values`, { method: "POST", body: { period, value: v, note } });
-      setValue("");
-      setNote("");
+      await api(`/metrics/${m.id}/recalculate`, { method: "POST" });
       load();
-      api<MetricValue[]>(`/metrics/${open.id}/values`).then(setValues);
     } catch (err) {
       fail(err);
     }
@@ -191,12 +200,17 @@ export default function DirectorApp({ direction, title }: { direction: string; t
             {open.bad_threshold !== null && <>Плохо: {open.better === "up" ? "≤" : "≥"} {fmt(open.bad_threshold)}. </>}
             Ждём обновление раз в {open.expected_days} дн.
           </p>
-          <form className="value-form" onSubmit={addValue}>
-            <input type="date" value={period} max={today()} onChange={(e) => setPeriod(e.target.value)} />
-            <input inputMode="decimal" placeholder={`Значение${open.unit ? `, ${open.unit}` : ""}`} value={value} onChange={(e) => setValue(e.target.value)} required />
-            <input placeholder="Комментарий (необязательно)" value={note} onChange={(e) => setNote(e.target.value)} />
-            <button className="primary" type="submit">Записать значение</button>
-          </form>
+          <div className={`calc-box ${open.calc_status}`}>
+            <b>{CALC_TEXT[open.calc_status]}</b>
+            <p className="muted">
+              Папка «{open.source_folder || "—"}»{open.calc_file && <>, файл «{open.calc_file}»</>}
+              {open.calc_at && <>, {formatAgo(open.calc_at)}</>}
+            </p>
+            <p>{open.source_prompt}</p>
+            {open.calc_message && open.calc_status !== "running" && <p className="muted">{open.calc_message}</p>}
+            <p className="muted">Значения вручную не вносятся: загрузите свежую выгрузку в раздел «Файлы», и показатель пересчитается сам.</p>
+            <button disabled={open.calc_status === "running"} onClick={() => recalc(open)}>Пересчитать</button>
+          </div>
           <h4>История</h4>
           <ul className="history">
             {values.map((v) => (
@@ -216,6 +230,7 @@ export default function DirectorApp({ direction, title }: { direction: string; t
                 setForm({
                   id: open.id, name: open.name, unit: open.unit, description: open.description, better: open.better,
                   warn: open.warn_threshold?.toString() ?? "", bad: open.bad_threshold?.toString() ?? "", days: String(open.expected_days),
+                  folder: open.source_folder_id ? String(open.source_folder_id) : "", prompt: open.source_prompt,
                 })
               }
             >
@@ -255,7 +270,17 @@ export default function DirectorApp({ direction, title }: { direction: string; t
                 <input inputMode="numeric" value={form.days} onChange={(e) => setForm({ ...form, days: e.target.value })} />
               </label>
             </div>
-            <textarea rows={2} placeholder="Описание: как считается, откуда данные" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            <label>
+              Папка с выгрузками (берётся последний файл)
+              <select required value={form.folder} onChange={(e) => setForm({ ...form, folder: e.target.value })}>
+                <option value="">Выберите папку</option>
+                {folders.map((f) => (
+                  <option key={f.id} value={f.id}>{f.name} ({f.files_count} файлов)</option>
+                ))}
+              </select>
+            </label>
+            <textarea required rows={3} placeholder="Что вывести: например, «доля заказов с оплатой от всех заявок за день, колонки C и D»" value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} />
+            <textarea rows={2} placeholder="Описание (необязательно)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
             <p className="muted">
               {form.better === "up" ? "Порог «плохо» должен быть ниже порога «внимание»." : "Порог «плохо» должен быть выше порога «внимание»."}
             </p>

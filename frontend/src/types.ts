@@ -150,6 +150,13 @@ export interface Metric {
   status: "ok" | "warning" | "bad" | "no_data";
   stale: boolean;
   history: number[];
+  source_folder_id: number | null;
+  source_folder: string;
+  source_prompt: string;
+  calc_status: "none" | "running" | "ok" | "error";
+  calc_message: string;
+  calc_at: string | null;
+  calc_file: string;
 }
 
 export interface MetricValue {

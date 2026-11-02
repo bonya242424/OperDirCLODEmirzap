@@ -29,10 +29,15 @@ class ToolError(Exception):
 @dataclass
 class Ctx:
     db: Session
-    agent: Agent
+    agent: Agent | None
     log: Callable[[str], None]
     depth: int = 0
     run_id: int | None = None
+    # Пересчёт показателя по файлу: писать можно только в этот показатель, от имени этого пользователя
+    only_metric_id: int | None = None
+    user_id: int | None = None
+    label: str = ""
+    writes: int = 0
 
 
 @dataclass
@@ -129,13 +134,20 @@ def set_metric_value(ctx: Ctx, a: dict) -> str:
         raise ToolError("Нужны period в формате ГГГГ-ММ-ДД и число value") from None
     if period > utcnow().date() + timedelta(days=1):
         raise ToolError("Дата в будущем")
-    note = f"Агент «{ctx.agent.name}»: {str(a.get('note', ''))[:200]}".strip()
+    if ctx.only_metric_id is not None and m.id != ctx.only_metric_id:
+        raise ToolError("Здесь можно записывать только значение этого показателя")
+    who = ctx.label or (f"Агент «{ctx.agent.name}»" if ctx.agent else "ИИ")
+    note = f"{who}: {str(a.get('note', ''))[:200]}".strip()
+    owner = ctx.user_id or (ctx.agent.owner_id if ctx.agent else None)
+    if owner is None:
+        raise ToolError("Не определён автор записи")
     row = ctx.db.scalar(select(MetricValue).where(MetricValue.metric_id == m.id, MetricValue.period == period))
     if row is None:
-        ctx.db.add(MetricValue(metric_id=m.id, period=period, value=value, note=note, created_by=ctx.agent.owner_id))
+        ctx.db.add(MetricValue(metric_id=m.id, period=period, value=value, note=note, created_by=owner))
     else:
         row.value, row.note = value, note
     ctx.db.commit()
+    ctx.writes += 1
     return f"Записано: {m.name} за {period} = {value:g}"
 
 

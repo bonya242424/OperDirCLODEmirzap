@@ -1,14 +1,16 @@
 from datetime import date, datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import current_user
-from ..models import Metric, MetricValue, User, utcnow
+from ..metric_calc import calc_metric, mark_running
+from ..models import Folder, Metric, MetricValue, StoredFile, User, utcnow
+from ..schemas import _utc
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
@@ -34,6 +36,16 @@ class MetricIn(BaseModel):
     warn_threshold: float | None = None
     bad_threshold: float | None = None
     expected_days: int = 7
+    source_folder_id: int
+    source_prompt: str
+
+    @field_validator("source_prompt")
+    @classmethod
+    def _prompt(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 4000:
+            raise ValueError("Опишите, что считать по файлу (до 4000 символов)")
+        return v
 
     @field_validator("name")
     @classmethod
@@ -64,20 +76,9 @@ class MetricPatch(BaseModel):
     warn_threshold: float | None = None
     bad_threshold: float | None = None
     expected_days: int | None = None
+    source_folder_id: int | None = None
+    source_prompt: str | None = None
     clear_thresholds: bool = False
-
-
-class ValueIn(BaseModel):
-    period: date
-    value: float
-    note: str = ""
-
-    @field_validator("value")
-    @classmethod
-    def _finite(cls, v: float) -> float:
-        if v != v or v in (float("inf"), float("-inf")):
-            raise ValueError("Некорректное число")
-        return v
 
 
 class MetricOut(BaseModel):
@@ -97,6 +98,15 @@ class MetricOut(BaseModel):
     status: str  # ok | warning | bad | no_data
     stale: bool
     history: list[float]
+    source_folder_id: int | None
+    source_folder: str
+    source_prompt: str
+    calc_status: str
+    calc_message: str
+    calc_at: datetime | None
+    calc_file: str
+
+    _fix = field_validator("calc_at")(_utc)
 
 
 class ValueOut(BaseModel):
@@ -135,6 +145,10 @@ def _out(db: Session, m: Metric) -> MetricOut:
         status=evaluate(m, latest.value if latest else None),
         stale=stale,
         history=[r.value for r in reversed(rows)],
+        source_folder_id=m.source_folder_id,
+        source_folder=(db.get(Folder, m.source_folder_id).name if m.source_folder_id and db.get(Folder, m.source_folder_id) else ""),
+        source_prompt=m.source_prompt, calc_status=m.calc_status, calc_message=m.calc_message, calc_at=m.calc_at,
+        calc_file=(db.get(StoredFile, m.calc_file_id).name if m.calc_file_id and db.get(StoredFile, m.calc_file_id) else ""),
     )
 
 
@@ -153,18 +167,40 @@ def list_metrics(direction: Direction | None = None, db: Session = Depends(get_d
     return [_out(db, m) for m in db.scalars(q)]
 
 
+def _check_folder(db: Session, folder_id: int | None) -> None:
+    if folder_id is None or db.get(Folder, folder_id) is None:
+        raise HTTPException(status_code=422, detail="Выберите папку с выгрузками из раздела «Файлы»")
+
+
+def _has_file(db: Session, folder_id: int | None) -> bool:
+    return db.scalar(select(StoredFile.id).where(StoredFile.folder_id == folder_id).limit(1)) is not None
+
+
 @router.post("", response_model=MetricOut, status_code=201)
-def create(body: MetricIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+def create(body: MetricIn, tasks: BackgroundTasks, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _check_folder(db, body.source_folder_id)
     m = Metric(**body.model_dump(), created_by=me.id)
     db.add(m)
     db.commit()
+    if _has_file(db, m.source_folder_id) and mark_running(m.id):
+        tasks.add_task(calc_metric, m.id)
+        db.refresh(m)
     return _out(db, m)
 
 
 @router.patch("/{metric_id}", response_model=MetricOut)
-def update(metric_id: int, body: MetricPatch, db: Session = Depends(get_db), _: User = Depends(current_user)):
+def update(metric_id: int, body: MetricPatch, tasks: BackgroundTasks, db: Session = Depends(get_db), _: User = Depends(current_user)):
     m = _get(db, metric_id)
     data = body.model_dump(exclude_unset=True)
+    source_changed = ("source_folder_id" in data and data["source_folder_id"] != m.source_folder_id) or (
+        "source_prompt" in data and (data["source_prompt"] or "").strip() != m.source_prompt
+    )
+    if "source_folder_id" in data:
+        _check_folder(db, data["source_folder_id"])
+    if "source_prompt" in data:
+        data["source_prompt"] = (data["source_prompt"] or "").strip()
+        if not data["source_prompt"] or len(data["source_prompt"]) > 4000:
+            raise HTTPException(status_code=422, detail="Опишите, что считать по файлу (до 4000 символов)")
     clear = data.pop("clear_thresholds", False)
     for key, value in data.items():
         if key == "name":
@@ -184,6 +220,21 @@ def update(metric_id: int, body: MetricPatch, db: Session = Depends(get_db), _: 
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from None
     db.commit()
+    if source_changed and _has_file(db, m.source_folder_id) and mark_running(m.id):
+        tasks.add_task(calc_metric, m.id)
+        db.refresh(m)
+    return _out(db, m)
+
+
+@router.post("/{metric_id}/recalculate", response_model=MetricOut, status_code=202)
+def recalculate(metric_id: int, tasks: BackgroundTasks, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    m = _get(db, metric_id)
+    if m.source_folder_id is None:
+        raise HTTPException(status_code=422, detail="У показателя не выбрана папка с выгрузками")
+    if not mark_running(m.id):
+        raise HTTPException(status_code=409, detail="Пересчёт уже идёт")
+    tasks.add_task(calc_metric, m.id)
+    db.refresh(m)
     return _out(db, m)
 
 
@@ -201,18 +252,3 @@ def values(metric_id: int, limit: int = 60, db: Session = Depends(get_db), _: Us
     return db.scalars(
         select(MetricValue).where(MetricValue.metric_id == metric_id).order_by(MetricValue.period.desc()).limit(limit)
     ).all()
-
-
-@router.post("/{metric_id}/values", response_model=MetricOut, status_code=201)
-def add_value(metric_id: int, body: ValueIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
-    m = _get(db, metric_id)
-    # +1 день запаса: в Москве после полуночи дата уже на день впереди UTC
-    if body.period > utcnow().date() + timedelta(days=1):
-        raise HTTPException(status_code=422, detail="Дата в будущем")
-    row = db.scalar(select(MetricValue).where(MetricValue.metric_id == m.id, MetricValue.period == body.period))
-    if row is None:
-        db.add(MetricValue(metric_id=m.id, period=body.period, value=body.value, note=body.note.strip(), created_by=me.id))
-    else:  # повторный ввод за тот же день заменяет значение
-        row.value, row.note, row.created_by = body.value, body.note.strip(), me.id
-    db.commit()
-    return _out(db, m)

@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
@@ -18,6 +18,7 @@ from ..integrations import service
 from ..integrations.registry import BY_KEY
 from ..models import Folder, StoredFile, User, utcnow
 from .. import search as search_index
+from ..metric_calc import run_for_folder
 from ..schemas import _utc
 
 router = APIRouter(prefix="/api", tags=["files"])
@@ -179,6 +180,7 @@ def list_files(folder_id: int, db: Session = Depends(get_db), me: User = Depends
 @router.post("/folders/{folder_id}/files", response_model=FileOut, status_code=201)
 async def upload(
     folder_id: int,
+    tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     me: User = Depends(current_user),
@@ -211,6 +213,7 @@ async def upload(
     db.add(row)
     db.commit()
     search_index.index_file(db, row)
+    tasks.add_task(run_for_folder, folder.id)  # показатели из этой папки пересчитаются по новой выгрузке
     if folder.source_key:
         service.record_sync(db, folder.source_key, row.uploaded_at or utcnow())
     names = {me.id: me.full_name or me.email}
