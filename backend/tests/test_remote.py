@@ -83,6 +83,7 @@ def fake_rdp(monkeypatch):
 
     monkeypatch.setattr(rdp_manager, "spawn", spawn)
     monkeypatch.setattr(rdp_manager, "spawn_logged", lambda args, env, logpath: spawn(args, env))
+    monkeypatch.setattr(rdp_manager, "precheck", lambda host, port: None)
     monkeypatch.setattr(rdp_manager, "run", run)
     monkeypatch.setattr(rdp_manager, "wait_display", lambda d: True)
     monkeypatch.setattr("app.rdp.time.sleep", lambda s: None)
@@ -151,3 +152,12 @@ def test_explain_failure_reasons():
     assert "NLA" in e("CredSSP: failed", "x")
     out = e("some strange message with pw-secret-1 inside", "pw-secret-1")
     assert "pw-secret-1" not in out and "***" in out
+
+
+def test_precheck_unreachable_names_our_ip(monkeypatch):
+    from app.browser import BrowserError
+
+    monkeypatch.setattr(rdp_manager, "egress_ip", lambda: "203.0.113.7")
+    with pytest.raises(BrowserError) as e:
+        rdp_manager._precheck("127.0.0.1", 1)
+    assert "203.0.113.7" in str(e.value) and "не отвечает" in str(e.value)
