@@ -12,6 +12,7 @@ from . import search as search_index
 from .guide_calc import reset_stale as reset_stale_guides
 from .returns_run import reset_stale as reset_stale_runs
 from .assembly_run import reset_stale as reset_stale_assembly
+from . import project_context_seed
 from .routers.returns import backfill_doc_dates
 from .metric_calc import reset_stale
 from .routers import search as search_router
@@ -60,6 +61,7 @@ async def lifespan(_: FastAPI):
         ensure_rows(db)
         search_index.index_missing(db)
         changelog_data.sync(db)
+        project_context_seed.sync(db)
     reset_stale()
     reset_stale_guides()
     reset_stale_runs()

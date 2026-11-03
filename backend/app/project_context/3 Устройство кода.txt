@@ -1,0 +1,16 @@
+OperDir: где что лежит в коде
+
+backend/app:
+- main.py: запуск, подключение маршрутов, старт планировщика. models.py: таблицы. changelog.py: записи журнала изменений.
+- llm.py: слой модели (Claude и GPT, прокси с перебором, выбор версии в настройках). context.py: снимок данных для чата.
+- agents/tools.py и agents/owner_tools.py: инструменты агентов и ассистента. agents/runtime.py: цикл вызова инструментов. agents/service.py: запуск и расписание агентов.
+- routers/: chat, metrics, tasks, files, agents, returns, instructions, connections, integrations, proxies, remote (удалённые окна), llm_settings (выбор модели), assembly (сборка из 1С).
+- browser.py: браузер на сервере (Playwright). rdp.py: терминал RDP (Xvfb, freerdp3, xdotool, буфер через xclip).
+- returns_run.py: агент проверки счетов у поставщика. assembly_run.py: агент сборки из 1С. guide_calc.py: разбор видео по кадрам.
+- metrika_sync.py: выгрузка и запросы к Яндекс Метрике. metric_calc.py: расчёт показателей по файлам. search.py: поиск по файлам и данным.
+- connections.py: подключения и шифрование секретов. integrations/: состояние интеграций и проверки.
+
+frontend/src/components: Desktop.tsx (окна и док), apps/ (IntegrationsApp, ModelPanel, ConnectionsPanel, AgentsApp, AssemblyPanel, AssemblyRunBox, RemoteApp, RemoteWindow, InstructionsApp, ChangelogApp и др.), styles.css (темы через CSS-переменные).
+
+Документы проекта: CLAUDE.md, docs/DEPLOY.md (развёртывание), docs/DECISIONS.md (договорённости), docs/SECTIONS.md, docs/UX-MAP.md.
+Деплой: scripts/deploy.sh на сервере; Dockerfile ставит ffmpeg, Playwright с Chromium, xvfb, xdotool, freerdp3-x11, imagemagick, xclip.
