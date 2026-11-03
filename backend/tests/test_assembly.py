@@ -111,3 +111,27 @@ def test_assembly_marks_duplicates_and_shows_saved_live(client, owner, term, mon
     assert sum(1 for x in run["saved"] if x.get("duplicate")) == 1
     with SessionLocal() as db:
         assert len(db.scalars(select(StoredFile)).all()) == 2
+
+
+def test_assembly_survives_bad_args_and_model_hiccup(client, owner, term, monkeypatch):
+    from app.llm import LLMError
+
+    cid, _ = term
+    script = Script(call("rdp_click"), call("save_document", supplier="Армтек", label="№1234"), call("finish", summary="ok"))
+    real = script.step
+    state = {"n": 0}
+
+    def flaky(system, messages, tools):
+        state["n"] += 1
+        if state["n"] == 2:
+            raise LLMError("временный сбой")
+        return real(system, messages, tools)
+
+    script.step = flaky
+    monkeypatch.setattr("app.assembly_run.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
+    run = _wait(client, owner, r.json()["id"])
+    assert run["status"] == "done" and "Сохранено файлов: 1" in run["summary"]
+    log = "\n".join(run["log"])
+    assert "Неверный вызов rdp_click" in log and "Сбой модели" in log
