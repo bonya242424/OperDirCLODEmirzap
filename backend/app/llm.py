@@ -192,9 +192,12 @@ class OpenAIProvider:
         if resp.status_code != 200:
             detail = ""
             try:
-                detail = str(resp.json().get("error", {}).get("message", ""))[:160]
+                j = resp.json()
+                err = j.get("error", j) if isinstance(j, dict) else j
+                detail = str(err.get("message", err) if isinstance(err, dict) else err)
             except Exception:  # noqa: BLE001
-                pass
+                detail = resp.text
+            detail = " ".join(detail.split())[:200]
             raise LLMError(f"API модели ответил кодом {resp.status_code}" + (f": {detail}" if detail else ""))
         return resp.json()
 

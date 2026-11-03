@@ -95,3 +95,26 @@ def test_grok_provider(client, owner):
     prov = llm.get_provider()
     inner = prov if isinstance(prov, llm.OpenAIProvider) else prov._make("")
     assert isinstance(inner, llm.OpenAIProvider) and inner._base == "https://api.x.ai/v1" and inner._model == "grok-4"
+
+
+def test_openai_error_detail_string(monkeypatch):
+    import httpx
+    import pytest
+
+    class R:
+        status_code = 400
+        text = "x"
+
+        def json(self):
+            return {"code": "bad", "error": "Model not found: grok-4"}
+
+    class C:
+        def __init__(self, *a, **k): ...
+        def __enter__(self): return self
+        def __exit__(self, *a): ...
+        def post(self, *a, **k): return R()
+
+    monkeypatch.setattr(httpx, "Client", C)
+    with pytest.raises(llm.LLMError) as e:
+        llm.OpenAIProvider("k", "m", "https://x/v1")._post({})
+    assert "400" in str(e.value) and "Model not found" in str(e.value)
