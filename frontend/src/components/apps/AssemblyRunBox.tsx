@@ -96,10 +96,20 @@ export default function AssemblyRunBox({ from, to }: { from: string; to: string 
 
   const poll = useCallback(() => {
     if (!run) return;
-    api<Run>(`/assembly/runs/${run.id}`).then(setRun).catch(() => undefined);
+    api<Run>(`/assembly/runs/${run.id}`)
+      .then(async (r) => {
+        // Сервер перезапускался (обновление): сборка продолжилась новым запуском, переключаемся на него
+        if (r.status !== "running" && r.summary.includes("продолжена автоматически")) {
+          const all = await api<Run[]>("/assembly/runs");
+          const next = all.find((x) => x.status === "running");
+          if (next) return setRun(next);
+        }
+        setRun(r);
+      })
+      .catch(() => undefined);
   }, [run]);
   useEffect(() => {
-    if (!run || run.status !== "running") return;
+    if (!run || (run.status !== "running" && !run.summary.includes("продолжена автоматически"))) return;
     const t = window.setInterval(poll, 2500);
     return () => window.clearInterval(t);
   }, [run, poll]);
