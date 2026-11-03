@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from ..assembly_run import run_assembly
 from ..db import get_db
 from ..deps import current_user
-from ..models import AssemblyRun, Connection, User
+from ..assembly_run import add_to_knowledge
+from ..models import AssemblyQuestion, AssemblyRun, Connection, User, utcnow
 
 router = APIRouter(prefix="/api/assembly", tags=["assembly"])
 
@@ -29,8 +30,17 @@ def _owner(me: User) -> None:
         raise HTTPException(status_code=403, detail="Сборку из 1С запускает только владелец")
 
 
-def _out(r: AssemblyRun, full: bool = False) -> dict:
+def _qa(db: Session, run_id: int) -> list[dict]:
+    rows = db.scalars(select(AssemblyQuestion).where(AssemblyQuestion.run_id == run_id).order_by(AssemblyQuestion.id)).all()
+    return [{"id": q.id, "question": q.question, "answer": q.answer} for q in rows]
+
+
+def _out(r: AssemblyRun, full: bool = False, db: Session | None = None) -> dict:
     d = {"id": r.id, "connection_id": r.connection_id, "status": r.status, "summary": r.summary, "date_from": r.date_from, "date_to": r.date_to, "created_at": r.created_at, "finished_at": r.finished_at, "saved": json.loads(r.saved or "[]")}
+    d["note"] = r.note
+    if db is not None:
+        d["qa"] = _qa(db, r.id)
+        d["question"] = next((x for x in d["qa"] if x["answer"] is None), None)
     if full:
         d["log"] = json.loads(r.log or "[]")
     return d
@@ -50,13 +60,13 @@ def start(body: RunIn, db: Session = Depends(get_db), me: User = Depends(current
     db.add(run)
     db.commit()
     threading.Thread(target=run_assembly, args=(run.id,), daemon=True, name=f"assembly-{run.id}").start()
-    return _out(run, True)
+    return _out(run, True, db)
 
 
 @router.get("/runs")
 def runs(db: Session = Depends(get_db), me: User = Depends(current_user)):
     _owner(me)
-    return [_out(r) for r in db.scalars(select(AssemblyRun).order_by(AssemblyRun.id.desc()).limit(20))]
+    return [_out(r, False, db) for r in db.scalars(select(AssemblyRun).order_by(AssemblyRun.id.desc()).limit(30))]
 
 
 @router.get("/runs/{run_id}")
@@ -65,7 +75,7 @@ def one(run_id: int, db: Session = Depends(get_db), me: User = Depends(current_u
     r = db.get(AssemblyRun, run_id)
     if r is None:
         raise HTTPException(status_code=404, detail="Запуск не найден")
-    return _out(r, True)
+    return _out(r, True, db)
 
 
 @router.post("/runs/{run_id}/stop")
@@ -77,4 +87,25 @@ def stop(run_id: int, db: Session = Depends(get_db), me: User = Depends(current_
     if r.status == "running":
         r.status = "stopped"
         db.commit()
-    return _out(r, True)
+    return _out(r, True, db)
+
+
+class AnswerIn(BaseModel):
+    answer: str
+
+
+@router.post("/questions/{qid}/answer")
+def answer(qid: int, body: AnswerIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    q = db.get(AssemblyQuestion, qid)
+    if q is None:
+        raise HTTPException(status_code=404, detail="Вопрос не найден")
+    text = body.answer.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Напишите ответ")
+    if q.answer is not None:
+        raise HTTPException(status_code=409, detail="На этот вопрос уже ответили")
+    q.answer, q.answered_at = text[:3000], utcnow()
+    add_to_knowledge(db, q)
+    db.commit()
+    return {"ok": True}

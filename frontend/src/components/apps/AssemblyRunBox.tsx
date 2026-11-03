@@ -8,6 +8,10 @@ interface Run {
   summary: string;
   saved: { supplier: string; file_id: number; name: string; duplicate?: boolean }[];
   log?: string[];
+  note?: string;
+  created_at?: string;
+  qa?: { id: number; question: string; answer: string | null }[];
+  question?: { id: number; question: string; answer: string | null } | null;
 }
 interface Targets {
   rdp: { id: number; title: string; host: string }[];
@@ -57,6 +61,8 @@ export default function AssemblyRunBox({ from, to }: { from: string; to: string 
   const [note, setNote] = useState("");
   const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState("");
+  const [history, setHistory] = useState<Run[]>([]);
+  const [reply, setReply] = useState("");
 
   useEffect(() => {
     api<Targets>("/remote/targets")
@@ -69,6 +75,24 @@ export default function AssemblyRunBox({ from, to }: { from: string; to: string 
       .then((r) => r[0] && r[0].status === "running" && setRun(r[0]))
       .catch(() => undefined);
   }, []);
+
+  const loadHistory = useCallback(() => {
+    api<Run[]>("/assembly/runs").then(setHistory).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory, run?.status]);
+
+  async function answer(id: number) {
+    if (!reply.trim()) return;
+    try {
+      await api(`/assembly/questions/${id}/answer`, { method: "POST", body: { answer: reply } });
+      setReply("");
+      if (run) setRun(await api<Run>(`/assembly/runs/${run.id}`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка");
+    }
+  }
 
   const poll = useCallback(() => {
     if (!run) return;
@@ -118,12 +142,39 @@ export default function AssemblyRunBox({ from, to }: { from: string; to: string 
       {run && (
         <div>
           <p><strong>{STATUS[run.status]}</strong> {run.summary}</p>
+          {run.question && (
+            <div className="assembly-ask">
+              <strong>Агент спрашивает:</strong>
+              <p>{run.question.question}</p>
+              <div className="row">
+                <input placeholder="Ваш ответ" value={reply} onChange={(e) => setReply(e.target.value)} onKeyDown={(e) => e.key === "Enter" && answer(run.question!.id)} />
+                <button className="primary" onClick={() => answer(run.question!.id)}>Ответить</button>
+              </div>
+              <p className="muted small">Ответ сохранится в «Инструкции 1С», и в следующий раз агент не будет спрашивать то же самое.</p>
+            </div>
+          )}
           {run.saved.length > 0 && (
             <ul>{run.saved.map((s) => <li key={s.file_id + (s.duplicate ? "d" : "")}>{s.supplier}: {s.name}{s.duplicate ? " — дубль, повторно не сохранён" : ""}</li>)}</ul>
           )}
           <LiveScreen conn={run.connection_id ?? conn} running={running} log={run.log ?? []} />
           {run.log && run.log.length > 0 && <pre className="remote-log">{run.log.slice(-40).join("\n")}</pre>}
         </div>
+      )}
+      {history.length > 0 && (
+        <details className="assembly-history">
+          <summary>История запусков ({history.length})</summary>
+          {history.map((h) => (
+            <div key={h.id} className="assembly-history-item">
+              <strong>#{h.id} · {STATUS[h.status]}</strong>
+              {h.created_at && <span className="muted small"> · {new Date(h.created_at).toLocaleString("ru-RU")}</span>}
+              {h.note && <div className="small">Запрос: {h.note}</div>}
+              {h.summary && <div className="small muted">{h.summary}</div>}
+              {(h.qa ?? []).map((q) => (
+                <div key={q.id} className="small">В: {q.question}<br />О: {q.answer ?? "ответа нет"}</div>
+              ))}
+            </div>
+          ))}
+        </details>
       )}
     </div>
   );

@@ -156,3 +156,36 @@ def test_restart_resumes_running_assembly(client, owner, term, monkeypatch):
         assert first.status == "failed" and "продолжена автоматически" in first.summary
         nxt = rows[-1]
         assert nxt.id != old and nxt.note.endswith("[автопродолжение 1]") and nxt.id in started
+
+
+def test_agent_asks_owner_and_answer_goes_to_knowledge(client, owner, term, monkeypatch):
+    from app.models import InstrSection
+
+    cid, _ = term
+    script = Script(call("ask_owner", question="Где кнопка печатной формы?"), call("save_document", supplier="Армтек", label="№5555"), call("finish", summary="ok"))
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    real_sleep = time.sleep
+    monkeypatch.setattr("app.assembly_run.time.sleep", lambda s: real_sleep(0.05))
+    r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
+    rid = r.json()["id"]
+    q = None
+    for _ in range(100):
+        got = client.get(f"/api/assembly/runs/{rid}", headers=owner).json()
+        if got["question"]:
+            q = got["question"]
+            break
+        real_sleep(0.05)
+    assert q and q["question"] == "Где кнопка печатной формы?"
+    assert client.post(f"/api/assembly/questions/{q['id']}/answer", headers=owner, json={"answer": "  "}).status_code == 422
+    assert client.post(f"/api/assembly/questions/{q['id']}/answer", headers=owner, json={"answer": "Меню Печать вверху документа"}).status_code == 200
+    assert client.post(f"/api/assembly/questions/{q['id']}/answer", headers=owner, json={"answer": "ещё"}).status_code == 409
+    run = _wait(client, owner, rid)
+    assert run["status"] == "done" and run["qa"][0]["answer"] == "Меню Печать вверху документа"
+    with SessionLocal() as db:
+        sec = db.scalar(select(InstrSection).where(InstrSection.title.like("Уточнения агента%")))
+        assert sec and "Где кнопка печатной формы?" in sec.notes and "Меню Печать вверху документа" in sec.notes
+        from app.assembly_run import instructions_text
+
+        assert "Меню Печать вверху документа" in instructions_text(db)
+    hist = client.get("/api/assembly/runs", headers=owner).json()
+    assert hist[0]["qa"] and hist[0]["id"] == rid

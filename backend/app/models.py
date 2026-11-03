@@ -424,6 +424,19 @@ class AppSetting(Base):
     value: Mapped[str] = mapped_column(Text, default="")
 
 
+class AssemblyQuestion(Base):
+    """Вопрос агента владельцу во время сборки и ответ. Ответы копятся в базе знаний («Инструкции 1С»), чтобы вопрос не повторялся."""
+
+    __tablename__ = "assembly_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("assembly_runs.id"), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    asked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AssemblyRun(Base):
     """Запуск агента, который собирает документы «сборка» из 1С через терминал и сохраняет их в «Файлы» по поставщикам."""
 
