@@ -304,9 +304,31 @@ def check_llm(db, row: Integration) -> CheckResult:
         if not key:
             return CheckResult(NOT_CONFIGURED, "Не задан ключ модели: добавьте его в «Интеграции» или в ANTHROPIC_API_KEY")
         res = check_anthropic_key(key)
+        if res.status == OK:
+            res = check_anthropic_model(key, active_model("anthropic"), res)
     if res.status == OK:
         res = CheckResult(OK, f"{res.message}. Модель: {active_model()}")
     return res
+
+
+def check_anthropic_model(key: str, model: str, ok: CheckResult) -> CheckResult:
+    """Выбранная версия должна быть доступна именно этому ключу: проверяем её отдельно."""
+    from anthropic import Anthropic, APIConnectionError, APIStatusError, DefaultHttpxClient
+
+    from ..proxies import active_proxies
+
+    routes = active_proxies() or [(None, "")]
+    for proxy_id, url in routes:
+        client = Anthropic(api_key=key, base_url=settings.llm_base_url or None, timeout=10.0, max_retries=0, http_client=DefaultHttpxClient(proxy=url, timeout=10.0) if url else None)
+        try:
+            client.models.retrieve(model)
+        except APIStatusError as exc:
+            reason = {404: "такой версии нет", 403: "версия не открыта для вашего ключа"}.get(exc.status_code, f"код {exc.status_code}")
+            return CheckResult(ERROR, f"Версия «{model}» недоступна: {reason}. Выберите другую в «Интеграции → Модель ИИ»")
+        except APIConnectionError:
+            continue
+        return ok
+    return ok
 
 
 def check_openai_key(key: str) -> CheckResult:

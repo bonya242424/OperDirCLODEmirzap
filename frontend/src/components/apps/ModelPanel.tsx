@@ -46,9 +46,10 @@ export default function ModelPanel({ onAddKey, onChecked }: { onAddKey: (kind: s
     try {
       const d = await api<Llm>("/llm", { method: "PUT", body: { provider, model } });
       setData(d);
-      await api("/integrations/llm/check", { method: "POST" });
+      const chk = await api<{ status: string; message: string }>("/integrations/llm/check", { method: "POST" });
       onChecked();
-      setMsg(`Сохранено. Теперь отвечает ${NAMES[d.provider]}, модель ${d.models[d.provider]}.`);
+      if (chk.status === "error") setError(`Сохранено, но модель не отвечает: ${chk.message}`);
+      else setMsg(`Сохранено. Теперь отвечает ${NAMES[d.provider]}, модель ${d.models[d.provider]}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка");
     } finally {

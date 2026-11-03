@@ -210,6 +210,12 @@ class OpenAIProvider:
         return self._call(system, messages, tools)
 
 
+def _api_error(exc) -> str:
+    """Код и причина ответа API без лишнего: по ним видно, что не так (ключ, модель, права, регион)."""
+    detail = " ".join(str(getattr(exc, "message", "") or "").split())[:200]
+    return f"API модели ответил кодом {exc.status_code}" + (f": {detail}" if detail else "")
+
+
 class AnthropicProvider:
     def __init__(self, api_key: str, model: str, base_url: str = "", proxy_url: str = "") -> None:
         from anthropic import Anthropic, DefaultHttpxClient  # DefaultHttpxClient: SDK 2.x не принимает обычный httpx.Client
@@ -226,7 +232,7 @@ class AnthropicProvider:
                 model=self._model, max_tokens=8000, system=system, messages=messages
             )
         except APIStatusError as exc:
-            raise LLMError(f"API модели ответил кодом {exc.status_code}") from exc
+            raise LLMError(_api_error(exc)) from exc
         except APIConnectionError as exc:
             raise LLMConnectionError("Нет соединения с API модели") from exc
         text = "".join(block.text for block in response.content if block.type == "text").strip()
@@ -247,7 +253,7 @@ class AnthropicProvider:
                 kwargs["tools"] = tools
             response = self._client.messages.create(**kwargs)
         except APIStatusError as exc:
-            raise LLMError(f"API модели ответил кодом {exc.status_code}") from exc
+            raise LLMError(_api_error(exc)) from exc
         except APIConnectionError as exc:
             raise LLMConnectionError("Нет соединения с API модели") from exc
         out = Step()

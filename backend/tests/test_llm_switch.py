@@ -76,3 +76,11 @@ def test_context_has_new_sections(client, owner):
         text = build_context(db)
     for head in ("## Возвраты поставщикам", "## ИИ-агенты", "## Недавние файлы"):
         assert head in text
+
+
+def test_api_error_includes_reason():
+    class E(Exception):
+        status_code = 403
+        message = "model: claude-opus-5-5 is not available for this key"
+
+    assert "403" in llm._api_error(E()) and "not available" in llm._api_error(E())
