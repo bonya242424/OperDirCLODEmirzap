@@ -6,7 +6,7 @@ interface Run {
   connection_id?: number;
   status: "running" | "done" | "failed" | "stopped";
   summary: string;
-  saved: { supplier: string; file_id: number; name: string }[];
+  saved: { supplier: string; file_id: number; name: string; duplicate?: boolean }[];
   log?: string[];
 }
 interface Targets {
@@ -119,7 +119,7 @@ export default function AssemblyRunBox({ from, to }: { from: string; to: string 
         <div>
           <p><strong>{STATUS[run.status]}</strong> {run.summary}</p>
           {run.saved.length > 0 && (
-            <ul>{run.saved.map((s) => <li key={s.file_id}>{s.supplier}: {s.name}</li>)}</ul>
+            <ul>{run.saved.map((s) => <li key={s.file_id + (s.duplicate ? "d" : "")}>{s.supplier}: {s.name}{s.duplicate ? " — дубль, повторно не сохранён" : ""}</li>)}</ul>
           )}
           <LiveScreen conn={run.connection_id ?? conn} running={running} log={run.log ?? []} />
           {run.log && run.log.length > 0 && <pre className="remote-log">{run.log.slice(-40).join("\n")}</pre>}

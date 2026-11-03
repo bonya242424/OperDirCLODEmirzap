@@ -91,3 +91,23 @@ def test_assembly_nudges_when_model_answers_without_actions(client, owner, term,
     assert any("без действий" in line for line in run["log"])
     first = script.seen[0][0][0]["content"]
     assert any(b.get("type") == "image" for b in first)  # экран показан сразу
+
+
+def test_assembly_marks_duplicates_and_shows_saved_live(client, owner, term, monkeypatch):
+    from app.assembly_run import doc_number
+
+    assert doc_number("№000007007 от 02.11.2026") == "7007" and doc_number("без номера") == ""
+    cid, _ = term
+    script = Script(
+        call("save_document", supplier="Армтек", label="№000007007 от 02.11.2026"),
+        call("save_document", supplier="Армтек", label="№000007007 от 02.11.2026"),  # повтор
+        call("save_document", supplier="Армтек", label="№000007008 от 03.11.2026"),
+        call("finish", summary="ok"),
+    )
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-11-03"})
+    run = _wait(client, owner, r.json()["id"])
+    assert "Сохранено файлов: 2" in run["summary"] and "Дублей пропущено: 1" in run["summary"]
+    assert sum(1 for x in run["saved"] if x.get("duplicate")) == 1
+    with SessionLocal() as db:
+        assert len(db.scalars(select(StoredFile)).all()) == 2
