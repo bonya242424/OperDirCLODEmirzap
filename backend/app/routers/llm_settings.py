@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/llm", tags=["llm"])
 # Подсказки для выбора; можно вписать любое другое название модели.
 SUGGEST = {
     "anthropic": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
-    "openai": ["gpt-5", "gpt-5-mini", "gpt-4.1"],
+    "openai": ["gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5", "gpt-5-mini", "gpt-4.1"],
     "xai": ["grok-4"],
 }
 _MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")

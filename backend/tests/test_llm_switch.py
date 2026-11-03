@@ -128,3 +128,21 @@ def test_custom_base_url(client, owner):
     prov = llm.get_provider()
     inner = prov if isinstance(prov, llm.OpenAIProvider) else prov._make("")
     assert inner._base == "https://1app.ru/v1"
+
+
+def test_check_llm_probes_tools(client, owner, monkeypatch):
+    from app.integrations import checks
+    from app.llm import Step, ToolCall
+
+    class P:
+        def __init__(self, calls):
+            self.calls = calls
+
+        def step(self, system, messages, tools):
+            return Step(text="", calls=[ToolCall("1", "ping", {})] if self.calls else [])
+
+    ok = checks.CheckResult(checks.OK, "ключ ок")
+    for has, want in ((True, checks.OK), (False, checks.ERROR)):
+        checks._PROBE.clear()
+        monkeypatch.setattr("app.llm.get_provider", lambda has=has: P(has))
+        assert checks._probe_tools(ok).status == want

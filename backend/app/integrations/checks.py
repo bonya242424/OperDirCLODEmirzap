@@ -313,7 +313,40 @@ def check_llm(db, row: Integration) -> CheckResult:
         if res.status == OK and not base:
             res = check_anthropic_model(key, active_model("anthropic"), res)
     if res.status == OK:
-        res = CheckResult(OK, f"{res.message}. Модель: {active_model()}")
+        res = _probe_tools(res)
+    if res.status == OK:
+        res = CheckResult(OK, f"{res.message}. Модель: {active_model()}, инструменты работают")
+    return res
+
+
+_PROBE: dict[tuple, tuple[float, CheckResult]] = {}
+
+
+def _probe_tools(ok: CheckResult) -> CheckResult:
+    """Агентам и чату нужны вызовы инструментов. Некоторые посредники их не передают: проверяем заранее, раз в 10 минут на выбранную модель."""
+    import time
+
+    from ..llm import LLMError, active_model, active_provider, get_provider, llm_base_url
+
+    kind = active_provider()
+    sig = (kind, active_model(kind), llm_base_url(kind))
+    hit = _PROBE.get(sig)
+    if hit and time.monotonic() - hit[0] < 600:
+        return hit[1]
+    provider = get_provider()
+    if provider is None:
+        return ok
+    tools = [{"name": "ping", "description": "Вызови, чтобы подтвердить связь.", "input_schema": {"type": "object", "properties": {}}}]
+    try:
+        step = provider.step("Ты проверяешь связь. Единственное, что нужно сделать: вызвать инструмент ping.", [{"role": "user", "content": "Вызови ping."}], tools)
+    except LLMError as exc:
+        res = CheckResult(ERROR, f"Ключ принят, но запрос к модели «{sig[1]}» не прошёл: {exc}")
+    else:
+        if step.calls:
+            res = ok
+        else:
+            res = CheckResult(ERROR, f"Ключ принят, но модель «{sig[1]}» не вызывает инструменты (возможно, посредник их не передаёт). Агенты и чат с данными так работать не будут: попробуйте другой адрес или модель")
+    _PROBE[sig] = (time.monotonic(), res)
     return res
 
 
