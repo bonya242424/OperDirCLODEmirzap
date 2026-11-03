@@ -135,3 +135,24 @@ def test_assembly_survives_bad_args_and_model_hiccup(client, owner, term, monkey
     assert run["status"] == "done" and "Сохранено файлов: 1" in run["summary"]
     log = "\n".join(run["log"])
     assert "Неверный вызов rdp_click" in log and "Сбой модели" in log
+
+
+def test_restart_resumes_running_assembly(client, owner, term, monkeypatch):
+    from app import assembly_run
+
+    cid, _ = term
+    started = []
+    monkeypatch.setattr(assembly_run, "run_assembly", lambda rid: started.append(rid))
+    with SessionLocal() as db:
+        r = AssemblyRun(connection_id=cid, date_from=__import__("datetime").date(2026, 10, 1), date_to=__import__("datetime").date(2026, 10, 31), status="running", note="Армтек", created_by=1)
+        db.add(r)
+        db.commit()
+        old = r.id
+    assembly_run.reset_stale()
+    time.sleep(0.3)
+    with SessionLocal() as db:
+        rows = db.scalars(select(AssemblyRun).order_by(AssemblyRun.id)).all()
+        first = db.get(AssemblyRun, old)
+        assert first.status == "failed" and "продолжена автоматически" in first.summary
+        nxt = rows[-1]
+        assert nxt.id != old and nxt.note.endswith("[автопродолжение 1]") and nxt.id in started
