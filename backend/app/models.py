@@ -422,3 +422,22 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
+
+
+class AssemblyRun(Base):
+    """Запуск агента, который собирает документы «сборка» из 1С через терминал и сохраняет их в «Файлы» по поставщикам."""
+
+    __tablename__ = "assembly_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    connection_id: Mapped[int] = mapped_column(Integer)
+    date_from: Mapped[date] = mapped_column(Date)
+    date_to: Mapped[date] = mapped_column(Date)
+    note: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running | done | failed | stopped
+    summary: Mapped[str] = mapped_column(Text, default="")
+    log: Mapped[str] = mapped_column(Text, default="[]")
+    saved: Mapped[str] = mapped_column(Text, default="[]")  # JSON: что сохранено [{supplier, file_id, name}]
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

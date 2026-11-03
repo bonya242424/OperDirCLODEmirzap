@@ -152,6 +152,9 @@ class RdpManager:
 
         if self.progress.get(key, {}).get("state") == "connecting":
             return
+        if self.is_open(key):  # уже подключено (например, работает агент): не переподключаем, просто показываем
+            self.progress[key] = {"state": "ready", "steps": [{"at": time.strftime("%H:%M:%S"), "text": "Уже подключено"}], "error": ""}
+            return
         self.progress[key] = {"state": "connecting", "steps": [], "error": ""}
 
         def work() -> None:
@@ -301,6 +304,15 @@ class RdpManager:
         if not valid_key(name):
             raise BrowserError("Эта клавиша не поддерживается")
         self._xdo(key, "key", to_xdotool(name))
+
+    def clipboard(self, key: int) -> str:
+        """Текст из буфера обмена удалённого окна (то, что скопировали в 1С по Ctrl+C)."""
+        s = self._get(key)
+        try:
+            out = self.run(["xclip", "-selection", "clipboard", "-o"], env=self._env(s), timeout=10)
+        except (subprocess.SubprocessError, OSError):
+            raise BrowserError("Буфер обмена пуст или недоступен: скопируйте таблицу по Ctrl+C и попробуйте снова") from None
+        return out.decode("utf-8", errors="replace")
 
     def scroll(self, key: int, dy: float) -> None:
         steps = max(1, min(10, int(abs(dy) // 100) or 1))

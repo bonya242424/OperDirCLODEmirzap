@@ -4,7 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /srv
 
 # ffmpeg нужен для разбора видео-инструкций по возвратам; xvfb, freerdp, xdotool, imagemagick для удалённого терминала RDP
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg xvfb xdotool freerdp3-x11 imagemagick && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg xvfb xdotool freerdp3-x11 imagemagick xclip && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

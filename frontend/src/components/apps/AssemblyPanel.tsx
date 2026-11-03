@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
+import AssemblyRunBox from "./AssemblyRunBox";
 
 interface Doc {
   id: number;
@@ -77,19 +78,16 @@ export default function AssemblyPanel({ onOpen }: { onOpen: (supplierId: number 
         </div>
       </div>
 
-      <div className="ag-problem" role="status">
-        Сбор из 1С агентом ещё не включён: для него нужны вход в 1С и инструкция из раздела «Инструкции 1С». Пока документы можно загрузить файлом или ссылкой на Google Таблицу: поставщик берётся из строки «Поставщик» в документе.
-        <div className="ag-upload">
-          <button className="primary" disabled title="Нужен вход в 1С и инструкция">Собрать из 1С за период</button>
-          <label className="ag-file">
-            + Загрузить документ (CSV)
-            <input type="file" accept=".csv,text/csv" onChange={upload} disabled={busy} hidden />
-          </label>
-          <form onSubmit={importLink} className="ag-link">
-            <input placeholder="или ссылка на Google Таблицу" value={link} onChange={(e) => setLink(e.target.value)} />
-            <button disabled={busy || !link.trim()}>Загрузить</button>
-          </form>
-        </div>
+      <AssemblyRunBox from={from} to={to} />
+      <div className="ag-upload">
+        <label className="ag-file">
+          + Загрузить документ (CSV)
+          <input type="file" accept=".csv,text/csv" onChange={upload} disabled={busy} hidden />
+        </label>
+        <form onSubmit={importLink} className="ag-link">
+          <input placeholder="или ссылка на Google Таблицу" value={link} onChange={(e) => setLink(e.target.value)} />
+          <button disabled={busy || !link.trim()}>Загрузить</button>
+        </form>
       </div>
 
       {error && <p className="error">{error}</p>}
