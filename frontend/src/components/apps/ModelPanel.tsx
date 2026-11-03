@@ -73,11 +73,17 @@ export default function ModelPanel({ onAddKey, onChecked }: { onAddKey: (kind: s
       </div>
       <label className="model-field">
         Версия модели
-        <input list="model-options" value={model} onChange={(e) => setModel(e.target.value)} placeholder="Название модели" />
-        <datalist id="model-options">
-          {data.suggestions[provider].map((m) => <option key={m} value={m} />)}
-        </datalist>
-        <span className="muted small">Выберите из списка или впишите точное название модели из кабинета провайдера.</span>
+        <select
+          value={data.suggestions[provider].includes(model) ? model : "__custom"}
+          onChange={(e) => setModel(e.target.value === "__custom" ? "" : e.target.value)}
+        >
+          {data.suggestions[provider].map((m) => <option key={m} value={m}>{m}</option>)}
+          <option value="__custom">Другая (вписать название)</option>
+        </select>
+        {!data.suggestions[provider].includes(model) && (
+          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Точное название модели" autoFocus />
+        )}
+        <span className="muted small">Выберите версию из списка или впишите точное название модели из кабинета провайдера.</span>
       </label>
       {!data.has_key[provider] && <div className="error">Для выбранной модели не добавлен ключ: без него ИИ не ответит.</div>}
       {error && <div className="error">{error}</div>}
