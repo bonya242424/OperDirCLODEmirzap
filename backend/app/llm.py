@@ -98,6 +98,18 @@ def xai_api_key() -> str:
     return (_conn_cfg("xai").get("api_key") or "").strip() or settings.xai_api_key.strip()
 
 
+def reasoning_effort(model: str, which: str) -> str:
+    """Глубина раздумий для моделей GPT: по умолчанию «low» (в агентах каждый шаг иначе занимает по 30 секунд)."""
+    import re
+
+    v = get_setting("llm_reasoning_effort", "auto")
+    if v == "default" or which != "openai":
+        return ""
+    if v == "auto":
+        return "low" if re.match(r"(gpt-[56]|o\d)", model) else ""
+    return v if v in ("minimal", "low", "medium", "high") else ""
+
+
 def active_provider() -> str:
     p = get_setting("llm_provider", "anthropic")
     return p if p in ("openai", "xai") else "anthropic"
@@ -162,10 +174,13 @@ def _to_openai_messages(system: str, messages: list[dict[str, Any]]) -> list[dic
 class OpenAIProvider:
     """GPT и совместимые API (Chat Completions) через httpx, чтобы не тянуть лишнюю библиотеку."""
 
-    def __init__(self, api_key: str, model: str, base_url: str = "", proxy_url: str = "") -> None:
+    _NO_EFFORT: set[tuple[str, str]] = set()  # (адрес, модель), где параметр reasoning_effort не принят
+
+    def __init__(self, api_key: str, model: str, base_url: str = "", proxy_url: str = "", effort: str = "") -> None:
         self._key, self._model = api_key, model
         self._base = (base_url or settings.openai_base_url).rstrip("/")
         self._proxy = proxy_url
+        self._effort = effort
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         import httpx
@@ -175,6 +190,10 @@ class OpenAIProvider:
                 resp = client.post(f"{self._base}/chat/completions", json=body, headers={"Authorization": f"Bearer {self._key}"})
         except httpx.TransportError as exc:
             raise LLMConnectionError("Нет соединения с API модели") from exc
+        if resp.status_code == 400 and "reasoning_effort" in body:
+            # посредник или модель не знает такой параметр: запоминаем и повторяем без него
+            OpenAIProvider._NO_EFFORT.add((self._base, self._model))
+            return self._post({k: v for k, v in body.items() if k != "reasoning_effort"})
         if resp.status_code != 200:
             detail = ""
             try:
@@ -191,6 +210,8 @@ class OpenAIProvider:
         import json
 
         body: dict[str, Any] = {"model": self._model, "max_completion_tokens": 8000, "messages": _to_openai_messages(system, messages)}
+        if self._effort and (self._base, self._model) not in OpenAIProvider._NO_EFFORT:
+            body["reasoning_effort"] = self._effort
         if tools:
             body["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}} for t in tools]
         data = self._post(body)
@@ -318,7 +339,7 @@ def get_provider() -> LLMProvider | None:
         base = llm_base_url(which)
 
         def make(url: str = ""):
-            return OpenAIProvider(key, model, base, url)
+            return OpenAIProvider(key, model, base, url, reasoning_effort(model, which))
     else:
         key = llm_api_key()
         if not key:

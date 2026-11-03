@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import current_user
-from ..llm import active_model, active_provider, llm_api_key, openai_api_key, set_setting, xai_api_key
+from ..llm import get_setting, active_model, active_provider, llm_api_key, openai_api_key, set_setting, xai_api_key
 from ..models import User
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
@@ -27,11 +27,13 @@ class LlmOut(BaseModel):
     models: dict[str, str]
     suggestions: dict[str, list[str]]
     has_key: dict[str, bool]
+    effort: str = "auto"
 
 
 class LlmIn(BaseModel):
     provider: str
     model: str = ""
+    effort: str = ""
 
 
 def _owner(me: User) -> None:
@@ -44,6 +46,7 @@ def _out() -> LlmOut:
         provider=active_provider(),
         models={"anthropic": active_model("anthropic"), "openai": active_model("openai"), "xai": active_model("xai")},
         suggestions=SUGGEST,
+        effort=get_setting("llm_reasoning_effort", "auto"),
         has_key={"anthropic": bool(llm_api_key()), "openai": bool(openai_api_key()), "xai": bool(xai_api_key())},
     )
 
@@ -62,6 +65,10 @@ def put_llm(body: LlmIn, db: Session = Depends(get_db), me: User = Depends(curre
     model = body.model.strip()
     if model and not _MODEL.match(model):
         raise HTTPException(status_code=422, detail="Название модели: латиница, цифры, точка, дефис")
+    if body.effort and body.effort not in ("auto", "default", "minimal", "low", "medium", "high"):
+        raise HTTPException(status_code=422, detail="Глубина раздумий: авто, по умолчанию, minimal, low, medium или high")
+    if body.effort:
+        set_setting(db, "llm_reasoning_effort", body.effort)
     set_setting(db, "llm_provider", body.provider)
     if model:
         set_setting(db, f"llm_model_{body.provider}", model)

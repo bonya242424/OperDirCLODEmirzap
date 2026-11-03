@@ -146,3 +146,35 @@ def test_check_llm_probes_tools(client, owner, monkeypatch):
         checks._PROBE.clear()
         monkeypatch.setattr("app.llm.get_provider", lambda has=has: P(has))
         assert checks._probe_tools(ok).status == want
+
+
+def test_reasoning_effort_default_and_fallback(monkeypatch):
+    import httpx
+
+    assert llm.reasoning_effort("gpt-6.1-sol", "openai") == "low"
+    assert llm.reasoning_effort("grok-4", "xai") == "" and llm.reasoning_effort("llama", "openai") == ""
+    seen = []
+
+    class R:
+        def __init__(self, code):
+            self.status_code, self.text = code, "x"
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]} if self.status_code == 200 else {"error": "bad param"}
+
+    class C:
+        def __init__(self, *a, **k): ...
+        def __enter__(self): return self
+        def __exit__(self, *a): ...
+
+        def post(self, url, json=None, headers=None):
+            seen.append("reasoning_effort" in json)
+            return R(400 if "reasoning_effort" in json else 200)
+
+    monkeypatch.setattr(httpx, "Client", C)
+    p = llm.OpenAIProvider("k", "gpt-6.1-sol", "https://x/v1", "", "low")
+    assert p.complete("s", [{"role": "user", "content": "hi"}]) == "ok"
+    assert seen == [True, False]
+    p.complete("s", [{"role": "user", "content": "hi"}])
+    assert seen[-1] is False  # запомнили: параметр не принимается
+    llm.OpenAIProvider._NO_EFFORT.clear()

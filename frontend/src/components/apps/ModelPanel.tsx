@@ -6,6 +6,7 @@ interface Llm {
   models: Record<string, string>;
   suggestions: Record<string, string[]>;
   has_key: Record<string, boolean>;
+  effort: string;
 }
 
 const NAMES = { anthropic: "Claude (Anthropic)", openai: "GPT (OpenAI)", xai: "Grok (xAI)" } as const;
@@ -16,6 +17,7 @@ export default function ModelPanel({ onAddKey, onChecked }: { onAddKey: (kind: s
   const [data, setData] = useState<Llm | null>(null);
   const [provider, setProvider] = useState<P>("anthropic");
   const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("auto");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,6 +28,7 @@ export default function ModelPanel({ onAddKey, onChecked }: { onAddKey: (kind: s
         setData(d);
         setProvider(d.provider);
         setModel(d.models[d.provider]);
+        setEffort(d.effort || "auto");
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, []);
@@ -45,7 +48,7 @@ export default function ModelPanel({ onAddKey, onChecked }: { onAddKey: (kind: s
     setError("");
     setMsg("");
     try {
-      const d = await api<Llm>("/llm", { method: "PUT", body: { provider, model } });
+      const d = await api<Llm>("/llm", { method: "PUT", body: { provider, model, effort } });
       setData(d);
       const chk = await api<{ status: string; message: string }>("/integrations/llm/check", { method: "POST" });
       onChecked();
@@ -87,6 +90,18 @@ export default function ModelPanel({ onAddKey, onChecked }: { onAddKey: (kind: s
         )}
         <span className="muted small">Выберите версию из списка или впишите точное название модели из кабинета провайдера.</span>
       </label>
+      {provider === "openai" && (
+        <label className="model-field">
+          Глубина раздумий GPT
+          <select value={effort} onChange={(e) => setEffort(e.target.value)}>
+            <option value="auto">Быстро (рекомендуется для агентов)</option>
+            <option value="default">Как задумано у модели (медленнее)</option>
+            <option value="medium">Средняя</option>
+            <option value="high">Глубокая (самая медленная)</option>
+          </select>
+          <span className="muted small">Чем меньше раздумий, тем быстрее шаги агента. Если модель или посредник параметр не знает, он отключается сам.</span>
+        </label>
+      )}
       {!data.has_key[provider] && <div className="error">Для выбранной модели не добавлен ключ: без него ИИ не ответит.</div>}
       {error && <div className="error">{error}</div>}
       {msg && <p className="ok-text">{msg}</p>}
