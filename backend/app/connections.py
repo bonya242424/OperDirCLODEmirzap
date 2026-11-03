@@ -57,19 +57,19 @@ KINDS: dict[str, Kind] = {
             "anthropic",
             "Ключ Claude",
             "Ключ API модели для чата, агентов и разбора видео. Только для компании, один на всех",
-            [Field("api_key", "Ключ API (sk-ant-…)", secret=True)],
+            [Field("api_key", "Ключ API", secret=True), Field("base_url", "Адрес API (если ключ у посредника, например https://1app.ru)", required=False)],
         ),
         Kind(
             "openai",
             "Ключ GPT (OpenAI)",
             "Ключ API OpenAI. Включается переключателем «Модель ИИ» в «Интеграции». Только для компании, один на всех",
-            [Field("api_key", "Ключ API (sk-…)", secret=True)],
+            [Field("api_key", "Ключ API", secret=True), Field("base_url", "Адрес API (если ключ у посредника, например https://1app.ru/v1)", required=False)],
         ),
         Kind(
             "xai",
             "Ключ Grok (xAI)",
             "Ключ API xAI. Включается переключателем «Модель ИИ» в «Интеграции». Только для компании, один на всех",
-            [Field("api_key", "Ключ API", secret=True)],
+            [Field("api_key", "Ключ API", secret=True), Field("base_url", "Адрес API (если ключ у посредника, например https://1app.ru/v1)", required=False)],
         ),
         Kind(
             "cursor",
@@ -263,29 +263,32 @@ def _rdp(cfg):
     return CheckResult(OK, f"Сервер отвечает на порту {port}. Логин и пароль проверяются при подключении")
 
 
+def _base(cfg, default: str) -> str:
+    return (cfg.get("base_url") or "").strip().rstrip("/") or default
+
+
 def _anthropic(cfg):
     from .integrations.checks import check_anthropic_key
 
     key = cfg["api_key"].strip()
-    if not key.startswith("sk-ant-"):
-        return CheckResult(ERROR, "Ключ должен начинаться с sk-ant-")
-    return check_anthropic_key(key)
+    base = _base(cfg, settings.llm_base_url)
+    if not base and not key.startswith("sk-ant-"):
+        return CheckResult(ERROR, "Ключ Anthropic начинается с sk-ant-. Если ключ у посредника, укажите «Адрес API»")
+    return check_anthropic_key(key, base)
 
 
 def _openai(cfg):
     from .integrations.checks import check_openai_key
 
     key = cfg["api_key"].strip()
-    if not key.startswith("sk-"):
-        return CheckResult(ERROR, "Ключ должен начинаться с sk-")
-    return check_openai_key(key)
+    return check_openai_key(key, _base(cfg, ""))
 
 
 def _xai(cfg):
     from .integrations.checks import check_openai_key
 
     key = cfg["api_key"].strip()
-    return check_openai_key(key, settings.xai_base_url, "Grok")
+    return check_openai_key(key, _base(cfg, settings.xai_base_url), "Grok")
 
 
 def _cursor(cfg):

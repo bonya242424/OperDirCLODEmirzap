@@ -292,24 +292,25 @@ def check_yandex_webmaster(db, row: Integration) -> CheckResult:
 
 
 def check_llm(db, row: Integration) -> CheckResult:
-    from ..llm import active_model, active_provider, llm_api_key, openai_api_key, xai_api_key
+    from ..llm import active_model, active_provider, llm_api_key, llm_base_url, openai_api_key, xai_api_key
 
     if active_provider() == "xai":
         key = xai_api_key()
         if not key:
             return CheckResult(NOT_CONFIGURED, "Выбран Grok, но ключ не задан: добавьте «Ключ Grok» в «Интеграции»")
-        res = check_openai_key(key, settings.xai_base_url, "Grok")
+        res = check_openai_key(key, llm_base_url("xai"), "Grok")
     elif active_provider() == "openai":
         key = openai_api_key()
         if not key:
             return CheckResult(NOT_CONFIGURED, "Выбран GPT, но ключ не задан: добавьте «Ключ GPT» в «Интеграции»")
-        res = check_openai_key(key)
+        res = check_openai_key(key, llm_base_url("openai"))
     else:
         key = llm_api_key()
         if not key:
             return CheckResult(NOT_CONFIGURED, "Не задан ключ модели: добавьте его в «Интеграции» или в ANTHROPIC_API_KEY")
-        res = check_anthropic_key(key)
-        if res.status == OK:
+        base = llm_base_url("anthropic")
+        res = check_anthropic_key(key, base)
+        if res.status == OK and not base:
             res = check_anthropic_model(key, active_model("anthropic"), res)
     if res.status == OK:
         res = CheckResult(OK, f"{res.message}. Модель: {active_model()}")
@@ -364,7 +365,7 @@ def check_openai_key(key: str, base: str = "", name: str = "GPT") -> CheckResult
     return CheckResult(ERROR, "Нет соединения с API модели" + (": ни один прокси не отвечает" if routes[0][0] is not None else ""))
 
 
-def check_anthropic_key(key: str) -> CheckResult:
+def check_anthropic_key(key: str, base: str = "") -> CheckResult:
     from anthropic import Anthropic, APIConnectionError, APIStatusError, DefaultHttpxClient
 
     from ..proxies import active_proxies, record_result
@@ -374,7 +375,7 @@ def check_anthropic_key(key: str) -> CheckResult:
     for proxy_id, url in routes:
         client = Anthropic(
             api_key=key,
-            base_url=settings.llm_base_url or None,
+            base_url=base or settings.llm_base_url or None,
             timeout=10.0,
             max_retries=0,
             http_client=DefaultHttpxClient(proxy=url, timeout=10.0) if url else None,

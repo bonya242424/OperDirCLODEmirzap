@@ -41,7 +41,10 @@ def record_result(proxy_id: int, ok: bool) -> None:
 
 def check_proxy(p: Proxy) -> tuple[bool, str, int | None]:
     """Ходит через прокси к адресу API модели. Любой HTTP-ответ значит, что прокси работает."""
-    target = (settings.llm_base_url.strip() or "https://api.anthropic.com").rstrip("/")
+    from .llm import active_provider, llm_base_url
+
+    kind = active_provider()
+    target = (llm_base_url(kind) or "https://api.anthropic.com").rstrip("/")
     import time
 
     started = time.monotonic()

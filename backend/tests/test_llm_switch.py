@@ -118,3 +118,13 @@ def test_openai_error_detail_string(monkeypatch):
     with pytest.raises(llm.LLMError) as e:
         llm.OpenAIProvider("k", "m", "https://x/v1")._post({})
     assert "400" in str(e.value) and "Model not found" in str(e.value)
+
+
+def test_custom_base_url(client, owner):
+    r = client.post("/api/connections", headers=owner, json={"kind": "openai", "scope": "company", "config": {"api_key": "sk-DvnNt", "base_url": "https://1app.ru/v1/"}})
+    assert r.status_code == 201
+    assert llm.llm_base_url("openai") == "https://1app.ru/v1"
+    client.put("/api/llm", headers=owner, json={"provider": "openai", "model": "gpt-5.5"})
+    prov = llm.get_provider()
+    inner = prov if isinstance(prov, llm.OpenAIProvider) else prov._make("")
+    assert inner._base == "https://1app.ru/v1"

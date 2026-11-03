@@ -40,8 +40,8 @@ class LLMConnectionError(LLMError):
     """Не удалось соединиться (сеть, прокси). Только такую ошибку имеет смысл повторять через другой прокси."""
 
 
-def llm_api_key() -> str:
-    """Ключ модели: сначала подключение компании «Ключ Claude» из интерфейса, затем ANTHROPIC_API_KEY из .env."""
+def _conn_cfg(kind: str) -> dict[str, str]:
+    """Настройки подключения компании (ключ и необязательный адрес API) из базы."""
     from sqlalchemy import select
 
     from .connections import decrypt
@@ -50,11 +50,21 @@ def llm_api_key() -> str:
 
     try:
         with SessionLocal() as db:
-            row = db.scalar(select(Connection).where(Connection.kind == "anthropic", Connection.owner_id.is_(None)).order_by(Connection.id.desc()))
-            key = decrypt(row.config_encrypted).get("api_key", "").strip() if row else ""
+            row = db.scalar(select(Connection).where(Connection.kind == kind, Connection.owner_id.is_(None)).order_by(Connection.id.desc()))
+            return decrypt(row.config_encrypted) if row else {}
     except Exception:  # noqa: BLE001 - нет таблицы или базы: берём из настроек
-        key = ""
-    return key or settings.anthropic_api_key.strip()
+        return {}
+
+
+def llm_base_url(kind: str) -> str:
+    """Адрес API: из подключения (например, посредник), иначе из настроек."""
+    own = (_conn_cfg(kind).get("base_url") or "").strip().rstrip("/")
+    return own or {"anthropic": settings.llm_base_url, "openai": settings.openai_base_url, "xai": settings.xai_base_url}[kind].strip()
+
+
+def llm_api_key() -> str:
+    """Ключ модели: сначала подключение компании «Ключ Claude» из интерфейса, затем ANTHROPIC_API_KEY из .env."""
+    return (_conn_cfg("anthropic").get("api_key") or "").strip() or settings.anthropic_api_key.strip()
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -81,35 +91,11 @@ def set_setting(db, key: str, value: str) -> None:
 
 
 def openai_api_key() -> str:
-    from sqlalchemy import select
-
-    from .connections import decrypt
-    from .db import SessionLocal
-    from .models import Connection
-
-    try:
-        with SessionLocal() as db:
-            row = db.scalar(select(Connection).where(Connection.kind == "openai", Connection.owner_id.is_(None)).order_by(Connection.id.desc()))
-            key = decrypt(row.config_encrypted).get("api_key", "").strip() if row else ""
-    except Exception:  # noqa: BLE001
-        key = ""
-    return key or settings.openai_api_key.strip()
+    return (_conn_cfg("openai").get("api_key") or "").strip() or settings.openai_api_key.strip()
 
 
 def xai_api_key() -> str:
-    from sqlalchemy import select
-
-    from .connections import decrypt
-    from .db import SessionLocal
-    from .models import Connection
-
-    try:
-        with SessionLocal() as db:
-            row = db.scalar(select(Connection).where(Connection.kind == "xai", Connection.owner_id.is_(None)).order_by(Connection.id.desc()))
-            key = decrypt(row.config_encrypted).get("api_key", "").strip() if row else ""
-    except Exception:  # noqa: BLE001
-        key = ""
-    return key or settings.xai_api_key.strip()
+    return (_conn_cfg("xai").get("api_key") or "").strip() or settings.xai_api_key.strip()
 
 
 def active_provider() -> str:
@@ -295,7 +281,7 @@ class FailoverProvider:
 
     def __init__(self, proxies: list[tuple[int, str]], on_result, api_key: str, make=None) -> None:
         self._key = api_key
-        self._make = make or (lambda url: AnthropicProvider(api_key, active_model("anthropic"), settings.llm_base_url, url))
+        self._make = make or (lambda url: AnthropicProvider(api_key, active_model("anthropic"), llm_base_url("anthropic"), url))
         self._proxies = proxies  # [(id, url)]
         self._on_result = on_result  # (proxy_id, ok) -> None, чтобы запомнить состояние
 
@@ -329,7 +315,7 @@ def get_provider() -> LLMProvider | None:
         if not key:
             return None
         model = active_model(which)
-        base = settings.xai_base_url if which == "xai" else ""
+        base = llm_base_url(which)
 
         def make(url: str = ""):
             return OpenAIProvider(key, model, base, url)
@@ -340,7 +326,7 @@ def get_provider() -> LLMProvider | None:
         model = active_model("anthropic")
 
         def make(url: str = ""):
-            return AnthropicProvider(key, model, settings.llm_base_url, url)
+            return AnthropicProvider(key, model, llm_base_url("anthropic"), url)
 
     proxies = active_proxies()
     if proxies:
