@@ -352,7 +352,14 @@ def check_openai_key(key: str, base: str = "", name: str = "GPT") -> CheckResult
         if resp.status_code in (401, 403):
             return CheckResult(ERROR, f"Ключ {name} недействителен или нет доступа")
         if resp.status_code != 200:
-            return CheckResult(ERROR, f"API модели ответил кодом {resp.status_code}")
+            try:
+                j = resp.json()
+                err = j.get("error", j) if isinstance(j, dict) else j
+                detail = str(err.get("message", err) if isinstance(err, dict) else err)
+            except Exception:  # noqa: BLE001
+                detail = resp.text
+            detail = " ".join(detail.split())[:200]
+            return CheckResult(ERROR, f"API модели ответил кодом {resp.status_code}" + (f": {detail}" if detail else ""))
         return CheckResult(OK, f"API {name} отвечает" + (" через прокси" if proxy_id is not None else ""))
     return CheckResult(ERROR, "Нет соединения с API модели" + (": ни один прокси не отвечает" if routes[0][0] is not None else ""))
 
