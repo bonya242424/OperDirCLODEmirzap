@@ -202,3 +202,117 @@ def test_assembly_waits_for_desktop(client, owner, term, monkeypatch):
     r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
     run = _wait(client, owner, r.json()["id"])
     assert run["status"] == "done" and any("Жду, пока" in x for x in run["log"])
+
+
+PRINT_FORM = (
+    "Сборка № 000006738 от 04.10.2026\t\t\t\n"
+    "Поставщик: Армтек\t\t\t\n"
+    "№\tАртикул\tНаименование\tКоличество\tНомер счета\n"
+    "1\tSLKH073\tФильтр масляный\t2\tЮП0663567 /3\n"
+    "2\tA-55\tКолодки\t1,000\tЮП0622527\n"
+    "\tИтого\t\t3\t\n"
+)
+
+
+def test_assembly_creates_return_document_and_remembers(client, owner, term, monkeypatch):
+    from app.models import InstrSection, ReturnBatch, ReturnLine
+
+    cid, _ = term
+    monkeypatch.setattr(rdp_manager, "clipboard", lambda key: PRINT_FORM)
+    script = Script(
+        call("remember_1c", topic="Журнал Документы Сборка", how="Склад → Сборки, период кнопкой над списком"),
+        call("remember_1c", topic="журнал документы сборка", how="Склад → Сборки товаров; период: «Установить период»"),
+        call("save_document", supplier="армтек", label="№000006738 от 04.10.2026"),
+        call("finish", summary="Сохранил 1", found=1, remaining=0),
+    )
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    run = _wait(client, owner, client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-04", "date_to": "2026-11-03"}).json()["id"])
+    assert run["status"] == "done" and "Документов возврата создано: 1" in run["summary"], run
+    assert run["saved"][0]["batch_id"]
+    with SessionLocal() as db:
+        b = db.scalars(select(ReturnBatch)).one()
+        assert b.number == "№000006738 от 04.10.2026" and str(b.doc_date) == "2026-10-04"
+        lines = db.scalars(select(ReturnLine).where(ReturnLine.batch_id == b.id).order_by(ReturnLine.id)).all()
+        assert [(x.article, x.qty, x.invoice_no) for x in lines] == [("SLKH073", 2, "ЮП0663567 /3"), ("A-55", 1, "ЮП0622527")]
+        mem = db.scalar(select(InstrSection).where(InstrSection.title.like("Память агентов 1С%")))
+        assert mem.notes.count("•") == 1 and "Сборки товаров" in mem.notes  # та же тема перезаписана
+    # память идёт первой в поручении следующего агента
+    from app.assembly_run import instructions_text
+
+    with SessionLocal() as db:
+        assert instructions_text(db).startswith("### Память агентов 1С")
+
+
+def test_assembly_rejects_early_finish_and_reconnects(client, owner, term, monkeypatch):
+    cid, _ = term
+    alive = {"v": True, "opens": 0}
+    monkeypatch.setattr(rdp_manager, "is_open", lambda key: alive["v"])
+
+    def fake_open(*a, **k):
+        alive["opens"] += 1
+        alive["v"] = True
+
+    monkeypatch.setattr(rdp_manager, "open", fake_open)
+    monkeypatch.setattr(rdp_manager, "is_blank", lambda key: False)
+
+    def click(*a, **k):
+        alive["v"] = False  # сеанс Windows завершился прямо во время действия
+        from app.browser import BrowserError
+
+        raise BrowserError("Подключение к терминалу завершилось")
+
+    monkeypatch.setattr(rdp_manager, "click", click)
+    script = Script(
+        call("finish", summary="Сохранён 1, остальное не успел", found=14, remaining=13),
+        call("rdp_click", x=10, y=10),
+        call("finish", summary="Всё", found=14, remaining=0),
+    )
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    run = _wait(client, owner, client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-04", "date_to": "2026-11-03"}).json()["id"])
+    log = "\n".join(run["log"])
+    assert "осталось 13 документов" in log
+    assert "переподключаюсь (1 из" in log and alive["opens"] == 1
+    assert run["status"] == "done" and run["summary"].startswith("Всё")
+
+
+def test_assembly_continues_itself_when_documents_left(client, owner, term, monkeypatch):
+    cid, _ = term
+    monkeypatch.setattr(rdp_manager, "close", lambda key: None)
+    script = Script(*[call("finish", summary="Не успел", found=5, remaining=4)] * 4)
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    first = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-04", "date_to": "2026-11-03"}).json()["id"]
+    run = _wait(client, owner, first)
+    assert "продолжена новым запуском" in run["summary"]
+    for _ in range(100):
+        runs = client.get("/api/assembly/runs", headers=owner).json()
+        if len(runs) > 1:
+            break
+        time.sleep(0.1)
+    assert any("[автопродолжение 1]" in (r["note"] or "") for r in runs)
+
+
+def test_return_document_from_saved_file_and_view(client, owner):
+    from app.assembly_run import save_to_files
+
+    with SessionLocal() as db:
+        f = save_to_files(db, 1, "Армтек", "000006738 от 04.10.2026", "", PRINT_FORM)
+        fid = f.id
+    view = client.get(f"/api/files/{fid}/view", headers=owner).json()
+    assert view["kind"] == "table" and view["rows"][2][1] == "Артикул"
+    assert client.get(f"/api/returns/from-file/{fid}", headers=owner).json()["batch_id"] is None
+    r = client.post(f"/api/returns/from-file/{fid}", headers=owner)
+    assert r.status_code == 201, r.text
+    assert client.get(f"/api/returns/from-file/{fid}", headers=owner).json()["batch_id"]
+    # повторно: тот же документ заменяется, а не дублируется
+    assert client.post(f"/api/returns/from-file/{fid}", headers=owner).status_code == 201
+    from app.models import ReturnBatch
+
+    with SessionLocal() as db:
+        assert len(db.scalars(select(ReturnBatch)).all()) == 1
+
+
+def test_print_form_without_goods_is_explained():
+    from app.assembly_returns import parse_print_form
+
+    with pytest.raises(ValueError, match="шапка"):
+        parse_print_form("Номер\tДата\n7\t01.11.2026\n")

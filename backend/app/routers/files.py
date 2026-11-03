@@ -240,6 +240,34 @@ def download(file_id: int, db: Session = Depends(get_db), _: User = Depends(curr
     )
 
 
+VIEW_ROWS = 1000
+TEXT_TYPES = (".csv", ".txt", ".tsv", ".md", ".json", ".log")
+
+
+@router.get("/files/{file_id}/view")
+def view(file_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    """Содержимое файла для просмотра прямо в системе: таблица для CSV, текст для остального текстового."""
+    import csv
+    import io
+
+    row = _stored(db, file_id)
+    path = _root() / row.disk_name
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail="Файл потерян на сервере")
+    low = row.name.lower()
+    if not (low.endswith(TEXT_TYPES) or row.content_type.startswith("text/")):
+        raise HTTPException(status_code=415, detail="Этот файл можно только скачать: просмотр есть для таблиц CSV и текста")
+    raw = path.read_bytes()[: 3 * 1024 * 1024]
+    text = raw.decode("utf-8-sig", errors="replace")
+    if low.endswith((".csv", ".tsv")) or "csv" in row.content_type:
+        sample = text[:5000]
+        delim = "\t" if sample.count("\t") > sample.count(";") else (";" if ";" in sample else ",")
+        rows = list(csv.reader(io.StringIO(text), delimiter=delim))
+        rows = [r for r in rows if any(c.strip() for c in r)]
+        return {"name": row.name, "kind": "table", "rows": rows[:VIEW_ROWS], "total": len(rows), "truncated": len(rows) > VIEW_ROWS}
+    return {"name": row.name, "kind": "text", "text": text[:200_000], "truncated": len(text) > 200_000}
+
+
 @router.delete("/files/{file_id}", status_code=204)
 def delete_file(file_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
     row = _stored(db, file_id)

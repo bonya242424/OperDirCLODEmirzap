@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, getToken } from "../../api";
+import FileViewer from "./FileViewer";
 
 interface Run {
   id: number;
   connection_id?: number;
   status: "running" | "done" | "failed" | "stopped";
   summary: string;
-  saved: { supplier: string; file_id: number; name: string; duplicate?: boolean }[];
+  saved: { supplier: string; file_id: number; name: string; duplicate?: boolean; batch_id?: number | null }[];
   log?: string[];
   note?: string;
   created_at?: string;
@@ -55,7 +56,8 @@ function LiveScreen({ conn, running, log }: { conn: number; running: boolean; lo
 }
 
 /** Запуск агента, который собирает документы «Сборка» из 1С через терминал и сохраняет их в «Файлы». */
-export default function AssemblyRunBox({ from, to }: { from: string; to: string }) {
+export default function AssemblyRunBox({ from, to, onOpenReturn }: { from: string; to: string; onOpenReturn?: (supplierId: number | null) => void }) {
+  const [viewing, setViewing] = useState<{ id: number; name: string } | null>(null);
   const [targets, setTargets] = useState<Targets | null>(null);
   const [conn, setConn] = useState(0);
   const [note, setNote] = useState("");
@@ -132,9 +134,10 @@ export default function AssemblyRunBox({ from, to }: { from: string; to: string 
   const running = run?.status === "running";
   return (
     <div className="ag-problem assembly-run">
+      {viewing && <FileViewer fileId={viewing.id} name={viewing.name} onClose={() => setViewing(null)} onOpenReturn={onOpenReturn ? (id) => { setViewing(null); onOpenReturn(id); } : undefined} />}
       <strong>Собрать из 1С за период {new Date(from).toLocaleDateString("ru-RU")}–{new Date(to).toLocaleDateString("ru-RU")}</strong>
       <p className="muted small">
-        Агент откроет в 1С документы «Сборка» за этот период, скопирует таблицы и сохранит в «Файлы»: отдельная папка на каждого поставщика, в названии файла дата сохранения.
+        Агент откроет в 1С документы «Сборка» за этот период, сохранит их в «Файлы» (папка на каждого поставщика) и по каждому создаст документ возврата у поставщика: сам возврат на сайте запускаете вы кнопкой внутри документа. Если сеанс Windows завершится, агент переподключится и продолжит; всё, что он выяснил про 1С, записывается в «Память агентов 1С» в «Инструкции 1С».
         Он только читает: проведение, запись и удаление в 1С заблокированы. Действует по инструкциям из «Инструкции 1С». Экран терминала виден ниже во время работы.
       </p>
       {targets.rdp.length === 0 ? (
@@ -164,7 +167,12 @@ export default function AssemblyRunBox({ from, to }: { from: string; to: string 
             </div>
           )}
           {run.saved.length > 0 && (
-            <ul>{run.saved.map((s) => <li key={s.file_id + (s.duplicate ? "d" : "")}>{s.supplier}: {s.name}{s.duplicate ? " — дубль, повторно не сохранён" : ""}</li>)}</ul>
+            <ul>{run.saved.map((s) => (
+              <li key={s.file_id + (s.duplicate ? "d" : "")}>
+                {s.supplier}: <button className="link" onClick={() => setViewing({ id: s.file_id, name: s.name })}>{s.name}</button>
+                {s.duplicate ? " — дубль, повторно не сохранён" : s.batch_id ? " — документ возврата создан" : ""}
+              </li>
+            ))}</ul>
           )}
           <LiveScreen conn={run.connection_id ?? conn} running={running} log={run.log ?? []} />
           {run.log && run.log.length > 0 && <pre className="remote-log">{run.log.slice(-40).join("\n")}</pre>}

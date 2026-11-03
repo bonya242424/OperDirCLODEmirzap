@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api, downloadFile, formatAgo, formatDate } from "../../api";
+import FileViewer from "./FileViewer";
 import type { Folder, Integration, IntegrationsResponse, StoredFile } from "../../types";
 
 function formatSize(bytes: number): string {
@@ -20,6 +21,7 @@ export default function FilesApp() {
   const [description, setDescription] = useState("");
   const [sourceKey, setSourceKey] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const [viewing, setViewing] = useState<StoredFile | null>(null);
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : "Ошибка");
 
@@ -114,6 +116,7 @@ export default function FilesApp() {
 
   return (
     <div className="files">
+      {viewing && <FileViewer fileId={viewing.id} name={viewing.name} onClose={() => setViewing(null)} />}
       <aside className="files-side">
         <div className="files-side-head">
           <strong>Папки</strong>
@@ -185,12 +188,13 @@ export default function FilesApp() {
                 <tbody>
                   {files.map((f) => (
                     <tr key={f.id}>
-                      <td>{f.name}</td>
+                      <td><button className="link" onClick={() => setViewing(f)}>{f.name}</button></td>
                       <td>{formatSize(f.size)}</td>
                       <td>{f.uploaded_by}</td>
                       <td title={formatDate(f.uploaded_at)}>{formatAgo(f.uploaded_at)}</td>
                       <td className="row">
-                        <button onClick={() => downloadFile(`/files/${f.id}/download`, f.name).catch(fail)}>Скачать</button>
+                        <button onClick={() => setViewing(f)}>Открыть</button>
+                        <button className="ghost" onClick={() => downloadFile(`/files/${f.id}/download`, f.name).catch(fail)}>Скачать</button>
                         {f.can_delete && <button className="ghost" onClick={() => remove(f)}>Удалить</button>}
                       </td>
                     </tr>

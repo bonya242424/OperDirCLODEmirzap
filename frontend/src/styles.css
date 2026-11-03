@@ -538,3 +538,10 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .assembly-ask p { margin: 6px 0; }
 .assembly-history { margin-top: 10px; }
 .assembly-history-item { border-top: 1px solid var(--line); padding: 6px 0; }
+
+.link { background: none; border: 0; padding: 0; color: var(--accent, inherit); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; font: inherit; text-align: left; }
+.modal.file-view { width: min(1100px, 100%); }
+.file-view-scroll { max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.file-view-scroll .files-table td { white-space: nowrap; font-size: 13px; }
+.file-view-text { margin: 0; padding: 12px; white-space: pre-wrap; font-size: 13px; }
+.file-view-return { flex-wrap: wrap; gap: 8px; align-items: center; }

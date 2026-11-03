@@ -78,7 +78,7 @@ export default function AssemblyPanel({ onOpen }: { onOpen: (supplierId: number 
         </div>
       </div>
 
-      <AssemblyRunBox from={from} to={to} />
+      <AssemblyRunBox from={from} to={to} onOpenReturn={onOpen} />
       <div className="ag-upload">
         <label className="ag-file">
           + Загрузить документ (CSV)

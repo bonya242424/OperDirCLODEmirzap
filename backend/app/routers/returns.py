@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import assembly_returns as ar
 from ..db import get_db
 from ..deps import current_user
 from .. import connections as conn_lib
@@ -126,42 +127,16 @@ def backfill_doc_dates() -> None:
         db.commit()
 
 
-def _supplier_by_name(db: Session, name: str, me: User) -> ReturnSupplier:
-    sup = db.scalar(select(ReturnSupplier).where(ReturnSupplier.name == name))
-    if sup is None:
-        sup = ReturnSupplier(name=name[:200], created_by=me.id)
-        db.add(sup)
-        db.flush()
-    return sup
-
-
 def _save(db: Session, text: str, source: str, me: User, supplier: ReturnSupplier | None = None) -> ReturnBatch:
     try:
         name, number, lines = parse_sheet(text, need_supplier=supplier is None)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    sup = supplier or _supplier_by_name(db, name, me)
-    if number.strip():
-        # тот же документ загружен повторно (например, обновили таблицу): заменяем, но не затираем отправленное
-        for old in db.scalars(select(ReturnBatch).where(ReturnBatch.supplier_id == sup.id, ReturnBatch.number == number[:200])).all():
-            if db.scalar(select(ReturnLine.id).where(ReturnLine.batch_id == old.id, ReturnLine.status == "submitted").limit(1)):
-                raise HTTPException(status_code=409, detail=f"Документ {number} уже загружен, и по нему есть отправленные заявки: удалить его нельзя")
-            for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == old.id)):
-                db.delete(r)
-            for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == old.id)):
-                db.delete(r)
-            db.delete(old)
-        db.flush()
-    batch = ReturnBatch(supplier=sup.name, supplier_id=sup.id, number=number[:200], source=source[:500], created_by=me.id, doc_date=doc_date_of(number) or utcnow().date())
-    db.add(batch)
-    db.flush()
-    for ln in lines:
-        row = {k: (v[:500] if isinstance(v, str) else v) for k, v in ln.items()}
-        if not row.get("reason") and sup.default_reason:
-            row["reason"] = sup.default_reason
-        db.add(ReturnLine(batch_id=batch.id, **row))
-    db.commit()
-    return batch
+    sup = supplier or ar.supplier_by_name(db, name, me.id)
+    try:
+        return ar.store_batch(db, sup, number, lines, source, me.id)
+    except ar.Locked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 class UrlIn(BaseModel):
@@ -676,3 +651,36 @@ def stop_run(run_id: int, db: Session = Depends(get_db), me: User = Depends(curr
         r.status = "stopped"
         db.commit()
     return _run_out(r)
+
+
+def _assembly_file(db: Session, file_id: int):
+    from ..models import Folder, StoredFile
+
+    f = db.get(StoredFile, file_id)
+    folder = db.get(Folder, f.folder_id) if f else None
+    if f is None or folder is None or not folder.name.startswith("Сборка 1С — "):
+        raise HTTPException(status_code=404, detail="Это не файл сборки из 1С")
+    path = Path(settings.files_dir).resolve() / f.disk_name
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail="Файл потерян на сервере")
+    return f, folder.name.removeprefix("Сборка 1С — "), path.read_text(encoding="utf-8", errors="replace")
+
+
+@router.get("/from-file/{file_id}")
+def batch_of_file(file_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    """Есть ли уже документ возврата по этому файлу сборки."""
+    b = ar.batch_for_file(db, file_id)
+    return {"batch_id": b.id, "supplier_id": b.supplier_id} if b else {"batch_id": None, "supplier_id": None}
+
+
+@router.post("/from-file/{file_id}", status_code=201)
+def make_from_file(file_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Документ возврата по сохранённой сборке 1С (для файлов, сохранённых до автоматического создания, или после правки разбора)."""
+    f, supplier, text = _assembly_file(db, file_id)
+    try:
+        batch = ar.batch_from_file(db, f, supplier, text, me.id)
+    except ar.Locked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Не получилось разобрать таблицу: {exc}") from exc
+    return _summary(db, batch)
