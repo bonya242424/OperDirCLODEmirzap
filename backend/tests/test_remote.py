@@ -187,3 +187,8 @@ def test_connect_in_background_shows_steps(client, owner, fake_rdp):
 def test_explain_activation_failure():
     msg = rdp_manager.explain("[rdp_client_wait_for_activation]: ERRCONNECT_CONNECT_TRANSPORT_FAILED | freerdp_post_connect failed", "x")
     assert "подготовке сеанса" in msg
+
+
+def test_code_extracts_errconnect():
+    assert rdp_manager.code("x ERRCONNECT_SECURITY_NEGO_CONNECT_FAILED [0x2000C]") == "SECURITY_NEGO_CONNECT_FAILED"
+    assert rdp_manager.code("") == "без сообщения"

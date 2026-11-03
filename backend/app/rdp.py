@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 import os
 import shutil
 import subprocess
@@ -63,6 +64,15 @@ class RdpManager:
         text = log.replace(password, "***") if password else log
         rows = [" ".join(r.split())[:140] for r in text.splitlines() if r.strip()]
         return " | ".join(rows[-lines:])[:400]
+
+    @staticmethod
+    def code(log: str) -> str:
+        """Короткий код ошибки клиента из журнала: ERRCONNECT_… или последняя строка."""
+        found = re.findall(r"ERRCONNECT_[A-Z_]+|ERRINFO_[A-Z_]+", log)
+        if found:
+            return found[-1].replace("ERRCONNECT_", "")
+        rows = [" ".join(r.split()) for r in log.splitlines() if r.strip()]
+        return (rows[-1][-60:] if rows else "без сообщения")
 
     @staticmethod
     def explain(log: str, password: str) -> str:
@@ -196,7 +206,14 @@ class RdpManager:
         full = ["+clipboard", "+auto-reconnect"]
         # облегчённый профиль: меньше цвета, без буфера обмена и лишних эффектов (некоторые серверы рвут соединение на этапе подготовки сеанса)
         light = ["/bpp:16", "-themes", "-aero", "-fonts", "/network:lan"]
-        variants = [full, light, light + ["/sec:tls", "/tls:seclevel:0"], light + ["/sec:rdp"], full + ["/sec:tls", "/tls:seclevel:0"]]
+        variants = [
+            full,
+            light,
+            light + ["/sec:nla"],
+            light + ["/sec:tls", "/tls:seclevel:0"],
+            light + ["/sec:rdp"],
+            ["/bpp:16", "-clipboard", "-themes", "-aero", "-fonts", "/network:lan", "/size:1024x768"],
+        ]
         logs: list[str] = []
         rdp = None
         for i, extra in enumerate(variants):
@@ -225,9 +242,10 @@ class RdpManager:
             reason = self.explain(logs[0] if logs else "", password)
             if len(logs) > 1 and not reason.startswith("неверный логин"):
                 reason += f" (пробовали {len(logs)} наборов настроек соединения)"
-            raw = self.tail(logs[-1] if logs else "", password)
+            raw = self.tail(logs[0] if logs else "", password, 2)
+            codes = ", ".join(f"{n + 1}: {self.code(lg)}" for n, lg in enumerate(logs))
             ip = self.egress_ip()
-            raise BrowserError("Не удалось подключиться к терминалу: " + reason + (f". Ответ клиента: {raw}" if raw else "") + (f". Наши подключения идут с адреса {ip}: он должен быть в списке разрешённых" if ip else ""))
+            raise BrowserError("Не удалось подключиться к терминалу: " + reason + (f". Коды по наборам настроек: {codes}" if logs else "") + (f". Ответ клиента при первой попытке: {raw}" if raw else "") + (f". Адрес нашего сервера: {ip}" if ip else ""))
         self._sessions[key] = _Session(display, xvfb, rdp)
         self._pending.pop(key, None)
         self._step(key, "Подключено", "ready")
