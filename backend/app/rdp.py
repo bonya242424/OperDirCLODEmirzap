@@ -173,6 +173,7 @@ class RdpManager:
         if p["state"] == "ready" and not self.is_open(key):
             p = {"state": "idle", "steps": [], "error": ""}
         p["preview"] = key in self._pending
+        p["width"], p["height"] = W, H
         return p
 
     def _precheck(self, host: str, port: int) -> None:

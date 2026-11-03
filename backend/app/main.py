@@ -61,7 +61,8 @@ async def lifespan(_: FastAPI):
         ensure_rows(db)
         search_index.index_missing(db)
         changelog_data.sync(db)
-        project_context_seed.sync(db)
+        if settings.seed_project_context:
+            project_context_seed.sync(db)
     reset_stale()
     reset_stale_guides()
     reset_stale_runs()

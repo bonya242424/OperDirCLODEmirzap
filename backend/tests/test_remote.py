@@ -206,3 +206,8 @@ def test_client_home_is_writable_for_license():
 
     env = rdp_manager.client_home()
     assert os.path.isdir(os.path.join(env["XDG_CONFIG_HOME"], "freerdp")) and os.access(env["HOME"], os.W_OK)
+
+
+def test_status_reports_screen_size_for_click_mapping():
+    st = rdp_manager.status(123456)
+    assert (st["width"], st["height"]) == (1280, 800)

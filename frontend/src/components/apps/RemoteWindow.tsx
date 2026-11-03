@@ -33,6 +33,7 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
   const buf = useRef("");
   const timer = useRef<number | undefined>(undefined);
   const box = useRef<HTMLDivElement>(null);
+  const clickTimer = useRef<number | undefined>(undefined);
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : "Ошибка");
 
@@ -69,7 +70,8 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
       // Терминал подключается в фоне: показываем шаги и картинку виртуального экрана
       const poll = async () => {
         try {
-          const st = await api<{ state: string; steps: { at: string; text: string }[]; error: string; preview: boolean }>(`${base}/status`);
+          const st = await api<{ state: string; steps: { at: string; text: string }[]; error: string; preview: boolean; width: number; height: number }>(`${base}/status`);
+          if (st.width && st.height) setSize({ width: st.width, height: st.height });
           if (!alive.current) return;
           setSteps(st.steps);
           setPreview(st.preview);
@@ -239,8 +241,17 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
                 src={src}
                 alt="Удалённый экран"
                 draggable={false}
-                onClick={(e) => { box.current?.focus(); void act("click", point(e)); }}
-                onDoubleClick={(e) => void act("click", { ...point(e), double: true })}
+                onClick={(e) => {
+                  box.current?.focus();
+                  if (e.detail > 1) return; // второй клик двойного обработает onDoubleClick
+                  const p = point(e);
+                  window.clearTimeout(clickTimer.current);
+                  clickTimer.current = window.setTimeout(() => void act("click", p), 220);
+                }}
+                onDoubleClick={(e) => {
+                  window.clearTimeout(clickTimer.current);
+                  void act("click", { ...point(e), double: true });
+                }}
                 onContextMenu={(e) => { e.preventDefault(); void act("click", { ...point(e), button: "right" }); }}
                 onWheel={(e) => void act("scroll", { dy: e.deltaY })}
               />
