@@ -122,6 +122,21 @@ class RdpManager:
         s.used = time.time()
         return s
 
+    @staticmethod
+    def client_home() -> dict:
+        """Домашняя папка клиента RDP. Сервер выдаёт клиенту лицензию (CAL), и клиент обязан её сохранить:
+        без записываемой папки соединение обрывается на этапе лицензирования. Папка постоянная, чтобы лицензия
+        не запрашивалась заново (на терминалах с лицензиями на устройство это тратит их количество)."""
+        from .config import settings
+
+        home = Path(settings.files_dir).resolve().parent / "rdp-home"
+        try:
+            (home / ".config" / "freerdp").mkdir(parents=True, exist_ok=True)
+        except OSError:
+            home = Path("/tmp/rdp-home")
+            (home / ".config" / "freerdp").mkdir(parents=True, exist_ok=True)
+        return {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")}
+
     def _step(self, key: int, text: str, state: str | None = None, error: str = "") -> None:
         p = self.progress.setdefault(key, {"state": "connecting", "steps": [], "error": ""})
         if text:
@@ -221,7 +236,7 @@ class RdpManager:
             logpath = Path(f"/tmp/rdp-{display}-{i}.log")
             self._step(key, f"Подключаюсь, набор настроек {i + 1} из {len(variants)}")
             try:
-                rdp = self.spawn_logged(base + extra, {**os.environ, "DISPLAY": f":{display}"}, str(logpath))
+                rdp = self.spawn_logged(base + extra, {**os.environ, "DISPLAY": f":{display}", **self.client_home()}, str(logpath))
             except OSError:
                 xvfb.terminate()
                 raise BrowserError("На сервере не установлен клиент RDP (xfreerdp): пересоберите систему") from None

@@ -199,3 +199,10 @@ def test_last_log_endpoint_is_owner_only(client, owner):
     cid = r.json()["id"]
     assert client.get(f"/api/remote/rdp/{cid}/log", headers=owner).json() == {"text": ""}
     assert client.get(f"/api/remote/rdp/{cid}/log").status_code == 401
+
+
+def test_client_home_is_writable_for_license():
+    import os
+
+    env = rdp_manager.client_home()
+    assert os.path.isdir(os.path.join(env["XDG_CONFIG_HOME"], "freerdp")) and os.access(env["HOME"], os.W_OK)
