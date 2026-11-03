@@ -49,6 +49,7 @@ class RdpManager:
         self.spawn_logged = self._spawn_logged
         self.precheck = self._precheck
         self.progress: dict[int, dict] = {}
+        self.last_log: dict[int, str] = {}
         self._pending: dict[int, int] = {}
         self.run = lambda args, env=None, timeout=10: subprocess.run(args, env=env, capture_output=True, timeout=timeout, check=True).stdout
         self.wait_display = self._wait_display
@@ -199,20 +200,20 @@ class RdpManager:
             raise BrowserError("Не удалось запустить виртуальный экран")
         self._pending[key] = display
         self._step(key, "Виртуальный экран запущен")
-        base = [shutil.which("xfreerdp3") or "xfreerdp", f"/v:{host}:{port}", f"/u:{user}", f"/p:{password}", f"/size:{W}x{H}", "/cert:ignore", "-wallpaper", "/log-level:INFO"]
+        base = [shutil.which("xfreerdp3") or "xfreerdp", f"/v:{host}:{port}", f"/u:{user}", f"/p:{password}", f"/size:{W}x{H}", "/cert:ignore", "-wallpaper"]
         if domain:
             base.append(f"/d:{domain}")
         # Разные серверы требуют разный способ защиты соединения: пробуем по очереди
-        full = ["+clipboard", "+auto-reconnect"]
+        full = ["+clipboard", "+auto-reconnect", "/log-level:DEBUG"]  # подробный журнал первой попытки: по нему видно, что сказал сервер
         # облегчённый профиль: меньше цвета, без буфера обмена и лишних эффектов (некоторые серверы рвут соединение на этапе подготовки сеанса)
-        light = ["/bpp:16", "-themes", "-aero", "-fonts", "/network:lan"]
+        light = ["/bpp:16", "-themes", "-aero", "-fonts", "/network:lan", "/log-level:INFO"]
         variants = [
             full,
             light,
             light + ["/sec:nla"],
             light + ["/sec:tls", "/tls:seclevel:0"],
             light + ["/sec:rdp"],
-            ["/bpp:16", "-clipboard", "-themes", "-aero", "-fonts", "/network:lan", "/size:1024x768"],
+            ["/bpp:16", "-clipboard", "-themes", "-aero", "-fonts", "/network:lan", "/size:1024x768", "/log-level:INFO"],
         ]
         logs: list[str] = []
         rdp = None
@@ -231,7 +232,7 @@ class RdpManager:
             if rdp.poll() is None:
                 break
             try:
-                logs.append(logpath.read_text(errors="replace")[-3000:])
+                logs.append(logpath.read_text(errors="replace")[-30000 if i == 0 else -3000:])
             except OSError:
                 logs.append("")
             if self.explain(logs[-1], password).startswith("неверный логин"):
@@ -242,6 +243,7 @@ class RdpManager:
             reason = self.explain(logs[0] if logs else "", password)
             if len(logs) > 1 and not reason.startswith("неверный логин"):
                 reason += f" (пробовали {len(logs)} наборов настроек соединения)"
+            self.last_log[key] = (logs[0] if logs else "").replace(password, "***")[-9000:] if password else (logs[0] if logs else "")[-9000:]
             raw = self.tail(logs[0] if logs else "", password, 2)
             codes = ", ".join(f"{n + 1}: {self.code(lg)}" for n, lg in enumerate(logs))
             ip = self.egress_ip()

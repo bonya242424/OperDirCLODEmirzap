@@ -198,6 +198,14 @@ def rdp_status(conn_id: int, db: Session = Depends(get_db), me: User = Depends(c
     return rdp_manager.status(RDP_BASE + conn_id)
 
 
+@router.get("/rdp/{conn_id}/log")
+def rdp_log(conn_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Подробный журнал последней неудачной попытки (пароль заменён). Только владелец."""
+    _owner(me)
+    _conn(db, conn_id)
+    return {"text": rdp_manager.last_log.get(RDP_BASE + conn_id, "")}
+
+
 @router.get("/rdp/{conn_id}/screen")
 def rdp_screen(conn_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
     _owner(me)

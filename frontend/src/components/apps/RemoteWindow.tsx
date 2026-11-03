@@ -28,6 +28,7 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
   const [steps, setSteps] = useState<{ at: string; text: string }[]>([]);
   const [preview, setPreview] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [details, setDetails] = useState("");
   const alive = useRef(true);
   const buf = useRef("");
   const timer = useRef<number | undefined>(undefined);
@@ -255,8 +256,10 @@ export default function RemoteWindow({ base, openBody, address = false, onClosed
           </form>
         </>
       )}
+      {details && <pre className="remote-log">{details}</pre>}
       {state === "error" && (
         <div className="remote-bar">
+          {base.startsWith("/remote/rdp/") && <button className="ghost" onClick={() => api<{ text: string }>(`${base}/log`).then((r) => setDetails(r.text || "Журнала нет")).catch(fail)}>Подробный журнал</button>}
           {base.startsWith("/remote/rdp/") && <button className="primary" onClick={() => setAttempt((n) => n + 1)}>Повторить</button>}
           <button onClick={onClosed}>Назад</button>
         </div>

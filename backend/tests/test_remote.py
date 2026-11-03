@@ -192,3 +192,10 @@ def test_explain_activation_failure():
 def test_code_extracts_errconnect():
     assert rdp_manager.code("x ERRCONNECT_SECURITY_NEGO_CONNECT_FAILED [0x2000C]") == "SECURITY_NEGO_CONNECT_FAILED"
     assert rdp_manager.code("") == "без сообщения"
+
+
+def test_last_log_endpoint_is_owner_only(client, owner):
+    r = client.post("/api/connections", headers=owner, json={"kind": "rdp", "scope": "company", "config": {"host": "10.0.0.5", "user": "ivan", "password": "pw-secret-1"}})
+    cid = r.json()["id"]
+    assert client.get(f"/api/remote/rdp/{cid}/log", headers=owner).json() == {"text": ""}
+    assert client.get(f"/api/remote/rdp/{cid}/log").status_code == 401

@@ -528,3 +528,4 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .remote-steps li.now::before { content: "… "; color: var(--accent); }
 .remote-steps li.bad::before { content: "✕ "; color: var(--danger, #e5534b); }
 .remote-preview { width: 100%; max-width: 640px; margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-md); }
+.remote-log { max-height: 280px; overflow: auto; font-size: 11px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r-md); white-space: pre-wrap; user-select: text; }
