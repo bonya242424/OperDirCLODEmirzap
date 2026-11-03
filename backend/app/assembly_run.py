@@ -9,6 +9,7 @@ import base64
 import json
 import logging
 import re
+import time
 from datetime import date
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,7 @@ MAX_STEPS = 250
 KEEP_IMAGES = 2
 # Что можно нажимать агенту: только навигация и выделение/копирование. Delete, Ctrl+S, F9 и подобное заблокированы.
 AGENT_KEYS = {"Enter", "Tab", "Escape", "Backspace", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", "Space", "F4"}
+ACTIONS = {"rdp_click", "rdp_type", "rdp_key", "rdp_scroll"}
 AGENT_COMBOS = {"Shift+Tab", "Control+a", "Control+c", "Control+f", "Control+Home", "Control+End"}
 
 SYSTEM = (
@@ -42,7 +44,9 @@ SYSTEM = (
     "и подписью документа (номер и дата). Не переписывай таблицу сам: сохраняется то, что в буфере. Если копирование не работает, перепиши таблицу "
     "по скриншоту в save_document_text и отметь это в подписи. "
     "Название поставщика бери из документа; если оно совпадает с одним из поставщиков системы, пиши его в точности как в списке. "
-    "Работай последовательно, не пропускай документы периода. Скриншот делай, когда не уверен в экране. "
+    "Работай последовательно, не пропускай документы периода. ДЕЙСТВУЙ БЫСТРО: в одном ответе вызывай сразу несколько инструментов подряд, если результат "
+    "первых не влияет на следующие (например, клик, Control+a, Control+c, rdp_clipboard или Escape, ArrowDown, Enter). После действий экран прикладывается "
+    "автоматически, отдельный rdp_view нужен редко. Рассуждай коротко. "
     "ВАЖНО: никогда не отвечай по памяти и по тексту инструкций, не придумывай документы и номера. Всё, что ты сообщаешь, должно быть видно на экране 1С "
     "или в буфере обмена. Сначала открой журнал «Документы Сборка», отфильтруй его по нужному контрагенту и по периоду (поле отбора или Control+f), "
     "затем получи полный список: Control+a в списке, Control+c и rdp_clipboard (можно запросить больше текста через chars). Это и есть перечень документов: "
@@ -208,6 +212,15 @@ def run_assembly(run_id: int) -> None:
                         say(f"Отказ: {exc}")
                         out = f"Ошибка: {exc}"
                     results.append({"type": "tool_result", "tool_use_id": c.id, "content": out})
+                # После действий сразу прикладываем свежий экран: модели не нужен отдельный ход на rdp_view, шагов вдвое меньше.
+                if results and any(c.name in ACTIONS for c in step.calls) and not any(c.name == "rdp_view" for c in step.calls) and not finished:
+                    try:
+                        time.sleep(0.7)
+                        shot = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(rdp_manager.screenshot(key)).decode()}}
+                        last = results[-1]
+                        last["content"] = [{"type": "text", "text": str(last["content"]) + ". Экран после действий ниже."}, shot] if isinstance(last["content"], str) else last["content"]
+                    except Exception:  # noqa: BLE001
+                        pass
                 messages.append({"role": "user", "content": results})
                 _prune(messages)
                 if finished:
