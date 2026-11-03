@@ -71,3 +71,23 @@ def test_assembly_owner_only_and_validation(client, owner, term):
     bad = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-11-02", "date_to": "2026-10-01"})
     assert bad.status_code == 422
     assert client.post("/api/assembly/run", headers=owner, json={"connection_id": 999, "date_from": "2026-10-01", "date_to": "2026-10-02"}).status_code == 422
+
+
+def test_assembly_nudges_when_model_answers_without_actions(client, owner, term, monkeypatch):
+    from tests.test_agents import say
+
+    cid, _ = term
+    script = Script(
+        say("Вот сборка: документ 000007007"),  # ответ по памяти, без действий
+        call("rdp_view"),
+        call("rdp_key", key="Control+c"),
+        call("save_document", supplier="Армтек", label="№1"),
+        call("finish", summary="готово"),
+    )
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
+    run = _wait(client, owner, r.json()["id"])
+    assert run["status"] == "done" and "Сохранено файлов: 1" in run["summary"]
+    assert any("без действий" in line for line in run["log"])
+    first = script.seen[0][0][0]["content"]
+    assert any(b.get("type") == "image" for b in first)  # экран показан сразу
