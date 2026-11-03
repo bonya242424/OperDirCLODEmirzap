@@ -189,3 +189,16 @@ def test_agent_asks_owner_and_answer_goes_to_knowledge(client, owner, term, monk
         assert "Меню Печать вверху документа" in instructions_text(db)
     hist = client.get("/api/assembly/runs", headers=owner).json()
     assert hist[0]["qa"] and hist[0]["id"] == rid
+
+
+def test_assembly_waits_for_desktop(client, owner, term, monkeypatch):
+    cid, _ = term
+    monkeypatch.setattr(rdp_manager, "is_open", lambda key: False)
+    monkeypatch.setattr(rdp_manager, "open", lambda *a, **k: {"width": 1280, "height": 800})
+    seq = iter([True, True, False])
+    monkeypatch.setattr(rdp_manager, "is_blank", lambda key: next(seq, False))
+    monkeypatch.setattr("app.assembly_run.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: Script(call("save_document", supplier="Армтек", label="№9999"), call("finish", summary="ok")))
+    r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
+    run = _wait(client, owner, r.json()["id"])
+    assert run["status"] == "done" and any("Жду, пока" in x for x in run["log"])

@@ -213,6 +213,12 @@ def run_assembly(run_id: int) -> None:
                 cfg = conn_lib.decrypt(conn.config_encrypted)
                 say("Подключаюсь к терминалу")
                 rdp_manager.open(key, cfg["host"].strip(), int(cfg.get("port") or 3389), cfg["user"], cfg["password"], cfg.get("domain", "").strip())
+            for i in range(20):  # после подключения рабочий стол рисуется не сразу: ждём, чтобы агент не получил чёрный экран
+                if not rdp_manager.is_blank(key):
+                    break
+                if i == 0:
+                    say("Жду, пока в терминале появится рабочий стол")
+                time.sleep(2)
         except (BrowserError, KeyError, ValueError) as exc:
             return finish("failed", f"Не удалось подключиться к терминалу: {exc}")
         suppliers = ", ".join(s.name for s in db.scalars(select(ReturnSupplier).where(ReturnSupplier.is_active.is_(True))))
@@ -233,6 +239,7 @@ def run_assembly(run_id: int) -> None:
         messages: list[dict] = [{"role": "user", "content": first}]
         summary = ""
         nudges = 0
+        say("Подключено, отправляю задачу модели")
         try:
             for _ in range(MAX_STEPS):
                 db.refresh(run)
@@ -242,7 +249,10 @@ def run_assembly(run_id: int) -> None:
                 step = None
                 for attempt in range(3):  # временный сбой модели не должен обрывать сборку
                     try:
+                        t0 = time.monotonic()
                         step = provider.step(SYSTEM, messages, TOOLS)
+                        if time.monotonic() - t0 > 20:
+                            say(f"Модель думала {int(time.monotonic() - t0)} с")
                         break
                     except LLMError as exc:
                         if attempt == 2:

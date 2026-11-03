@@ -282,6 +282,15 @@ class RdpManager:
         except (subprocess.SubprocessError, OSError):
             raise BrowserError("Не удалось получить картинку терминала") from None
 
+    def is_blank(self, key: int) -> bool:
+        """Экран ещё чёрный (рабочий стол не отрисован)? При любой ошибке считаем, что нет."""
+        try:
+            img = self.screenshot(key)
+            out = subprocess.run(["convert", "jpeg:-", "-format", "%[fx:mean]", "info:"], input=img, capture_output=True, timeout=10)
+            return out.returncode == 0 and float(out.stdout.decode().strip() or "1") < 0.02
+        except Exception:  # noqa: BLE001
+            return False
+
     def _xdo(self, key: int, *args: str) -> None:
         s = self._get(key)
         try:
