@@ -69,7 +69,7 @@ KINDS: dict[str, Kind] = {
             "xai",
             "Ключ Grok (xAI)",
             "Ключ API xAI. Включается переключателем «Модель ИИ» в «Интеграции». Только для компании, один на всех",
-            [Field("api_key", "Ключ API (xai-…)", secret=True)],
+            [Field("api_key", "Ключ API", secret=True)],
         ),
         Kind(
             "cursor",
@@ -285,8 +285,6 @@ def _xai(cfg):
     from .integrations.checks import check_openai_key
 
     key = cfg["api_key"].strip()
-    if not key.startswith("xai-"):
-        return CheckResult(ERROR, "Ключ должен начинаться с xai-")
     return check_openai_key(key, settings.xai_base_url, "Grok")
 
 
