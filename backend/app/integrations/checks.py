@@ -292,9 +292,14 @@ def check_yandex_webmaster(db, row: Integration) -> CheckResult:
 
 
 def check_llm(db, row: Integration) -> CheckResult:
-    from ..llm import active_model, active_provider, llm_api_key, openai_api_key
+    from ..llm import active_model, active_provider, llm_api_key, openai_api_key, xai_api_key
 
-    if active_provider() == "openai":
+    if active_provider() == "xai":
+        key = xai_api_key()
+        if not key:
+            return CheckResult(NOT_CONFIGURED, "Выбран Grok, но ключ не задан: добавьте «Ключ Grok» в «Интеграции»")
+        res = check_openai_key(key, settings.xai_base_url, "Grok")
+    elif active_provider() == "openai":
         key = openai_api_key()
         if not key:
             return CheckResult(NOT_CONFIGURED, "Выбран GPT, но ключ не задан: добавьте «Ключ GPT» в «Интеграции»")
@@ -331,13 +336,13 @@ def check_anthropic_model(key: str, model: str, ok: CheckResult) -> CheckResult:
     return ok
 
 
-def check_openai_key(key: str) -> CheckResult:
+def check_openai_key(key: str, base: str = "", name: str = "GPT") -> CheckResult:
     from ..proxies import active_proxies, record_result
 
     routes: list[tuple[int | None, str]] = active_proxies() or [(None, "")]
     for proxy_id, url in routes:
         try:
-            resp = httpx.get(settings.openai_base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {key}"}, timeout=10.0, proxy=url or None)
+            resp = httpx.get((base or settings.openai_base_url).rstrip("/") + "/models", headers={"Authorization": f"Bearer {key}"}, timeout=10.0, proxy=url or None)
         except httpx.TransportError:
             if proxy_id is not None:
                 record_result(proxy_id, False)
@@ -345,10 +350,10 @@ def check_openai_key(key: str) -> CheckResult:
         if proxy_id is not None:
             record_result(proxy_id, True)
         if resp.status_code in (401, 403):
-            return CheckResult(ERROR, "Ключ GPT недействителен или нет доступа")
+            return CheckResult(ERROR, f"Ключ {name} недействителен или нет доступа")
         if resp.status_code != 200:
             return CheckResult(ERROR, f"API модели ответил кодом {resp.status_code}")
-        return CheckResult(OK, "API GPT отвечает" + (" через прокси" if proxy_id is not None else ""))
+        return CheckResult(OK, f"API {name} отвечает" + (" через прокси" if proxy_id is not None else ""))
     return CheckResult(ERROR, "Нет соединения с API модели" + (": ни один прокси не отвечает" if routes[0][0] is not None else ""))
 
 

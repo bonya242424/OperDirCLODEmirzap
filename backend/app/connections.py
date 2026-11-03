@@ -66,6 +66,12 @@ KINDS: dict[str, Kind] = {
             [Field("api_key", "Ключ API (sk-…)", secret=True)],
         ),
         Kind(
+            "xai",
+            "Ключ Grok (xAI)",
+            "Ключ API xAI. Включается переключателем «Модель ИИ» в «Интеграции». Только для компании, один на всех",
+            [Field("api_key", "Ключ API (xai-…)", secret=True)],
+        ),
+        Kind(
             "cursor",
             "Cursor (облачные агенты)",
             "Ключ API Cursor для запуска облачных агентов по коду. Агенты системы ставят задачи Cursor в указанном репозитории. Только для компании",
@@ -275,6 +281,15 @@ def _openai(cfg):
     return check_openai_key(key)
 
 
+def _xai(cfg):
+    from .integrations.checks import check_openai_key
+
+    key = cfg["api_key"].strip()
+    if not key.startswith("xai-"):
+        return CheckResult(ERROR, "Ключ должен начинаться с xai-")
+    return check_openai_key(key, settings.xai_base_url, "Grok")
+
+
 def _cursor(cfg):
     import httpx
 
@@ -289,4 +304,4 @@ def _cursor(cfg):
     return CheckResult(OK, "API Cursor отвечает")
 
 
-_CHECKS = {"cursor": _cursor, "openai": _openai, "anthropic": _anthropic, "rdp": _rdp, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}
+_CHECKS = {"xai": _xai, "cursor": _cursor, "openai": _openai, "anthropic": _anthropic, "rdp": _rdp, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}

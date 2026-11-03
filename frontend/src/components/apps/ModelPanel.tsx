@@ -2,18 +2,19 @@ import { FormEvent, useEffect, useState } from "react";
 import { api } from "../../api";
 
 interface Llm {
-  provider: "anthropic" | "openai";
+  provider: "anthropic" | "openai" | "xai";
   models: Record<string, string>;
   suggestions: Record<string, string[]>;
   has_key: Record<string, boolean>;
 }
 
-const NAMES = { anthropic: "Claude (Anthropic)", openai: "GPT (OpenAI)" } as const;
+const NAMES = { anthropic: "Claude (Anthropic)", openai: "GPT (OpenAI)", xai: "Grok (xAI)" } as const;
+type P = keyof typeof NAMES;
 
 /** Выбор модели ИИ: Claude или GPT и версия. Ключи добавляются в «Подключения». */
 export default function ModelPanel({ onAddKey, onChecked }: { onAddKey: (kind: string) => void; onChecked: () => void }) {
   const [data, setData] = useState<Llm | null>(null);
-  const [provider, setProvider] = useState<"anthropic" | "openai">("anthropic");
+  const [provider, setProvider] = useState<P>("anthropic");
   const [model, setModel] = useState("");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
@@ -32,7 +33,7 @@ export default function ModelPanel({ onAddKey, onChecked }: { onAddKey: (kind: s
   if (error && !data) return <div className="error">{error}</div>;
   if (!data) return <p className="muted">Загрузка…</p>;
 
-  function pick(p: "anthropic" | "openai") {
+  function pick(p: P) {
     setProvider(p);
     setModel(data!.models[p]);
     setMsg("");
@@ -61,7 +62,7 @@ export default function ModelPanel({ onAddKey, onChecked }: { onAddKey: (kind: s
     <form className="model-panel" onSubmit={save}>
       <p className="muted">Эта модель отвечает в чате, работает в агентах и разбирает видео и документы. Можно переключаться в любой момент: история чата и данные сохраняются.</p>
       <div className="model-choice">
-        {(["anthropic", "openai"] as const).map((p) => (
+        {(["anthropic", "openai", "xai"] as const).map((p) => (
           <label key={p} className={`model-card${provider === p ? " on" : ""}`}>
             <input type="radio" name="provider" checked={provider === p} onChange={() => pick(p)} />
             <strong>{NAMES[p]}</strong>

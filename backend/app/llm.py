@@ -96,14 +96,33 @@ def openai_api_key() -> str:
     return key or settings.openai_api_key.strip()
 
 
+def xai_api_key() -> str:
+    from sqlalchemy import select
+
+    from .connections import decrypt
+    from .db import SessionLocal
+    from .models import Connection
+
+    try:
+        with SessionLocal() as db:
+            row = db.scalar(select(Connection).where(Connection.kind == "xai", Connection.owner_id.is_(None)).order_by(Connection.id.desc()))
+            key = decrypt(row.config_encrypted).get("api_key", "").strip() if row else ""
+    except Exception:  # noqa: BLE001
+        key = ""
+    return key or settings.xai_api_key.strip()
+
+
 def active_provider() -> str:
-    return "openai" if get_setting("llm_provider", "anthropic") == "openai" else "anthropic"
+    p = get_setting("llm_provider", "anthropic")
+    return p if p in ("openai", "xai") else "anthropic"
 
 
 def active_model(provider: str | None = None) -> str:
     provider = provider or active_provider()
     if provider == "openai":
         return get_setting("llm_model_openai", settings.openai_model)
+    if provider == "xai":
+        return get_setting("llm_model_xai", settings.xai_model)
     return get_setting("llm_model_anthropic", settings.llm_model)
 
 
@@ -301,14 +320,16 @@ class FailoverProvider:
 def get_provider() -> LLMProvider | None:
     from .proxies import active_proxies, record_result
 
-    if active_provider() == "openai":
-        key = openai_api_key()
+    if active_provider() in ("openai", "xai"):
+        which = active_provider()
+        key = openai_api_key() if which == "openai" else xai_api_key()
         if not key:
             return None
-        model = active_model("openai")
+        model = active_model(which)
+        base = settings.xai_base_url if which == "xai" else ""
 
         def make(url: str = ""):
-            return OpenAIProvider(key, model, "", url)
+            return OpenAIProvider(key, model, base, url)
     else:
         key = llm_api_key()
         if not key:

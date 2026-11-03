@@ -84,3 +84,14 @@ def test_api_error_includes_reason():
         message = "model: claude-opus-5-5 is not available for this key"
 
     assert "403" in llm._api_error(E()) and "not available" in llm._api_error(E())
+
+
+def test_grok_provider(client, owner):
+    r = client.post("/api/connections", headers=owner, json={"kind": "xai", "scope": "company", "config": {"api_key": "xai-key-1"}})
+    assert r.status_code == 201 and "xai-key-1" not in r.text
+    assert llm.xai_api_key() == "xai-key-1"
+    s = client.put("/api/llm", headers=owner, json={"provider": "xai", "model": "grok-4"})
+    assert s.status_code == 200 and s.json()["provider"] == "xai" and s.json()["has_key"]["xai"] is True
+    prov = llm.get_provider()
+    inner = prov if isinstance(prov, llm.OpenAIProvider) else prov._make("")
+    assert isinstance(inner, llm.OpenAIProvider) and inner._base == "https://api.x.ai/v1" and inner._model == "grok-4"

@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-5"
     openai_base_url: str = "https://api.openai.com/v1"
+    xai_api_key: str = ""
+    xai_model: str = "grok-4"
+    xai_base_url: str = "https://api.x.ai/v1"
 
     # Интеграции
     bitrix24_webhook_url: str = ""
