@@ -66,6 +66,16 @@ KINDS: dict[str, Kind] = {
             [Field("api_key", "Ключ API (sk-…)", secret=True)],
         ),
         Kind(
+            "cursor",
+            "Cursor (облачные агенты)",
+            "Ключ API Cursor для запуска облачных агентов по коду. Агенты системы ставят задачи Cursor в указанном репозитории. Только для компании",
+            [
+                Field("api_key", "Ключ API Cursor", secret=True),
+                Field("repository", "Репозиторий GitHub", default="https://github.com/bonya242424/OperDirCLODEmirzap"),
+                Field("ref", "Ветка", required=False, default="main"),
+            ],
+        ),
+        Kind(
             "yandex_metrika",
             "Яндекс Метрика",
             "Визиты, источники, цели, конверсии. Один счётчик на подключение",
@@ -265,4 +275,18 @@ def _openai(cfg):
     return check_openai_key(key)
 
 
-_CHECKS = {"openai": _openai, "anthropic": _anthropic, "rdp": _rdp, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}
+def _cursor(cfg):
+    import httpx
+
+    try:
+        resp = httpx.get("https://api.cursor.com/v0/me", auth=(cfg["api_key"].strip(), ""), timeout=10.0)
+    except httpx.HTTPError as exc:
+        return CheckResult(ERROR, f"Ошибка сети ({type(exc).__name__})")
+    if resp.status_code in (401, 403):
+        return CheckResult(ERROR, "Ключ Cursor недействителен или нет доступа")
+    if resp.status_code != 200:
+        return CheckResult(ERROR, f"Cursor ответил кодом {resp.status_code}")
+    return CheckResult(OK, "API Cursor отвечает")
+
+
+_CHECKS = {"cursor": _cursor, "openai": _openai, "anthropic": _anthropic, "rdp": _rdp, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}

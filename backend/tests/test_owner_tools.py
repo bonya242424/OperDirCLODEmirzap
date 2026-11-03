@@ -71,3 +71,38 @@ def test_fetch_url_blocks_internal_and_reads_public(client, owner, monkeypatch):
         monkeypatch.setattr("httpx.Client", C)
         out = t.fetch_url(ctx, {"url": "https://example.com/share/1"})
         assert "Переписка" in out and "x()" not in out
+
+
+def test_cursor_tools(client, owner, monkeypatch):
+    import app.agents.owner_tools as ot
+
+    seen = []
+
+    class R:
+        status_code = 200
+        text = "{}"
+
+        def __init__(self, data):
+            self._d = data
+
+        def json(self):
+            return self._d
+
+    def fake(method, url, json=None, auth=None, timeout=None):
+        seen.append((method, url, json, auth))
+        return R({"id": "bc_1", "status": "CREATING", "target": {"branchName": "cursor/x", "url": "https://cursor.com/agents?id=bc_1"}, "agents": []})
+
+    monkeypatch.setattr("httpx.request", fake)
+    with SessionLocal() as db:
+        ctx = _ctx(db)
+        with pytest.raises(ToolError, match="не подключён"):
+            ot.cursor_launch(ctx, {"prompt": "Исправь тест в файле x"})
+    r = client.post("/api/connections", headers=owner, json={"kind": "cursor", "scope": "company", "config": {"api_key": "key_abc"}})
+    assert r.status_code == 201 and "key_abc" not in r.text
+    with SessionLocal() as db:
+        out = ot.cursor_launch(_ctx(db), {"prompt": "Исправь тест в файле x, не трогай остальное"})
+        assert "bc_1" in out and "cursor/x" in out
+        m, url, body, auth = seen[-1]
+        assert url.endswith("/v0/agents") and body["target"]["autoCreatePr"] is True and body["source"]["ref"] == "main" and auth == ("key_abc", "")
+        with pytest.raises(ToolError):
+            ot.cursor_status(_ctx(db), {"agent_id": "../x"})

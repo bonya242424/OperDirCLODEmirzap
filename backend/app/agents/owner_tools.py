@@ -242,6 +242,68 @@ def run_integration_check(ctx: Ctx, a: dict) -> str:
     return f"{BY_KEY[key].name}: {row.status}. {row.message}"
 
 
+def _cursor_cfg() -> dict:
+    from ..integrations.checks import company_cfg
+
+    cfg = company_cfg("cursor")
+    if not cfg.get("api_key"):
+        raise ToolError("Cursor не подключён: добавьте «Cursor (облачные агенты)» в «Интеграции → Подключения»")
+    return cfg
+
+
+def _cursor_call(method: str, path: str, body: dict | None = None) -> dict:
+    import httpx
+
+    cfg = _cursor_cfg()
+    try:
+        resp = httpx.request(method, "https://api.cursor.com/v0" + path, json=body, auth=(cfg["api_key"].strip(), ""), timeout=30.0)
+    except httpx.HTTPError as exc:
+        raise ToolError(f"Cursor не отвечает ({type(exc).__name__})") from None
+    if resp.status_code in (401, 403):
+        raise ToolError("Ключ Cursor недействителен или нет доступа")
+    if resp.status_code >= 400:
+        raise ToolError(f"Cursor ответил кодом {resp.status_code}: " + " ".join(resp.text.split())[:200])
+    try:
+        return resp.json()
+    except ValueError:
+        return {}
+
+
+def cursor_launch(ctx: Ctx, a: dict) -> str:
+    """Запуск облачного агента Cursor в репозитории из подключения. Он работает в своей ветке и открывает запрос на слияние: в main сам ничего не меняет."""
+    prompt = str(a.get("prompt", "")).strip()
+    if len(prompt) < 10 or len(prompt) > 8000:
+        raise ToolError("Нужна понятная задача (от 10 до 8000 символов)")
+    cfg = _cursor_cfg()
+    data = _cursor_call("POST", "/agents", {"prompt": {"text": prompt}, "source": {"repository": cfg.get("repository") or "https://github.com/bonya242424/OperDirCLODEmirzap", "ref": cfg.get("ref") or "main"}, "target": {"autoCreatePr": True}})
+    ctx.writes += 1
+    return f"Агент Cursor запущен: id={data.get('id')}, статус {data.get('status')}, ветка {data.get('target', {}).get('branchName', '?')}, страница {data.get('target', {}).get('url', '')}"
+
+
+def cursor_status(ctx: Ctx, a: dict) -> str:
+    aid = str(a.get("agent_id", "")).strip()
+    if not aid or "/" in aid:
+        raise ToolError("Нужен id агента Cursor")
+    d = _cursor_call("GET", f"/agents/{aid}")
+    t = d.get("target", {})
+    return f"id={d.get('id')} статус {d.get('status')}. {str(d.get('summary', ''))[:600]} Ветка {t.get('branchName', '?')}, страница {t.get('url', '')}"
+
+
+def cursor_followup(ctx: Ctx, a: dict) -> str:
+    aid, text = str(a.get("agent_id", "")).strip(), str(a.get("text", "")).strip()
+    if not aid or "/" in aid or not text:
+        raise ToolError("Нужны agent_id и text")
+    _cursor_call("POST", f"/agents/{aid}/followup", {"prompt": {"text": text[:8000]}})
+    ctx.writes += 1
+    return "Уточнение отправлено агенту Cursor"
+
+
+def cursor_list(ctx: Ctx, _a: dict) -> str:
+    d = _cursor_call("GET", "/agents")
+    rows = [f"id={x.get('id')} {x.get('name', '')} статус {x.get('status')}" for x in (d.get("agents") or [])[:20]]
+    return "\n".join(rows) or "Агентов Cursor нет"
+
+
 _S = {"type": "string"}
 _N = {"type": "number"}
 _I = {"type": "integer"}
@@ -258,6 +320,10 @@ OWNER_TOOLS = [
     Tool("create_folder", "Создать папку", "Создаёт папку в «Файлах».", _obj({"name": _S, "description": _S}, ["name"]), "write", create_folder),
     Tool("save_file", "Сохранить файл", "Сохраняет текстовый файл (txt, csv, md) в папку: например отчёт или выгрузку. Не больше 300 КБ.", _obj({"folder_id": _I, "name": _S, "content": _S}, ["folder_id", "name", "content"]), "write", save_file),
     Tool("save_supplier", "Создать или изменить поставщика", "Поставщик возвратов: name, portal_url, contact, rules, default_reason, notes. Существующий по названию обновляется.", _obj({"name": _S, "portal_url": _S, "contact": _S, "rules": _S, "default_reason": _S, "notes": _S}, ["name"]), "write", save_supplier),
+    Tool("cursor_launch", "Запустить агента Cursor", "Ставит задачу облачному агенту Cursor в репозитории проекта. Он работает в отдельной ветке и открывает запрос на слияние, в main не пишет. Опишите задачу подробно.", _obj({"prompt": _S}, ["prompt"]), "write", cursor_launch),
+    Tool("cursor_status", "Статус агента Cursor", "Статус и итог облачного агента Cursor по id.", _obj({"agent_id": _S}, ["agent_id"]), "read", cursor_status),
+    Tool("cursor_followup", "Уточнить задачу агенту Cursor", "Отправляет дополнительное указание уже запущенному агенту Cursor.", _obj({"agent_id": _S, "text": _S}, ["agent_id", "text"]), "write", cursor_followup),
+    Tool("cursor_list", "Список агентов Cursor", "Недавние облачные агенты Cursor.", _obj({}), "read", cursor_list),
     Tool("run_integration_check", "Проверить интеграцию", "Проверяет интеграцию по ключу (например yandex_metrika, llm).", _obj({"key": _S}, ["key"]), "read", run_integration_check),
 ]
 for _t in OWNER_TOOLS:
