@@ -529,3 +529,7 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .remote-steps li.bad::before { content: "✕ "; color: var(--danger, #e5534b); }
 .remote-preview { width: 100%; max-width: 640px; margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-md); }
 .remote-log { max-height: 280px; overflow: auto; font-size: 11px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r-md); white-space: pre-wrap; user-select: text; }
+
+.assembly-live { position: relative; margin: 8px 0; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: #111; line-height: 0; }
+.assembly-live img { width: 100%; height: auto; display: block; }
+.assembly-live i { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid #ff4d4d; background: rgba(255, 77, 77, 0.35); pointer-events: none; }

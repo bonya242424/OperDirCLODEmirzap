@@ -30,7 +30,7 @@ def _owner(me: User) -> None:
 
 
 def _out(r: AssemblyRun, full: bool = False) -> dict:
-    d = {"id": r.id, "status": r.status, "summary": r.summary, "date_from": r.date_from, "date_to": r.date_to, "created_at": r.created_at, "finished_at": r.finished_at, "saved": json.loads(r.saved or "[]")}
+    d = {"id": r.id, "connection_id": r.connection_id, "status": r.status, "summary": r.summary, "date_from": r.date_from, "date_to": r.date_to, "created_at": r.created_at, "finished_at": r.finished_at, "saved": json.loads(r.saved or "[]")}
     if full:
         d["log"] = json.loads(r.log or "[]")
     return d

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
-import { api } from "../../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, getToken } from "../../api";
 
 interface Run {
   id: number;
+  connection_id?: number;
   status: "running" | "done" | "failed" | "stopped";
   summary: string;
   saved: { supplier: string; file_id: number; name: string }[];
@@ -13,6 +14,41 @@ interface Targets {
 }
 
 const STATUS = { running: "Идёт…", done: "Готово", failed: "Не получилось", stopped: "Остановлено" } as const;
+
+/** Живой экран терминала во время сборки: видно, куда агент кликает и что открыто. Красная точка — последний клик. */
+function LiveScreen({ conn, running, log }: { conn: number; running: boolean; log: string[] }) {
+  const [src, setSrc] = useState("");
+  const prev = useRef("");
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/remote/rdp/${conn}/screen`, { headers: { Authorization: `Bearer ${getToken() ?? ""}` } });
+        if (!res.ok || !alive) return;
+        const u = URL.createObjectURL(await res.blob());
+        if (prev.current) URL.revokeObjectURL(prev.current);
+        prev.current = u;
+        setSrc(u);
+      } catch {
+        /* следующий кадр */
+      }
+    };
+    tick();
+    const t = running ? window.setInterval(tick, 1500) : undefined;
+    return () => {
+      alive = false;
+      if (t) window.clearInterval(t);
+    };
+  }, [conn, running]);
+  const last = [...log].reverse().map((l) => l.match(/\((\d+), (\d+)\)/)).find(Boolean);
+  if (!src) return null;
+  return (
+    <div className="assembly-live">
+      <img src={src} alt="Экран терминала" />
+      {last && <i style={{ left: `${(Number(last[1]) / 1280) * 100}%`, top: `${(Number(last[2]) / 800) * 100}%` }} />}
+    </div>
+  );
+}
 
 /** Запуск агента, который собирает документы «Сборка» из 1С через терминал и сохраняет их в «Файлы». */
 export default function AssemblyRunBox({ from, to }: { from: string; to: string }) {
@@ -65,7 +101,7 @@ export default function AssemblyRunBox({ from, to }: { from: string; to: string 
       <strong>Собрать из 1С за период {new Date(from).toLocaleDateString("ru-RU")}–{new Date(to).toLocaleDateString("ru-RU")}</strong>
       <p className="muted small">
         Агент откроет в 1С документы «Сборка» за этот период, скопирует таблицы и сохранит в «Файлы»: отдельная папка на каждого поставщика, в названии файла дата сохранения.
-        Он только читает: проведение, запись и удаление в 1С заблокированы. Действует по инструкциям из «Инструкции 1С». Следить можно в «Удалённых окнах».
+        Он только читает: проведение, запись и удаление в 1С заблокированы. Действует по инструкциям из «Инструкции 1С». Экран терминала виден ниже во время работы.
       </p>
       {targets.rdp.length === 0 ? (
         <p className="error">Сначала добавьте терминал: «Интеграции → Подключения → Терминал (RDP)».</p>
@@ -85,7 +121,8 @@ export default function AssemblyRunBox({ from, to }: { from: string; to: string 
           {run.saved.length > 0 && (
             <ul>{run.saved.map((s) => <li key={s.file_id}>{s.supplier}: {s.name}</li>)}</ul>
           )}
-          {run.log && run.log.length > 0 && <pre className="remote-log">{run.log.slice(-25).join("\n")}</pre>}
+          <LiveScreen conn={run.connection_id ?? conn} running={running} log={run.log ?? []} />
+          {run.log && run.log.length > 0 && <pre className="remote-log">{run.log.slice(-40).join("\n")}</pre>}
         </div>
       )}
     </div>
