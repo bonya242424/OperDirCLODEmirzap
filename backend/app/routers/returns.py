@@ -586,40 +586,57 @@ def browser_forget(supplier_id: int, db: Session = Depends(get_db), me: User = D
     db.commit()
 
 
-_QUEUE: dict = {"active": False, "ids": [], "pos": 0, "cancel": False, "done": [], "note": ""}
+# Очереди проверки: у каждого поставщика своя и идёт в своём потоке, так что Армтек, Форум и другие работают параллельно.
+_QUEUES: dict[int, dict] = {}
 
 
-def _queue_out(db: Session) -> dict:
+def _fresh() -> dict:
+    return {"active": False, "ids": [], "pos": 0, "cancel": False, "done": [], "note": ""}
+
+
+def _queue_out(db: Session, supplier_id: int | None = None) -> dict:
+    if supplier_id is None:  # без указания поставщика: любая идущая очередь, иначе последняя
+        pick = [k for k, q in _QUEUES.items() if q["active"]] or list(_QUEUES)
+        supplier_id = pick[0] if pick else None
+    q = _QUEUES.get(supplier_id) if supplier_id is not None else None
+    q = q or _fresh()
     cur = None
-    if _QUEUE["active"] and 0 < _QUEUE["pos"] <= len(_QUEUE["ids"]):
-        b = db.get(ReturnBatch, _QUEUE["ids"][_QUEUE["pos"] - 1])
+    if q["active"] and 0 < q["pos"] <= len(q["ids"]):
+        b = db.get(ReturnBatch, q["ids"][q["pos"] - 1])
         cur = {"id": b.id, "number": b.number} if b else None
-    return {"active": _QUEUE["active"], "total": len(_QUEUE["ids"]), "pos": _QUEUE["pos"], "current": cur, "done": _QUEUE["done"], "note": _QUEUE["note"]}
+    active = [k for k, x in _QUEUES.items() if x["active"]]
+    return {
+        "supplier_id": supplier_id, "active": q["active"], "total": len(q["ids"]), "pos": q["pos"], "current": cur,
+        "done": q["done"], "note": q["note"], "active_suppliers": active,
+    }
 
 
-def _run_queue(ids: list[int], user_id: int) -> None:
-    """Проверяет выбранные документы по очереди, по одному. Остановка текущей проверки или «Отменить» прекращает всю очередь."""
+def _run_queue(supplier_id: int, ids: list[int], user_id: int) -> None:
+    """Проверяет документы одного поставщика по очереди. Остановка текущей проверки или «Отменить» прекращает эту очередь."""
     from ..db import SessionLocal
 
-    for i, bid in enumerate(ids, 1):
-        if _QUEUE["cancel"]:
-            break
-        _QUEUE["pos"] = i
-        with SessionLocal() as db:
-            run = ReturnRun(batch_id=bid, mode="check", created_by=user_id)
-            db.add(run)
-            db.commit()
-            rid = run.id
-        try:
-            run_check(rid)
-        except Exception:  # noqa: BLE001
-            pass
-        with SessionLocal() as db:
-            r = db.get(ReturnRun, rid)
-            _QUEUE["done"].append({"batch_id": bid, "status": r.status if r else "failed"})
-            if r is not None and r.status == "stopped":
-                _QUEUE["cancel"] = True
-    _QUEUE["active"] = False
+    q = _QUEUES[supplier_id]
+    try:
+        for i, bid in enumerate(ids, 1):
+            if q["cancel"]:
+                break
+            q["pos"] = i
+            with SessionLocal() as db:
+                run = ReturnRun(batch_id=bid, mode="check", created_by=user_id)
+                db.add(run)
+                db.commit()
+                rid = run.id
+            try:
+                run_check(rid)
+            except Exception:  # noqa: BLE001
+                pass
+            with SessionLocal() as db:
+                r = db.get(ReturnRun, rid)
+                q["done"].append({"batch_id": bid, "status": r.status if r else "failed"})
+                if r is not None and r.status == "stopped":
+                    q["cancel"] = True
+    finally:
+        q["active"] = False
 
 
 class QueueIn(BaseModel):
@@ -628,15 +645,17 @@ class QueueIn(BaseModel):
 
 @router.post("/check-queue", status_code=202)
 def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
-    """Проверка нескольких документов подряд. Ничего не отправляет, как и одиночная проверка."""
+    """Проверка нескольких документов подряд. Ничего не отправляет, как и одиночная проверка.
+
+    Документы раскладываются по поставщикам: у каждого своя очередь в своём потоке, разные поставщики идут одновременно.
+    """
     import threading
 
     _owner(me)
     ids = list(dict.fromkeys(body.batch_ids))[:50]
     if not ids:
         raise HTTPException(status_code=422, detail="Выберите хотя бы один документ")
-    if _QUEUE["active"]:
-        raise HTTPException(status_code=409, detail="Очередь уже идёт: дождитесь окончания или отмените её")
+    groups: dict[int, list[int]] = {}
     for bid in ids:
         batch = db.get(ReturnBatch, bid)
         if batch is None:
@@ -646,28 +665,37 @@ def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends
             raise HTTPException(status_code=422, detail=f"У поставщика документа {batch.number or bid} не указан адрес кабинета")
         if not sup.session_encrypted:
             raise HTTPException(status_code=422, detail=f"Для документа {batch.number or bid} сначала войдите в кабинет и сохраните вход")
+        if _QUEUES.get(sup.id, {}).get("active"):
+            raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» очередь уже идёт: дождитесь окончания или отмените её")
         if db.scalar(select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)):
-            raise HTTPException(status_code=409, detail="У этого поставщика проверка уже идёт")
-    _QUEUE.update(active=True, ids=ids, pos=0, cancel=False, done=[], note="")
-    threading.Thread(target=_run_queue, args=(ids, me.id), daemon=True, name="returns-queue").start()
-    return _queue_out(db)
+            raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» проверка уже идёт")
+        groups.setdefault(sup.id, []).append(bid)
+    for sid, part in groups.items():
+        _QUEUES[sid] = {**_fresh(), "active": True, "ids": part}
+        threading.Thread(target=_run_queue, args=(sid, part, me.id), daemon=True, name=f"returns-queue-{sid}").start()
+    return _queue_out(db, next(iter(groups)))
 
 
 @router.get("/check-queue")
-def queue_state(db: Session = Depends(get_db), me: User = Depends(current_user)):
+def queue_state(supplier_id: int | None = None, db: Session = Depends(get_db), me: User = Depends(current_user)):
     _owner(me)
-    return _queue_out(db)
+    return _queue_out(db, supplier_id)
 
 
 @router.post("/check-queue/cancel")
-def cancel_queue(db: Session = Depends(get_db), me: User = Depends(current_user)):
+def cancel_queue(supplier_id: int | None = None, db: Session = Depends(get_db), me: User = Depends(current_user)):
     _owner(me)
-    _QUEUE["cancel"] = True
-    if _QUEUE["active"] and 0 < _QUEUE["pos"] <= len(_QUEUE["ids"]):
-        for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == _QUEUE["ids"][_QUEUE["pos"] - 1], ReturnRun.status == "running")):
-            r.status = "stopped"
-        db.commit()
-    return _queue_out(db)
+    targets = [supplier_id] if supplier_id is not None else [k for k, q in _QUEUES.items() if q["active"]]
+    for sid in targets:
+        q = _QUEUES.get(sid)
+        if not q:
+            continue
+        q["cancel"] = True
+        if q["active"] and 0 < q["pos"] <= len(q["ids"]):
+            for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == q["ids"][q["pos"] - 1], ReturnRun.status == "running")):
+                r.status = "stopped"
+    db.commit()
+    return _queue_out(db, supplier_id)
 
 
 def _run_out(r: ReturnRun) -> dict:

@@ -106,7 +106,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   const running = false;
   const [multi, setMulti] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
-  const [queue, setQueue] = useState<{ active: boolean; total: number; pos: number; current: { id: number; number: string } | null; done: { batch_id: number; status: string }[] } | null>(null);
+  const [queue, setQueue] = useState<{ active: boolean; active_suppliers?: number[]; total: number; pos: number; current: { id: number; number: string } | null; done: { batch_id: number; status: string }[] } | null>(null);
   const [info, setInfo] = useState("");
   const supplier = suppliers?.find((x) => x.id === supSel) ?? null;
   const [dFrom, setDFrom] = useState("");
@@ -188,11 +188,12 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   }, [checking, loadRuns, load]);
 
   useEffect(() => {
-    if (me.role !== "owner") return;
-    const t = window.setInterval(() => api<NonNullable<typeof queue>>("/returns/check-queue").then(setQueue).catch(() => undefined), 3000);
-    api<NonNullable<typeof queue>>("/returns/check-queue").then(setQueue).catch(() => undefined);
+    if (me.role !== "owner" || !supSel) return;
+    const url = `/returns/check-queue?supplier_id=${supSel}`;
+    const t = window.setInterval(() => api<NonNullable<typeof queue>>(url).then(setQueue).catch(() => undefined), 3000);
+    api<NonNullable<typeof queue>>(url).then(setQueue).catch(() => undefined);
     return () => window.clearInterval(t);
-  }, [me.role]);
+  }, [me.role, supSel]);
 
   function togglePick(id: number) {
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
@@ -212,7 +213,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
 
   async function cancelQueue() {
     try {
-      setQueue(await api("/returns/check-queue/cancel", { method: "POST" }));
+      setQueue(await api(`/returns/check-queue/cancel?supplier_id=${supSel}`, { method: "POST" }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка");
     }
@@ -358,6 +359,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             {queue?.active && (
               <div className="ag-hint">
                 Очередь проверки: документ {queue.pos} из {queue.total}{queue.current ? ` (${queue.current.number || queue.current.id})` : ""}.
+                {(queue.active_suppliers?.length ?? 0) > 1 && ` Одновременно идут поставщиков: ${queue.active_suppliers?.length}.`}
                 <button className="ghost danger" onClick={cancelQueue}>Отменить очередь</button>
               </div>
             )}

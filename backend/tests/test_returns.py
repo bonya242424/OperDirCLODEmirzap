@@ -210,3 +210,42 @@ def test_check_queue_runs_selected_in_order(client, owner, monkeypatch):
         time.sleep(0.05)
     assert order == [ids[2], ids[0]] and [d["status"] for d in st["done"]] == ["done", "done"]
     assert client.post("/api/returns/check-queue", json={"batch_ids": ids}).status_code == 401
+
+
+def test_queues_of_different_suppliers_run_in_parallel(client, owner, monkeypatch):
+    import threading
+    import time
+
+    from app.models import ReturnRun
+
+    sups, ids = [], {}
+    with SessionLocal() as db:
+        pass
+    for name in ("Армтек П", "Форум П"):
+        sup = _supplier(client, owner, name=name, portal_url="https://example.com/").json()
+        with SessionLocal() as db:
+            s = db.get(ReturnSupplier, sup["id"])
+            s.session_encrypted = "x"
+            db.commit()
+            ids[sup["id"]] = [_mk(db, s, f"№0000009{len(sups)}1 от 01.10.2026")]
+        sups.append(sup["id"])
+    both_inside = threading.Barrier(2, timeout=5)
+
+    def fake(rid):
+        both_inside.wait()  # пройдёт только если обе проверки идут одновременно
+        with SessionLocal() as db:
+            db.get(ReturnRun, rid).status = "done"
+            db.commit()
+
+    monkeypatch.setattr("app.routers.returns.run_check", fake)
+    r = client.post("/api/returns/check-queue", headers=owner, json={"batch_ids": [ids[sups[0]][0], ids[sups[1]][0]]})
+    assert r.status_code == 202
+    assert sorted(r.json()["active_suppliers"]) == sorted(sups)
+    # повторный запуск по тому же поставщику, пока идёт, отклоняется, а по другому разрешён отдельно
+    for _ in range(100):
+        a = client.get(f"/api/returns/check-queue?supplier_id={sups[0]}", headers=owner).json()
+        b = client.get(f"/api/returns/check-queue?supplier_id={sups[1]}", headers=owner).json()
+        if not a["active"] and not b["active"]:
+            break
+        time.sleep(0.05)
+    assert [d["status"] for d in a["done"]] == ["done"] and [d["status"] for d in b["done"]] == ["done"]
