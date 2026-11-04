@@ -43,7 +43,7 @@ def test_assembly_saves_per_supplier_and_blocks_dangerous_keys(client, owner, te
         call("rdp_clipboard"),
         call("save_document", supplier="Армтек", label="№7 от 01.11.2026"),
         call("save_document", supplier="Рольф/Тест", label="№8"),
-        call("finish", summary="Нашёл 2, сохранил 2"),
+        call("remember_1c", topic="Тема записи", how="Как это сделать по шагам"), call("finish", summary="Нашёл 2, сохранил 2"),
     )
     monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
     r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-26", "date_to": "2026-11-01"})
@@ -82,7 +82,7 @@ def test_assembly_nudges_when_model_answers_without_actions(client, owner, term,
         call("rdp_view"),
         call("rdp_key", key="Control+c"),
         call("save_document", supplier="Армтек", label="№1"),
-        call("finish", summary="готово"),
+        call("remember_1c", topic="Тема записи", how="Как это сделать по шагам"), call("finish", summary="готово"),
     )
     monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
     r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
@@ -102,7 +102,7 @@ def test_assembly_marks_duplicates_and_shows_saved_live(client, owner, term, mon
         call("save_document", supplier="Армтек", label="№000007007 от 02.11.2026"),
         call("save_document", supplier="Армтек", label="№000007007 от 02.11.2026"),  # повтор
         call("save_document", supplier="Армтек", label="№000007008 от 03.11.2026"),
-        call("finish", summary="ok"),
+        call("remember_1c", topic="Тема записи", how="Как это сделать по шагам"), call("finish", summary="ok"),
     )
     monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
     r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-11-03"})
@@ -117,7 +117,7 @@ def test_assembly_survives_bad_args_and_model_hiccup(client, owner, term, monkey
     from app.llm import LLMError
 
     cid, _ = term
-    script = Script(call("rdp_click"), call("save_document", supplier="Армтек", label="№1234"), call("finish", summary="ok"))
+    script = Script(call("rdp_click"), call("save_document", supplier="Армтек", label="№1234"), call("remember_1c", topic="Тема записи", how="Как это сделать по шагам"), call("finish", summary="ok"))
     real = script.step
     state = {"n": 0}
 
@@ -162,7 +162,7 @@ def test_agent_asks_owner_and_answer_goes_to_knowledge(client, owner, term, monk
     from app.models import InstrSection
 
     cid, _ = term
-    script = Script(call("ask_owner", question="Где кнопка печатной формы?"), call("save_document", supplier="Армтек", label="№5555"), call("finish", summary="ok"))
+    script = Script(call("ask_owner", question="Где кнопка печатной формы?"), call("save_document", supplier="Армтек", label="№5555"), call("remember_1c", topic="Тема записи", how="Как это сделать по шагам"), call("finish", summary="ok"))
     monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
     real_sleep = time.sleep
     monkeypatch.setattr("app.assembly_run.time.sleep", lambda s: real_sleep(0.05))
@@ -198,7 +198,7 @@ def test_assembly_waits_for_desktop(client, owner, term, monkeypatch):
     seq = iter([True, True, False])
     monkeypatch.setattr(rdp_manager, "is_blank", lambda key: next(seq, False))
     monkeypatch.setattr("app.assembly_run.time.sleep", lambda s: None)
-    monkeypatch.setattr("app.assembly_run.get_provider", lambda: Script(call("save_document", supplier="Армтек", label="№9999"), call("finish", summary="ok")))
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: Script(call("save_document", supplier="Армтек", label="№9999"), call("remember_1c", topic="Тема записи", how="Как это сделать по шагам"), call("finish", summary="ok")))
     r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
     run = _wait(client, owner, r.json()["id"])
     assert run["status"] == "done" and any("Жду, пока" in x for x in run["log"])
@@ -328,3 +328,23 @@ def test_assembly_forces_question_when_stuck(client, owner, term, monkeypatch):
     assert any("спросить владельца" in x for x in run["log"])
     last_user = script.seen[-1][0][-1]["content"]
     assert any(isinstance(b, dict) and b.get("type") == "text" and "ask_owner" in b["text"] for b in last_user)
+
+
+def test_assembly_requires_memory_notes_before_finish(client, owner, term, monkeypatch):
+    cid, _ = term
+    script = Script(
+        call("save_document", supplier="Армтек", label="№4444"),
+        call("finish", summary="готово"),  # не принято: нет записи в память
+        call("remember_1c", topic="Печатная форма сборки", how="В документе вкладка «Печать» вверху"),
+        call("finish", summary="готово"),
+    )
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    monkeypatch.setattr("app.assembly_run.time.sleep", lambda s: None)
+    r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
+    run = _wait(client, owner, r.json()["id"])
+    assert run["status"] == "done" and "Сохранено файлов: 1" in run["summary"]
+    from app.models import InstrSection
+
+    with SessionLocal() as db:
+        sec = db.scalar(select(InstrSection).where(InstrSection.title.like("Память агентов 1С%")))
+        assert sec and "Печатная форма сборки" in sec.notes

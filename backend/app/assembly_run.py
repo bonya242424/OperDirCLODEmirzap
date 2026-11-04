@@ -272,6 +272,7 @@ def run_assembly(run_id: int) -> None:
         early = 0
         remaining: int | None = None
         unfinished = False  # запуск оборвался не по воле агента: продолжить новым запуском
+        remembered, mem_nudges = False, 0  # записывал ли агент находки в память 1С в этом запуске
         idle = 0  # действий подряд без сохранения документа и без вопроса владельцу
         say("Подключено, отправляю задачу модели")
         try:
@@ -314,7 +315,10 @@ def run_assembly(run_id: int) -> None:
                         if c.name == "finish":
                             left = _int(c.input.get("remaining"))
                             found = _int(c.input.get("found"))
-                            if left and left > 0 and early < MAX_EARLY_FINISH:
+                            if not remembered and mem_nudges < 2 and any(not x.get("duplicate") for x in saved):
+                                mem_nudges += 1
+                                out = "Не принято: сначала запиши в память инструментом remember_1c, как ты прошёл путь (журнал, период и отбор, открытие документа, печатная форма, закрытие), по одной записи на тему. Потом вызови finish."
+                            elif left and left > 0 and early < MAX_EARLY_FINISH:
                                 early += 1
                                 say(f"Агент хотел закончить, но в периоде осталось {left} документов: прошу продолжить")
                                 out = (f"Не принято: осталось {left} несохранённых документов из {found or '?'}. Лимита на действия нет. "
@@ -346,6 +350,11 @@ def run_assembly(run_id: int) -> None:
                         last["content"] = [{"type": "text", "text": str(last["content"]) + ". Экран после действий ниже."}, shot] if isinstance(last["content"], str) else last["content"]
                     except Exception:  # noqa: BLE001
                         pass
+                if any(c.name == "remember_1c" for c in step.calls):
+                    remembered = True
+                if not remembered and mem_nudges == 0 and not finished and any(not x.get("duplicate") for x in saved) and results:
+                    mem_nudges = 1
+                    results.append({"type": "text", "text": "Ты успешно сохранил первый документ. Прямо сейчас запиши инструментом remember_1c, как ты до этого дошёл: где журнал «Документы Сборка», как задал период и отбор по контрагенту, как открыл документ, где печатная форма и как её закрыть. По одной записи на тему, кратко и по шагам."})
                 idle += sum(1 for c in step.calls if c.name in ACTIONS)
                 if any(c.name in ("save_document", "save_document_text", "ask_owner") for c in step.calls):
                     idle = 0
