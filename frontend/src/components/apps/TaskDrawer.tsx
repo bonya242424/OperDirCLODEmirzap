@@ -57,7 +57,7 @@ export default function TaskDrawer({
     api<string[]>("/board/processes").then(setProcesses).catch(() => {});
   }, []);
 
-  async function saveTags(body: { process?: string; kpi_impact?: boolean; kpi_note?: string }) {
+  async function saveTags(body: { process: string }) {
     try {
       await api(`/board/cards/${card.id}/tags`, { method: "PATCH", body });
       onChanged?.();
@@ -126,10 +126,6 @@ export default function TaskDrawer({
                   ))}
                 </select>
               </label>
-              <label className="kcheck">
-                <input type="checkbox" checked={card.kpi_impact} onChange={(e) => saveTags({ kpi_impact: e.target.checked })} /> Может влиять на показатели компании
-              </label>
-              {card.kpi_impact && card.kpi_note && <p className="muted small">{card.kpi_note}</p>}
             </div>
             {detail && (
               <p className="muted small">

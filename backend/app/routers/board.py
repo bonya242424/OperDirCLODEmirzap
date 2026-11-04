@@ -12,7 +12,7 @@ from ..context import build_context
 from ..db import get_db
 from ..deps import current_user
 from ..llm import LLMError, get_provider
-from ..bitrix_board import column_of, processes, set_processes, sync_board, tag_tasks, comments as bitrix_comments
+from ..bitrix_board import column_of, cutoff, processes, set_processes, sync_board, tag_tasks, comments as bitrix_comments
 from ..bitrix import BitrixError
 from ..models import BitrixTask, Task, TaskMessage, User, utcnow
 from ..schemas import _utc
@@ -127,7 +127,7 @@ def board(db: Session = Depends(get_db), _: User = Depends(current_user)):
         if t.status == "done" and t.completed_at and _utc(t.completed_at) < now - timedelta(days=DONE_VISIBLE_DAYS):
             continue
         cols["in_progress" if t.status == "review" else t.status].append(_card(t, names))
-    for b in db.scalars(select(BitrixTask).where(BitrixTask.removed.is_(False)).order_by(BitrixTask.deadline.is_(None), BitrixTask.deadline)):
+    for b in db.scalars(select(BitrixTask).where(BitrixTask.removed.is_(False), BitrixTask.changed_at >= cutoff()).order_by(BitrixTask.deadline.is_(None), BitrixTask.deadline)):
         col = column_of(b)
         if col in ("done", "cancelled"):
             ended = _utc(b.closed_at or b.changed_at or b.synced_at)
@@ -360,8 +360,6 @@ def chat_send(ref: str, body: TaskChatIn, db: Session = Depends(get_db), me: Use
 
 class TagsIn(BaseModel):
     process: str | None = None
-    kpi_impact: bool | None = None
-    kpi_note: str | None = None
 
 
 class ProcessesIn(BaseModel):
@@ -396,12 +394,6 @@ def set_tags(ref: str, body: TagsIn, db: Session = Depends(get_db), me: User = D
         if body.process and body.process not in processes(db):
             raise HTTPException(status_code=422, detail="Такого процесса нет в списке")
         row.process = body.process
-    if body.kpi_impact is not None:
-        row.kpi_impact = body.kpi_impact
-        if not body.kpi_impact:
-            row.kpi_note = ""
-    if body.kpi_note is not None and row.kpi_impact:
-        row.kpi_note = body.kpi_note.strip()[:300]
     row.tag_source, row.tagged_at = "owner", utcnow()
     db.commit()
     return _bitrix_out(db, row)

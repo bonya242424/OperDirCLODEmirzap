@@ -6,11 +6,6 @@ import type { Board, BoardCard, User } from "../../types";
 type Status = BoardCard["status"];
 const PRIORITY: Record<BoardCard["priority"], string> = { low: "Низкий", normal: "Обычный", high: "Высокий" };
 
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
-}
-
 function deadlineChip(card: BoardCard): { text: string; tone: string } | null {
   if (!card.deadline) return null;
   const d = new Date(card.deadline);
@@ -55,7 +50,6 @@ export default function TasksApp({ me }: { me: User }) {
   const detail = detailId ? board?.columns.flatMap((c) => c.cards).find((c) => c.id === detailId) ?? null : null;
   const [syncing, setSyncing] = useState(false);
   const [process, setProcess] = useState("");
-  const [kpiOnly, setKpiOnly] = useState(false);
   const [processes, setProcesses] = useState<string[]>([]);
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : "Ошибка");
@@ -80,13 +74,12 @@ export default function TasksApp({ me }: { me: User }) {
   const matches = useCallback(
     (c: BoardCard) => {
       if (process && c.process !== process) return false;
-      if (kpiOnly && !c.kpi_impact) return false;
       if (search && !c.title.toLowerCase().includes(search.trim().toLowerCase())) return false;
       if (who === "mine") return c.assignee_id === me.id || (c.source === "bitrix" && c.assignee === (me.full_name || me.email));
       if (typeof who === "number") return c.assignee_id === who;
       return true;
     },
-    [search, who, me, process, kpiOnly],
+    [search, who, me, process],
   );
 
   const totals = useMemo(() => {
@@ -264,9 +257,6 @@ export default function TasksApp({ me }: { me: User }) {
               <option key={p} value={p}>{p}</option>
             ))}
           </select>
-          <label className="kcheck" title="Задачи, которые не обычная работа, но могут повлиять на показатели компании">
-            <input type="checkbox" checked={kpiOnly} onChange={(e) => setKpiOnly(e.target.checked)} /> Влияют на показатели
-          </label>
           <button className="ghost" onClick={sync} disabled={syncing} title="Забрать свежие задачи из Битрикс24">
             {syncing ? "Обновляем…" : "↻ Битрикс24"}
           </button>
@@ -328,12 +318,11 @@ export default function TasksApp({ me }: { me: User }) {
                       </div>
                       <div className="kmeta">
                         {c.source === "bitrix" && <span className="tag">Б24</span>}
-                        {c.kpi_impact && <span className="chipd soon" title={c.kpi_note || "Может влиять на показатели"}>★ показатели</span>}
                         {c.process && <span className="chipd" title="Процесс">{c.process}</span>}
                         {c.comments_count > 0 && <span className="muted small" title="Комментариев">💬 {c.comments_count}</span>}
                         {chip && <span className={`chipd ${chip.tone}`} title={formatDate(c.deadline)}>{chip.text}</span>}
                         <span className="grow" />
-                        {c.assignee && <span className="avatar" title={c.assignee}>{initials(c.assignee)}</span>}
+                        {c.assignee && <span className="kwho" title={c.assignee}>{c.assignee}</span>}
                       </div>
                     </article>
                   );

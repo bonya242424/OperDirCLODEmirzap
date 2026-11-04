@@ -269,6 +269,7 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .kdot.in_progress { background: var(--accent); }
 .kdot.paused { background: var(--warn); }
 .kdot.cancelled { background: var(--bad); }
+.kwho { font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kcheck { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; white-space: nowrap; }
 .kmeta { flex-wrap: wrap; }
 .tdtags { display: grid; gap: 6px; margin: 10px 0; padding: 10px; border: 1px solid var(--border, rgba(128,128,128,.25)); border-radius: 10px; }

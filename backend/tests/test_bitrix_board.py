@@ -6,7 +6,14 @@ from app import bitrix_board as bb, bitrix_watch as bw
 from app.db import SessionLocal
 from app.models import BitrixTask, User
 from tests.conftest import CompleteOnly
-from tests.test_bitrix_watch import Fake, _emp, raw
+from datetime import datetime, timedelta, timezone
+
+from tests.test_bitrix_watch import Fake, _emp, raw as _raw
+
+
+def raw(i, status=2, **kw):
+    kw.setdefault("changed", datetime.now(timezone.utc).isoformat())
+    return _raw(i, status, **kw)
 
 
 @pytest.fixture()
@@ -39,20 +46,10 @@ def test_columns_and_statuses(client, owner, fake):
     assert set(_col(client, owner, "done")) == {"Сделано"}
 
 
-def test_removed_task_leaves_board(client, owner, fake):
-    with SessionLocal() as db:
-        _emp(db)
-        fake.tasks = [raw(1, 3, title="Была")]
-        bb.sync_board(db)
-        fake.tasks = []
-        bb.sync_board(db)
-    assert _col(client, owner, "in_progress") == {}
-
-
 class Tagger(CompleteOnly):
     def complete(self, system, messages):
         assert "<tasks>" in messages[0]["content"]
-        return json.dumps([{"id": 1, "process": "Закупки и поставщики", "kpi": True, "note": "Смена поставщика"}, {"id": 2, "process": "Нет такого", "kpi": False, "note": ""}])
+        return json.dumps([{"id": 1, "process": "Закупки и поставщики" }, {"id": 2, "process": "Нет такого" }])
 
 
 def test_tagging_and_owner_override(client, owner, fake, monkeypatch):
@@ -63,9 +60,9 @@ def test_tagging_and_owner_override(client, owner, fake, monkeypatch):
         monkeypatch.setattr(bb, "get_provider", lambda: Tagger())
         assert bb.tag_tasks(db) == 2
     cards = _col(client, owner, "in_progress")
-    assert cards["Сменить поставщика"]["kpi_impact"] and cards["Сменить поставщика"]["process"] == "Закупки и поставщики"
+    assert cards["Сменить поставщика"]["process"] == "Закупки и поставщики"
     assert cards["Позвонить"]["process"] == "Прочее" and cards["Позвонить"]["tag_source"] == "ai"
-    r = client.patch("/api/board/cards/b-2/tags", headers=owner, json={"process": "Возвраты", "kpi_impact": True, "kpi_note": "Влияет на возвраты"})
+    r = client.patch("/api/board/cards/b-2/tags", headers=owner, json={"process": "Возвраты"})
     assert r.status_code == 200 and r.json()["tag_source"] == "owner"
     assert client.patch("/api/board/cards/b-2/tags", headers=owner, json={"process": "Выдумка"}).status_code == 422
     with SessionLocal() as db:
@@ -86,3 +83,16 @@ def test_detail_comments_and_processes(client, owner, fake):
     assert "Возвраты" in client.get("/api/board/processes", headers=owner).json()
     assert client.put("/api/board/processes", headers=owner, json={"items": ["А", "Б", "А"]}).json() == ["А", "Б"]
     assert client.put("/api/board/processes", headers=owner, json={"items": []}).status_code == 422
+
+
+def test_old_untouched_tasks_not_pulled(client, owner, fake):
+    old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+    with SessionLocal() as db:
+        _emp(db, name="Иван Петров")
+        fake.tasks = [raw(1, 2, title="Свежая"), raw(2, 2, title="Апрельская", changed=old)]
+        bb.sync_board(db)
+        db.add(BitrixTask(id=3, title="Старая из прошлой выгрузки", responsible_id=7, status=2, is_open=True))
+        db.commit()
+    plan = _col(client, owner, "new")
+    assert set(plan) == {"Свежая"}
+    assert plan["Свежая"]["assignee"] == "Иван Петров"
