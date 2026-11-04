@@ -52,6 +52,8 @@ class RdpManager:
         self.last_log: dict[int, str] = {}
         self._pending: dict[int, int] = {}
         self.run = lambda args, env=None, timeout=10: subprocess.run(args, env=env, capture_output=True, timeout=timeout, check=True).stdout
+        # xclip -i остаётся в фоне владельцем буфера: потоки не захватываем, иначе вызов зависнет
+        self.run_input = lambda args, data, env=None, timeout=10: subprocess.run(args, input=data, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout, check=True)
         self.wait_display = self._wait_display
 
     @staticmethod
@@ -308,7 +310,21 @@ class RdpManager:
         self._xdo(key, "click", *(["--repeat", "2", "--delay", "80"] if double else []), num)
 
     def type_text(self, key: int, text: str) -> None:
+        # xdotool type передаёт в Windows коды клавиш, а не буквы: при раскладке РУС латиница и точки выходят кириллицей (и наоборот).
+        # Поэтому всё, кроме цифр и пробелов, вставляем через буфер обмена, как человек: так результат не зависит от раскладки терминала.
+        if not re.fullmatch(r"[0-9 ]*", text) and self._paste(key, text):
+            return
         self._xdo(key, "type", "--delay", "20", "--", text)
+
+    def _paste(self, key: int, text: str) -> bool:
+        s = self._get(key)
+        try:
+            self.run_input(["xclip", "-selection", "clipboard", "-i"], text.encode("utf-8"), env=self._env(s), timeout=10)
+            time.sleep(0.6)  # буфер должен успеть дойти до Windows
+            self._xdo(key, "key", "ctrl+v")
+            return True
+        except (subprocess.SubprocessError, OSError, BrowserError):
+            return False
 
     def press(self, key: int, name: str) -> None:
         if not valid_key(name):

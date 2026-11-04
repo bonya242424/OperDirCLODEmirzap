@@ -211,3 +211,26 @@ def test_client_home_is_writable_for_license():
 def test_status_reports_screen_size_for_click_mapping():
     st = rdp_manager.status(123456)
     assert (st["width"], st["height"]) == (1280, 800)
+
+
+def test_rdp_cyrillic_goes_through_clipboard(monkeypatch):
+    from app.rdp import RdpManager, _Session
+
+    m = RdpManager()
+    calls = []
+    class Alive:
+        def poll(self):
+            return None
+
+    m._sessions[1] = _Session(99, Alive(), Alive())  # type: ignore[arg-type]
+    monkeypatch.setattr("app.rdp.time.sleep", lambda s: None)
+    m.run_input = lambda args, data, env=None, timeout=10: calls.append(("clip", data.decode()))
+    m.run = lambda args, env=None, timeout=10: calls.append(tuple(args[:3])) or b""
+    m.type_text(1, "Армтек")
+    assert calls[0] == ("clip", "Армтек") and calls[1][:2] == ("xdotool", "key")
+    calls.clear()
+    m.type_text(1, "04102026")  # цифры не зависят от раскладки и печатаются как раньше
+    assert calls[0][:2] == ("xdotool", "type")
+    calls.clear()
+    m.type_text(1, "SLKH073")  # латиница при раскладке РУС вышла бы кириллицей: через буфер
+    assert calls[0] == ("clip", "SLKH073")

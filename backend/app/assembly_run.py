@@ -73,7 +73,7 @@ SYSTEM = (
 TOOLS = [
     {"name": "rdp_view", "description": "Скриншот экрана терминала 1С (1280x800).", "input_schema": {"type": "object", "properties": {}}},
     {"name": "rdp_click", "description": "Клик по координатам скриншота. double=true для двойного клика (открыть документ).", "input_schema": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "double": {"type": "boolean"}, "right": {"type": "boolean"}}, "required": ["x", "y"]}},
-    {"name": "rdp_type", "description": "Ввести текст в выбранное поле (даты, поиск). Не пароль.", "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
+    {"name": "rdp_type", "description": "Ввести текст в выбранное поле (даты, поиск, названия контрагентов, в том числе по-русски: кириллица вставляется через буфер обмена). Не пароль.", "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
     {"name": "rdp_key", "description": "Нажать клавишу: " + ", ".join(sorted(AGENT_KEYS)) + "; сочетания: " + ", ".join(sorted(AGENT_COMBOS)) + ".", "input_schema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
     {"name": "rdp_scroll", "description": "Прокрутка колесом (пиксели, вниз положительные).", "input_schema": {"type": "object", "properties": {"dy": {"type": "number"}}, "required": ["dy"]}},
     {"name": "rdp_clipboard", "description": "Показать начало текста из буфера обмена (после Control+c в 1С) и его размер.", "input_schema": {"type": "object", "properties": {"chars": {"type": "number", "description": "сколько символов показать (по умолчанию 1500, максимум 8000)"}}}},
