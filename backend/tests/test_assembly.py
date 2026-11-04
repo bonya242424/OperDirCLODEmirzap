@@ -348,3 +348,10 @@ def test_assembly_requires_memory_notes_before_finish(client, owner, term, monke
     with SessionLocal() as db:
         sec = db.scalar(select(InstrSection).where(InstrSection.title.like("Память агентов 1С%")))
         assert sec and "Печатная форма сборки" in sec.notes
+
+
+def test_progress_hint_lists_processed_numbers():
+    from app.assembly_run import _progress
+
+    text = _progress([{"name": "Сборка №000006756 от 05.10.2026, сохранено 2026-11-04 12-34.csv"}, {"name": "Сборка 000006757, сохранено x.csv"}])
+    assert "6756, 6757" in text and "СЛЕДУЮЩУЮ" in text and _progress([]).count("нет") == 1

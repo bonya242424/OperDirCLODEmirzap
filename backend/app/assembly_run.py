@@ -451,14 +451,14 @@ def _tool(db, key: int, run: AssemblyRun, period: str, name: str, a: dict, saved
                 _make_batch(db, run, dup, supplier, text, say)
             saved.append({"supplier": supplier, "file_id": dup.id, "name": dup.name, "duplicate": True})
             say(f"Дубль: документ {label} уже сохранён ({dup.name}), второй раз не сохраняю")
-            return f"Дубль: документ с таким номером уже сохранён (file_id={dup.id}). Не сохраняю повторно, переходи к следующему документу."
+            return f"Дубль: документ с таким номером уже сохранён (file_id={dup.id}), второй раз не сохраняю." + _progress(saved)
         row = save_to_files(db, run.created_by or 1, supplier, label, period, text)
         say(f"Сохранил файл «{row.name}» для поставщика {supplier}")
         batch_id, problem = _make_batch(db, run, row, supplier, text, say)
         saved.append({"supplier": supplier, "file_id": row.id, "name": row.name, "batch_id": batch_id})
         if problem:
             return f"Сохранено: file_id={row.id}. Но товары в таблице не распознаны ({problem}): проверь, что скопирована печатная форма с товарами из документа, и сохрани её ещё раз."
-        return f"Сохранено: file_id={row.id}, документ возврата создан"
+        return f"Сохранено: file_id={row.id}, документ возврата создан." + _progress(saved)
     if name == "remember_1c":
         out = onec_memory.remember(db, str(a.get("topic", "")), str(a.get("how", "")), "агент сборки")
         if out.startswith("Запомнил"):
@@ -481,6 +481,19 @@ def _make_batch(db, run: AssemblyRun, f: StoredFile, supplier: str, text: str, s
         return None, str(exc)
     say(f"Создан документ возврата {b.number} у поставщика {b.supplier}")
     return b.id, ""
+
+
+def _progress(saved: list[dict]) -> str:
+    """Что уже обработано в этом запуске и как идти дальше: модель иначе возвращается к уже сохранённому документу."""
+    nums: list[str] = []
+    for x in saved:
+        n = doc_number(x["name"].split(", сохранено")[0])
+        if n and n not in nums:
+            nums.append(n)
+    return (
+        f" Уже обработано в этом запуске (номера без нулей): {', '.join(nums) or 'нет'}. "
+        "Теперь закрой печатную форму и документ (Escape, на вопрос о сохранении «Нет»), вернись в журнал и выбери СЛЕДУЮЩУЮ строку ниже (ArrowDown), номер которой не из этого списка. Этот документ больше не открывай."
+    )
 
 
 def _ask_owner(db, run: AssemblyRun, text: str, say) -> str:
