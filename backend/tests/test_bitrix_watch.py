@@ -1,5 +1,7 @@
 from datetime import date
 
+from tests.conftest import login
+
 import pytest
 
 from app import bitrix, bitrix_watch as bw
@@ -93,3 +95,33 @@ def test_bitrix_connection_kind_and_tools(client, owner, monkeypatch):
 
     assert "bitrix_tasks" in OWNER_TOOL_NAMES and "bitrix_updates" in OWNER_TOOL_NAMES
     assert date.fromisoformat("2026-10-01")
+
+
+def test_import_users_and_set_credentials(client, owner, monkeypatch):
+    def fake_call(method, params):
+        assert method == "user.get"
+        uid = int(params["FILTER[ID]"])
+        return {"result": [] if uid == 99 else [{"ID": str(uid), "NAME": "Иван", "LAST_NAME": "Петров", "WORK_POSITION": "Менеджер", "EMAIL": "ivan@firm.ru" if uid == 12 else ""}]}
+
+    monkeypatch.setattr("app.routers.bitrix.call", fake_call)
+    r = client.post("/api/bitrix/import-users", headers=owner, json={"ids": [12, 15, 99, 12]})
+    assert r.status_code == 200
+    got = {x["bitrix_user_id"]: x for x in r.json()}
+    assert got[12]["status"] == "created" and got[12]["email"] == "ivan@firm.ru" and not got[12]["needs_email"]
+    assert got[15]["email"] == "b24-15@pending.invalid" and got[15]["needs_email"] is True
+    assert got[99]["status"] == "not_found"
+    assert client.post("/api/bitrix/import-users", headers=owner, json={"ids": [12]}).json()[0]["status"] == "exists"
+    users = {u["bitrix_user_id"]: u for u in client.get("/api/users", headers=owner).json() if u["bitrix_user_id"]}
+    assert users[15]["full_name"] == "Петров Иван" and users[15]["position"] == "Менеджер"
+    # войти под временной почтой нельзя, пока владелец не задаст свою
+    assert client.post("/api/auth/login", json={"email": "b24-15@pending.invalid", "password": "anything-123456"}).status_code in (400, 401)
+    uid = users[15]["id"]
+    ok = client.patch(f"/api/users/{uid}", headers=owner, json={"email": "Anna@Firm.ru", "password": "new-pass-123456"})
+    assert ok.status_code == 200 and ok.json()["email"] == "anna@firm.ru"
+    assert login(client, "anna@firm.ru", "new-pass-123456")
+    dup = client.patch(f"/api/users/{uid}", headers=owner, json={"email": "ivan@firm.ru"})
+    assert dup.status_code == 409
+    client.post("/api/users", headers=owner, json={"email": "w@test.local", "password": "worker-pass-1234", "full_name": "С"})
+    h = login(client, "w@test.local", "worker-pass-1234")
+    assert client.post("/api/bitrix/import-users", headers=h, json={"ids": [5]}).status_code == 403
+    assert client.patch(f"/api/users/{uid}", headers=h, json={"email": "x@y.ru"}).status_code == 403

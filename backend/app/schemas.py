@@ -68,6 +68,7 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
+    email: str | None = None
     full_name: str | None = None
     position: str | None = None
     department: str | None = None
@@ -81,6 +82,11 @@ class UserUpdate(BaseModel):
     @classmethod
     def _password(cls, value: str | None) -> str | None:
         return None if value is None else _check_password(value)
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, value: str | None) -> str | None:
+        return None if value is None else _check_email(value)
 
 
 class IntegrationOut(BaseModel):

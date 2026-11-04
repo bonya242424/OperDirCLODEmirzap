@@ -10,6 +10,7 @@ export default function EmployeesApp({ me }: { me: User }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const isOwner = me.role === "owner";
+  const [creds, setCreds] = useState<Record<number, { email: string; password: string }>>({});
 
   const load = useCallback(() => {
     api<User[]>("/users")
@@ -67,7 +68,26 @@ export default function EmployeesApp({ me }: { me: User }) {
             <tr key={u.id} className={u.is_active ? "" : "inactive"}>
               <td>
                 {u.full_name || "—"}
-                <div className="muted">{u.email}</div>
+                <div className="muted">{u.email.endsWith("@pending.invalid") ? "почта не задана, вход закрыт" : u.email}</div>
+                {isOwner && (
+                  <details>
+                    <summary className="small muted">Задать почту и пароль</summary>
+                    <div className="row small">
+                      <input type="email" placeholder="Почта" value={creds[u.id]?.email ?? ""} onChange={(e) => setCreds((c) => ({ ...c, [u.id]: { email: e.target.value, password: c[u.id]?.password ?? "" } }))} />
+                      <input type="password" placeholder="Пароль (от 8 символов)" value={creds[u.id]?.password ?? ""} onChange={(e) => setCreds((c) => ({ ...c, [u.id]: { email: c[u.id]?.email ?? "", password: e.target.value } }))} />
+                      <button
+                        disabled={!creds[u.id]?.email && !creds[u.id]?.password}
+                        onClick={async () => {
+                          const c = creds[u.id] ?? { email: "", password: "" };
+                          await update(u, { ...(c.email ? { email: c.email } : {}), ...(c.password ? { password: c.password } : {}) } as Partial<User>);
+                          setCreds((x) => ({ ...x, [u.id]: { email: "", password: "" } }));
+                        }}
+                      >
+                        Сохранить
+                      </button>
+                    </div>
+                  </details>
+                )}
               </td>
               <td>{u.position || "—"}</td>
               <td>{u.department || "—"}</td>

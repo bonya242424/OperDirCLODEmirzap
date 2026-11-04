@@ -38,7 +38,9 @@ const day = (s: string | null) => (s ? new Date(s).toLocaleDateString("ru-RU") :
 /** Задачи Битрикс24 за период и обновления по ним. Только владелец. */
 export default function BitrixApp({ me }: { me: User }) {
   const today = new Date();
-  const [tab, setTab] = useState<"tasks" | "updates">("tasks");
+  const [tab, setTab] = useState<"tasks" | "updates" | "people">("tasks");
+  const [ids, setIds] = useState("");
+  const [imported, setImported] = useState<{ bitrix_user_id: number; status: string; name: string; needs_email?: boolean }[] | null>(null);
   const [from, setFrom] = useState(iso(new Date(today.getFullYear(), today.getMonth(), 1)));
   const [to, setTo] = useState(iso(today));
   const [kind, setKind] = useState<keyof typeof KINDS>("any");
@@ -76,6 +78,20 @@ export default function BitrixApp({ me }: { me: User }) {
     if (tab === "updates") loadEvents();
   }, [tab, loadEvents]);
 
+  async function importPeople() {
+    setBusy(true);
+    setError("");
+    try {
+      const list = ids.split(/[\s,;]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+      setImported(await api("/bitrix/import-users", { method: "POST", body: { ids: list } }));
+      api<Employee[]>("/bitrix/employees").then(setEmployees).catch(() => undefined);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function watchNow() {
     setBusy(true);
     setError("");
@@ -100,6 +116,7 @@ export default function BitrixApp({ me }: { me: User }) {
         <div className="row small">
           <button className={tab === "tasks" ? "primary" : "ghost"} onClick={() => setTab("tasks")}>За период</button>
           <button className={tab === "updates" ? "primary" : "ghost"} onClick={() => setTab("updates")}>Обновления</button>
+          <button className={tab === "people" ? "primary" : "ghost"} onClick={() => setTab("people")}>Сотрудники из Б24</button>
         </div>
       </div>
       {error && <p className="error">{error}</p>}
@@ -136,6 +153,21 @@ export default function BitrixApp({ me }: { me: User }) {
               </div>
             </>
           )}
+        </>
+      )}
+      {tab === "people" && (
+        <>
+          <p className="muted small">Впишите id сотрудников из Битрикс24 через запятую или с новой строки. Система возьмёт из Битрикс24 ФИО, должность и почту (если она доступна) и добавит сотрудников. Вход им будет закрыт, пока вы не зададите почту и пароль в «Сотрудниках».</p>
+          <textarea rows={3} value={ids} onChange={(e) => setIds(e.target.value)} placeholder="Например: 12, 15, 21" aria-label="id в Битрикс24" />
+          <div className="row small">
+            <button className="primary" onClick={importPeople} disabled={busy || !ids.trim()}>{busy ? "Добавляю…" : "Добавить из Битрикс24"}</button>
+          </div>
+          {imported && imported.map((r) => (
+            <div key={r.bitrix_user_id} className="assembly-history-item small">
+              <strong>#{r.bitrix_user_id}</strong> {r.name}{" "}
+              {r.status === "created" ? (r.needs_email ? "— добавлен, нужно задать почту и пароль в «Сотрудниках»" : "— добавлен с почтой из Битрикс24, осталось задать пароль") : r.status === "exists" ? "— уже есть в системе" : "— в Битрикс24 не найден"}
+            </div>
+          ))}
         </>
       )}
       {tab === "updates" && (

@@ -10,7 +10,7 @@ from ..security import hash_password
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
-_PRIVILEGED_FIELDS = {"role", "can_apply_changes", "is_active"}
+_PRIVILEGED_FIELDS = {"role", "can_apply_changes", "is_active", "email"}
 
 
 def _active_owners(db: Session) -> int:
@@ -62,6 +62,11 @@ def update_user(
         raise HTTPException(status_code=403, detail="Менять роли, права и доступ может только владелец")
     if "password" in data and data["password"] is None:
         del data["password"]
+    if "email" in data:
+        if data["email"] is None:
+            del data["email"]
+        elif db.scalar(select(User).where(User.email == data["email"], User.id != user.id)) is not None:
+            raise HTTPException(status_code=409, detail="Сотрудник с таким email уже есть")
     if "password" in data and me.id != user.id and me.role != "owner":
         raise HTTPException(status_code=403, detail="Пароль другого сотрудника может сменить только владелец")
 
