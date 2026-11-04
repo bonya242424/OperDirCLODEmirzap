@@ -12,8 +12,12 @@ from tests.test_bitrix_watch import Fake, _emp, raw as _raw
 
 
 def raw(i, status=2, **kw):
-    kw.setdefault("changed", datetime.now(timezone.utc).isoformat())
-    return _raw(i, status, **kw)
+    now = datetime.now(timezone.utc).isoformat()
+    kw.setdefault("changed", now)
+    created = kw.pop("created", None) or now
+    t = _raw(i, status, **kw)
+    t["createdDate"] = created
+    return t
 
 
 @pytest.fixture()
@@ -87,9 +91,10 @@ def test_detail_comments_and_processes(client, owner, fake):
 
 def test_old_untouched_tasks_not_pulled(client, owner, fake):
     old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
     with SessionLocal() as db:
         _emp(db, name="Иван Петров")
-        fake.tasks = [raw(1, 2, title="Свежая"), raw(2, 2, title="Апрельская", changed=old)]
+        fake.tasks = [raw(1, 2, title="Свежая"), raw(2, 2, title="Апрельская", changed=now_iso, created=old)]
         bb.sync_board(db)
         db.add(BitrixTask(id=3, title="Старая из прошлой выгрузки", responsible_id=7, status=2, is_open=True))
         db.commit()

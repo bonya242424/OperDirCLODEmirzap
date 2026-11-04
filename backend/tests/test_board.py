@@ -68,8 +68,8 @@ def test_validation_and_permissions(client, owner):
 
 def test_bitrix_cards_are_readonly_and_mapped(client, owner):
     with SessionLocal() as db:
-        db.add(BitrixTask(id=1, title="Из Б24", responsible_id=5, status=3, deadline=None, is_open=True, changed_at=utcnow()))
-        db.add(BitrixTask(id=2, title="Закрытая", responsible_id=5, status=2, deadline=None, is_open=False, changed_at=utcnow()))
+        db.add(BitrixTask(id=1, title="Из Б24", responsible_id=5, status=3, deadline=None, is_open=True, created_at=utcnow()))
+        db.add(BitrixTask(id=2, title="Закрытая", responsible_id=5, status=2, deadline=None, is_open=False, created_at=utcnow()))
         db.commit()
     cards = _col(client.get("/api/board", headers=owner).json(), "in_progress")
     assert [(c["id"], c["source"], c["editable"]) for c in cards] == [("b-1", "bitrix", False)]
@@ -77,7 +77,7 @@ def test_bitrix_cards_are_readonly_and_mapped(client, owner):
 
 
 def _bitrix(db, id, title, **kw):
-    db.add(BitrixTask(id=id, title=title, responsible_id=kw.pop("responsible_id", 7), status=3, is_open=True, changed_at=utcnow(), **kw))
+    db.add(BitrixTask(id=id, title=title, responsible_id=kw.pop("responsible_id", 7), status=3, is_open=True, created_at=utcnow(), **kw))
 
 
 def test_bitrix_cards_map_to_employee_and_related(client, owner):

@@ -73,18 +73,16 @@ def column_of(row: BitrixTask) -> str:
 
 
 def sync_board(db: Session) -> dict:
-    """Задачи выбранных сотрудников, с которыми что-то происходило за последние BACKFILL_DAYS дней. Старые нетронутые задачи не берём."""
+    """Задачи выбранных сотрудников, созданные за последние BACKFILL_DAYS дней, в любых статусах; статусы и комментарии обновляются при каждом проходе."""
     users = tracked_users(db)
     if not users:
         raise BitrixError("Не выбрано ни одного сотрудника с id в Битрикс24")
     mark = db.get(AppSetting, "bitrix_board_at")
-    since = (_dt(mark.value) if mark and mark.value else None) or (utcnow() - timedelta(days=BACKFILL_DAYS))
-    since = since - timedelta(minutes=15)
-    begin = since.astimezone(timezone(timedelta(hours=3))).strftime("%Y-%m-%d %H:%M:%S")
+    begin = cutoff().astimezone(timezone(timedelta(hours=3))).strftime("%Y-%m-%d %H:%M:%S")
     started = utcnow()
     got: dict[int, dict] = {}
     for uid in sorted(users):
-        for t in fetch({"RESPONSIBLE_ID": uid, ">=CHANGED_DATE": begin}):
+        for t in fetch({"RESPONSIBLE_ID": uid, ">=CREATED_DATE": begin}):
             got[t["id"]] = t
     existing = {r.id: r for r in db.scalars(select(BitrixTask).where(BitrixTask.id.in_(list(got)))) } if got else {}
     new = changed = 0
@@ -139,7 +137,7 @@ def tag_tasks(db: Session, limit: int = 60, batch: int = 15) -> int:
     provider = get_provider()
     if provider is None:
         return 0
-    rows = list(db.scalars(select(BitrixTask).where(BitrixTask.tagged_at.is_(None), BitrixTask.tag_source != "owner", BitrixTask.removed.is_(False), BitrixTask.changed_at >= cutoff()).order_by(BitrixTask.id.desc()).limit(limit)))
+    rows = list(db.scalars(select(BitrixTask).where(BitrixTask.tagged_at.is_(None), BitrixTask.tag_source != "owner", BitrixTask.removed.is_(False), BitrixTask.created_at >= cutoff()).order_by(BitrixTask.id.desc()).limit(limit)))
     if not rows:
         return 0
     procs = processes(db)

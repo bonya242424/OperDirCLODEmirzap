@@ -127,7 +127,7 @@ def board(db: Session = Depends(get_db), _: User = Depends(current_user)):
         if t.status == "done" and t.completed_at and _utc(t.completed_at) < now - timedelta(days=DONE_VISIBLE_DAYS):
             continue
         cols["in_progress" if t.status == "review" else t.status].append(_card(t, names))
-    for b in db.scalars(select(BitrixTask).where(BitrixTask.removed.is_(False), BitrixTask.changed_at >= cutoff()).order_by(BitrixTask.deadline.is_(None), BitrixTask.deadline)):
+    for b in db.scalars(select(BitrixTask).where(BitrixTask.removed.is_(False), BitrixTask.created_at >= cutoff()).order_by(BitrixTask.deadline.is_(None), BitrixTask.deadline)):
         col = column_of(b)
         if col in ("done", "cancelled"):
             ended = _utc(b.closed_at or b.changed_at or b.synced_at)
