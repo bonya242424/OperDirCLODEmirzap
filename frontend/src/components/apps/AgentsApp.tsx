@@ -104,6 +104,10 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
   const running = false;
+  const [multi, setMulti] = useState(false);
+  const [picked, setPicked] = useState<number[]>([]);
+  const [queue, setQueue] = useState<{ active: boolean; total: number; pos: number; current: { id: number; number: string } | null; done: { batch_id: number; status: string }[] } | null>(null);
+  const [info, setInfo] = useState("");
   const supplier = suppliers?.find((x) => x.id === supSel) ?? null;
   const [dFrom, setDFrom] = useState("");
   const [dTo, setDTo] = useState("");
@@ -182,6 +186,48 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
     }, 2500);
     return () => clearInterval(t);
   }, [checking, loadRuns, load]);
+
+  useEffect(() => {
+    if (me.role !== "owner") return;
+    const t = window.setInterval(() => api<NonNullable<typeof queue>>("/returns/check-queue").then(setQueue).catch(() => undefined), 3000);
+    api<NonNullable<typeof queue>>("/returns/check-queue").then(setQueue).catch(() => undefined);
+    return () => window.clearInterval(t);
+  }, [me.role]);
+
+  function togglePick(id: number) {
+    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  }
+
+  async function startQueue() {
+    setError("");
+    setInfo("");
+    try {
+      setQueue(await api("/returns/check-queue", { method: "POST", body: { batch_ids: picked } }));
+      setMulti(false);
+      setPicked([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    }
+  }
+
+  async function cancelQueue() {
+    try {
+      setQueue(await api("/returns/check-queue/cancel", { method: "POST" }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    }
+  }
+
+  async function dedupe() {
+    setError("");
+    try {
+      const r = await api<{ removed: number; skipped: number }>("/returns/dedupe", { method: "POST" });
+      setInfo(r.removed ? `Убрано дублей: ${r.removed}${r.skipped ? `, оставлено ${r.skipped} (по ним уже есть результаты)` : ""}` : "Дублей нет");
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    }
+  }
 
   async function startCheck() {
     if (!current) return;
@@ -309,12 +355,37 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               <input type="date" value={dTo} min={dFrom || undefined} onChange={(e) => setDTo(e.target.value)} aria-label="Сборка по" />
               {(dFrom || dTo) && <button className="ghost" onClick={() => { setDFrom(""); setDTo(""); }}>Сбросить</button>}
             </div>
+            {queue?.active && (
+              <div className="ag-hint">
+                Очередь проверки: документ {queue.pos} из {queue.total}{queue.current ? ` (${queue.current.number || queue.current.id})` : ""}.
+                <button className="ghost danger" onClick={cancelQueue}>Отменить очередь</button>
+              </div>
+            )}
+            {info && <p className="ok-text">{info}</p>}
+            {batches && batches.length > 0 && me.role === "owner" && (
+              <div className="row small">
+                <button className="ghost" onClick={() => { setMulti((m) => !m); setPicked([]); }} disabled={!!queue?.active}>{multi ? "Выход из выбора" : "Выбрать несколько"}</button>
+                {multi && <button className="ghost" onClick={() => setPicked(batches.map((b) => b.id))}>Выбрать все</button>}
+                {multi && (
+                  <button className="primary" onClick={startQueue} disabled={picked.length === 0 || !supplier?.has_session} title={supplier?.has_session ? "Агент проверит выбранные документы по очереди, ничего не отправляя" : "Сначала войдите в кабинет и сохраните вход"}>
+                    Проверить выбранные ({picked.length})
+                  </button>
+                )}
+                {!multi && <button className="ghost" onClick={dedupe}>Убрать дубли</button>}
+              </div>
+            )}
             {batches && batches.length > 0 && (
               <div className="chips">
                 {batches.map((b) => (
-                  <button key={b.id} className={`chip${b.id === selected ? " on" : ""}`} onClick={() => { setSelected(b.id); reset(); }} disabled={running}>
-                    {b.number || `Документ ${b.id}`} · {b.positions} поз.
-                  </button>
+                  multi ? (
+                    <label key={b.id} className={`chip${picked.includes(b.id) ? " on" : ""}`}>
+                      <input type="checkbox" checked={picked.includes(b.id)} onChange={() => togglePick(b.id)} /> {b.number || `Документ ${b.id}`} · {b.positions} поз.
+                    </label>
+                  ) : (
+                    <button key={b.id} className={`chip${b.id === selected ? " on" : ""}`} onClick={() => { setSelected(b.id); reset(); }} disabled={running}>
+                      {b.number || `Документ ${b.id}`} · {b.positions} поз.
+                    </button>
+                  )
                 ))}
               </div>
             )}

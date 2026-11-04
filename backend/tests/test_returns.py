@@ -1,3 +1,5 @@
+from app.db import SessionLocal
+from app.models import ReturnSupplier
 from pathlib import Path
 
 SAMPLE = Path(__file__).parent / "fixtures" / "returns_sample.csv"
@@ -124,3 +126,87 @@ def test_backfill_doc_dates(client, owner):
         db.commit()
     backfill_doc_dates()
     assert client.get("/api/returns/batches", headers=owner).json()[0]["doc_date"] == "2026-11-02"
+
+
+def _mk(db, sup, number, source="x", statuses=()):
+    from app import assembly_returns as ar
+    from app.models import ReturnBatch, ReturnLine
+
+    b = ReturnBatch(supplier=sup.name, supplier_id=sup.id, number=number, source=source, doc_date=ar.doc_date_of(number))
+    db.add(b)
+    db.flush()
+    for i, st in enumerate(statuses or ["pending", "pending"]):
+        db.add(ReturnLine(batch_id=b.id, article=f"A{i}", qty=1, status=st))
+    db.commit()
+    return b.id
+
+
+def test_batch_key_and_dedupe(client, owner):
+    from app import assembly_returns as ar
+    from app.models import ReturnBatch
+
+    assert ar.batch_key("Сборка №000007007 от 02.11.2026") == ar.batch_key("№000007007 от 02.11.2026") == ar.batch_key("7007 от 02.11.2026")
+    assert ar.batch_key("№000007007 от 02.11.2026") != ar.batch_key("№000007007 от 03.11.2026")
+    sup = _supplier(client, owner, name="Армтек").json()
+    with SessionLocal() as db:
+        s = db.get(ReturnSupplier, sup["id"])
+        checked = _mk(db, s, "№000007007 от 02.11.2026", statuses=["checked", "checked"])
+        dup1 = _mk(db, s, "Сборка №000007007 от 02.11.2026", source="Сборка 1С, файл #18: x")
+        dup2 = _mk(db, s, "№000007007 от 02.11.2026")
+        other = _mk(db, s, "Сборка №000006891 от 16.10.2026")
+        both = _mk(db, s, "000006999 от 01.10.2026", statuses=["checked"])
+        both2 = _mk(db, s, "№000006999 от 01.10.2026", statuses=["failed"])
+    res = client.post("/api/returns/dedupe", headers=owner)
+    assert res.status_code == 200 and res.json() == {"removed": 2, "skipped": 1}
+    with SessionLocal() as db:
+        ids = {b.id for b in db.query(ReturnBatch).all()}
+    assert checked in ids and other in ids and dup1 not in ids and dup2 not in ids
+    assert both in ids and both2 in ids  # у обоих есть результаты: сами не удаляем
+    assert client.post("/api/returns/dedupe").status_code == 401
+
+
+def test_reupload_with_other_number_spelling_replaces(client, owner):
+    from app import assembly_returns as ar
+    from app.models import ReturnBatch
+
+    sup = _supplier(client, owner, name="Армтек").json()
+    lines = [{"article": "A1", "name": "n", "brand": "", "qty": 1, "warehouse": "", "invoice_date": "", "invoice_no": "I1", "reason": ""}]
+    with SessionLocal() as db:
+        s = db.get(ReturnSupplier, sup["id"])
+        ar.store_batch(db, s, "Сборка №000007007 от 02.11.2026", lines, "a", 1)
+        ar.store_batch(db, s, "№000007007 от 02.11.2026", lines, "b", 1)
+        assert db.query(ReturnBatch).count() == 1
+
+
+def test_check_queue_runs_selected_in_order(client, owner, monkeypatch):
+    import time
+
+    from app.models import ReturnRun
+
+    sup = _supplier(client, owner, name="Очередь", portal_url="https://example.com/").json()
+    with SessionLocal() as db:
+        s = db.get(ReturnSupplier, sup["id"])
+        s.session_encrypted = "x"
+        db.commit()
+        ids = [_mk(db, s, "№000000101 от 01.10.2026"), _mk(db, s, "№000000102 от 02.10.2026"), _mk(db, s, "№000000103 от 03.10.2026")]
+    order = []
+
+    def fake(rid):
+        with SessionLocal() as db:
+            r = db.get(ReturnRun, rid)
+            order.append(r.batch_id)
+            r.status = "done"
+            db.commit()
+
+    monkeypatch.setattr("app.routers.returns.run_check", fake)
+    assert client.post("/api/returns/check-queue", headers=owner, json={"batch_ids": []}).status_code == 422
+    assert client.post("/api/returns/check-queue", headers=owner, json={"batch_ids": [9999]}).status_code == 404
+    r = client.post("/api/returns/check-queue", headers=owner, json={"batch_ids": [ids[2], ids[0]]})
+    assert r.status_code == 202
+    for _ in range(100):
+        st = client.get("/api/returns/check-queue", headers=owner).json()
+        if not st["active"]:
+            break
+        time.sleep(0.05)
+    assert order == [ids[2], ids[0]] and [d["status"] for d in st["done"]] == ["done", "done"]
+    assert client.post("/api/returns/check-queue", json={"batch_ids": ids}).status_code == 401

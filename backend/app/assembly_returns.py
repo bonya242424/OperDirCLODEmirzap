@@ -123,6 +123,13 @@ def supplier_by_name(db, name: str, user_id: int | None) -> ReturnSupplier:
     return sup
 
 
+def batch_key(number: str) -> str:
+    """Один и тот же документ при разной записи («Сборка №000007007 от 02.11.2026» и «№000007007 от 02.11.2026»): номер без нулей и дата."""
+    m = re.search(r"\d{4,}", number or "")
+    d = doc_date_of(number)
+    return f"{m.group(0).lstrip('0') or '0'}|{d.isoformat() if d else ''}" if m else norm(number)
+
+
 class Locked(Exception):
     """Документ уже есть, и по нему отправлены заявки: заменять нельзя."""
 
@@ -131,7 +138,10 @@ def store_batch(db, sup: ReturnSupplier, number: str, lines: list[dict], source:
     """Документ возврата у поставщика. Тот же номер загружен повторно: старый заменяется, если по нему ничего не отправлено."""
     number = number.strip()[:200]
     if number:
-        for old in db.scalars(select(ReturnBatch).where(ReturnBatch.supplier_id == sup.id, ReturnBatch.number == number)).all():
+        key = batch_key(number)
+        for old in db.scalars(select(ReturnBatch).where(ReturnBatch.supplier_id == sup.id)).all():
+            if batch_key(old.number) != key:
+                continue
             if db.scalar(select(ReturnLine.id).where(ReturnLine.batch_id == old.id, ReturnLine.status == "submitted").limit(1)):
                 raise Locked(f"Документ {number} уже загружен, и по нему есть отправленные заявки: заменить его нельзя")
             for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == old.id)):
@@ -172,3 +182,37 @@ def batch_from_file(db, f: StoredFile, supplier: str, text: str, user_id: int | 
 
 def batch_for_file(db, file_id: int) -> ReturnBatch | None:
     return db.scalar(select(ReturnBatch).where(ReturnBatch.source.like(f"Сборка 1С, файл #{file_id}:%")))
+
+
+def dedupe(db) -> dict:
+    """Убирает дубли документов возврата (один поставщик и один документ). Остаётся тот, где больше результатов проверки и отправлено больше всего,
+    при равенстве тот, что создан из файла сборки 1С, затем самый новый. Удаляются только дубли без проверенных и отправленных строк."""
+    from collections import defaultdict
+
+    groups: dict[tuple, list[ReturnBatch]] = defaultdict(list)
+    for b in db.scalars(select(ReturnBatch).where(ReturnBatch.number != "")):
+        groups[(b.supplier_id or b.supplier, batch_key(b.number))].append(b)
+    removed, skipped = 0, 0
+    for batches in groups.values():
+        if len(batches) < 2:
+            continue
+
+        def progress(b: ReturnBatch) -> tuple:
+            sts = [x for x in db.scalars(select(ReturnLine.status).where(ReturnLine.batch_id == b.id))]
+            return (sum(1 for x in sts if x == "submitted"), sum(1 for x in sts if x != "pending"), b.source.startswith("Сборка 1С, файл #"), b.id)
+
+        best = max(batches, key=progress)
+        for b in batches:
+            if b.id == best.id:
+                continue
+            if progress(b)[1] > 0:  # по нему уже есть результаты: сами не удаляем
+                skipped += 1
+                continue
+            for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == b.id)):
+                db.delete(r)
+            for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == b.id)):
+                db.delete(r)
+            db.delete(b)
+            removed += 1
+    db.commit()
+    return {"removed": removed, "skipped": skipped}

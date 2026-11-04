@@ -12,6 +12,7 @@ from . import search as search_index
 from .guide_calc import reset_stale as reset_stale_guides
 from .returns_run import reset_stale as reset_stale_runs
 from .assembly_run import reset_stale as reset_stale_assembly
+from . import assembly_returns
 from . import project_context_seed
 from .routers.returns import backfill_doc_dates
 from .metric_calc import reset_stale
@@ -68,6 +69,13 @@ async def lifespan(_: FastAPI):
     reset_stale_runs()
     reset_stale_assembly()
     backfill_doc_dates()
+    try:  # дубли документов возврата (одна и та же сборка под разной записью номера)
+        with SessionLocal() as db:
+            res = assembly_returns.dedupe(db)
+            if res["removed"] or res["skipped"]:
+                log.warning("Дубли документов возврата: удалено %s, оставлено из-за результатов проверки %s", res["removed"], res["skipped"])
+    except Exception:  # noqa: BLE001
+        log.exception("Не удалось убрать дубли документов возврата")
     scheduler = start_scheduler() if settings.scheduler_enabled else None
     yield
     if scheduler is not None:
