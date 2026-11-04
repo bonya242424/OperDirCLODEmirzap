@@ -545,3 +545,7 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .file-view-scroll .files-table td { white-space: nowrap; font-size: 13px; }
 .file-view-text { margin: 0; padding: 12px; white-space: pre-wrap; font-size: 13px; }
 .file-view-return { flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.bitrix-app { padding: 12px; display: flex; flex-direction: column; gap: 10px; overflow: auto; height: 100%; }
+.bx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.bx-table th, .bx-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }

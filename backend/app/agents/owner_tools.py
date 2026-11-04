@@ -304,6 +304,38 @@ def cursor_list(ctx: Ctx, _a: dict) -> str:
     return "\n".join(rows) or "Агентов Cursor нет"
 
 
+def bitrix_tasks(ctx: Ctx, a: dict) -> str:
+    from .. import bitrix_watch as bw
+    from ..bitrix import BitrixError
+
+    try:
+        d1, d2 = date.fromisoformat(str(a.get("date1"))), date.fromisoformat(str(a.get("date2")))
+    except ValueError:
+        raise ToolError("Даты в виде ГГГГ-ММ-ДД") from None
+    if d2 < d1 or (d2 - d1).days > 400:
+        raise ToolError("Период указан неверно (не больше 400 дней)")
+    try:
+        res = bw.list_period(ctx.db, d1, d2, str(a.get("kind") or "any"), int(a["bitrix_user_id"]) if a.get("bitrix_user_id") else None)
+    except BitrixError as exc:
+        raise ToolError(str(exc)) from None
+    head = f"Задач: {res['count']}. По статусам: " + (", ".join(f"{k} {v}" for k, v in res["by_status"].items()) or "нет")
+    rows = [
+        f"#{t['id']} [{t['status_name']}] {t['title']} | исполнитель {t['responsible']} | создана {(t['created'] or '')[:10]} | срок {(t['deadline'] or '')[:10] or 'нет'} | закрыта {(t['closed'] or '')[:10] or '-'}"
+        for t in res["tasks"][:150]
+    ]
+    return head + "\n" + "\n".join(rows) + ("\n…остальные не показаны, сузьте период" if res["count"] > 150 else "")
+
+
+def bitrix_updates(ctx: Ctx, a: dict) -> str:
+    from .. import bitrix_watch as bw
+
+    days = int(a.get("days") or 7)
+    ev = bw.recent_events(ctx.db, days, int(a["task_id"]) if a.get("task_id") else None, 150)
+    if not ev:
+        return f"За {days} дн. обновлений по задачам нет (или слежение ещё не накопило данные: первая проверка только запоминает текущее состояние)"
+    return "\n".join(f"{e['at'][:16].replace('T', ' ')} #{e['task_id']} «{e['title'][:80]}» ({e['responsible']}): {e['text']}" for e in ev)
+
+
 _S = {"type": "string"}
 _N = {"type": "number"}
 _I = {"type": "integer"}
@@ -324,6 +356,8 @@ OWNER_TOOLS = [
     Tool("cursor_status", "Статус агента Cursor", "Статус и итог облачного агента Cursor по id.", _obj({"agent_id": _S}, ["agent_id"]), "read", cursor_status),
     Tool("cursor_followup", "Уточнить задачу агенту Cursor", "Отправляет дополнительное указание уже запущенному агенту Cursor.", _obj({"agent_id": _S, "text": _S}, ["agent_id", "text"]), "write", cursor_followup),
     Tool("cursor_list", "Список агентов Cursor", "Недавние облачные агенты Cursor.", _obj({}), "read", cursor_list),
+    Tool("bitrix_tasks", "Задачи Битрикс24 за период", "Живые задачи выбранных сотрудников из Битрикс24 за период (любые статусы). date1, date2 в виде ГГГГ-ММ-ДД. kind: any (создана, закрыта или срок в периоде), created, closed, deadline, changed. bitrix_user_id: один сотрудник (по умолчанию все выбранные). Цифры берите только отсюда.", _obj({"date1": _S, "date2": _S, "kind": _S, "bitrix_user_id": _I}, ["date1", "date2"]), "read", bitrix_tasks),
+    Tool("bitrix_updates", "Обновления по задачам Битрикс24", "Что изменилось по задачам за последние days дней (по умолчанию 7): новые, смена статуса, срока, исполнителя, комментарии. Копится проверкой раз в полчаса. task_id: по одной задаче.", _obj({"days": _I, "task_id": _I}), "read", bitrix_updates),
     Tool("run_integration_check", "Проверить интеграцию", "Проверяет интеграцию по ключу (например yandex_metrika, llm).", _obj({"key": _S}, ["key"]), "read", run_integration_check),
 ]
 for _t in OWNER_TOOLS:

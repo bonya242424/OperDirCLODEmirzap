@@ -1,9 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from .agents.service import run_due_agents, stop_stale_runs
 from .bitrix import run_scheduled_sync
+from .bitrix_watch import run_scheduled_watch
 from .config import settings
 from .integrations.service import run_scheduled_checks
 from .metrika_sync import run_scheduled_metrika
@@ -30,6 +31,15 @@ def start_scheduler() -> BackgroundScheduler:
         minutes=settings.bitrix_sync_minutes,
         id="bitrix_sync",
         next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        run_scheduled_watch,
+        "interval",
+        minutes=settings.bitrix_watch_minutes,
+        id="bitrix_watch",
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
         max_instances=1,
         coalesce=True,
     )

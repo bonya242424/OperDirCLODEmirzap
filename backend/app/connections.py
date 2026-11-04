@@ -72,6 +72,12 @@ KINDS: dict[str, Kind] = {
             [Field("api_key", "Ключ API", secret=True), Field("base_url", "Адрес API (если ключ у посредника, например https://1app.ru/v1)", required=False)],
         ),
         Kind(
+            "bitrix24",
+            "Битрикс24 (вебхук)",
+            "Входящий вебхук Битрикс24 с правами на задачи (раздел «Разработчикам → Другое → Входящий вебхук»). Адрес вида https://ваш-портал.bitrix24.ru/rest/1/ключ/. Задачи выбранных сотрудников, их история за период и обновления. Только для компании, один на всех",
+            [Field("webhook_url", "Адрес вебхука", secret=True)],
+        ),
+        Kind(
             "cursor",
             "Cursor (облачные агенты)",
             "Ключ API Cursor для запуска облачных агентов по коду. Агенты системы ставят задачи Cursor в указанном репозитории. Только для компании",
@@ -291,6 +297,26 @@ def _xai(cfg):
     return check_openai_key(key, _base(cfg, settings.xai_base_url), "Grok")
 
 
+def _bitrix24(cfg):
+    import httpx
+
+    url = cfg["webhook_url"].strip().rstrip("/")
+    if not url.startswith("https://") or "/rest/" not in url:
+        return CheckResult(ERROR, "Адрес вебхука должен быть вида https://портал.bitrix24.ru/rest/1/ключ/")
+    try:
+        resp = httpx.post(f"{url}/tasks.task.list.json", data={"select[]": ["ID"], "start": 0}, timeout=15.0)
+    except httpx.HTTPError as exc:
+        return CheckResult(ERROR, f"Ошибка сети ({type(exc).__name__})")
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if resp.status_code != 200 or "error" in data:
+        reason = str(data.get("error_description") or data.get("error") or "")[:120]
+        return CheckResult(ERROR, f"Битрикс24 ответил кодом {resp.status_code}" + (f": {reason}" if reason else "") + ". Проверьте адрес и права вебхука на задачи")
+    return CheckResult(OK, "Битрикс24 отвечает, задачи доступны")
+
+
 def _cursor(cfg):
     import httpx
 
@@ -305,4 +331,4 @@ def _cursor(cfg):
     return CheckResult(OK, "API Cursor отвечает")
 
 
-_CHECKS = {"xai": _xai, "cursor": _cursor, "openai": _openai, "anthropic": _anthropic, "rdp": _rdp, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}
+_CHECKS = {"bitrix24": _bitrix24, "xai": _xai, "cursor": _cursor, "openai": _openai, "anthropic": _anthropic, "rdp": _rdp, "yandex_metrika": _metrika, "yandex_webmaster": _webmaster, "telegram": _telegram, "email_imap": _imap, "google_sheet": _sheet, "yandex_disk": _disk, "ftp": _ftp}

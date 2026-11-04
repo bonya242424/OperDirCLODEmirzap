@@ -60,9 +60,11 @@ def _get(url: str, headers: dict[str, str] | None = None) -> tuple[httpx.Respons
 
 
 def check_bitrix24(db, row: Integration) -> CheckResult:
-    webhook = settings.bitrix24_webhook_url.strip()
+    from ..bitrix import webhook_url
+
+    webhook = webhook_url()
     if not webhook:
-        return CheckResult(NOT_CONFIGURED, "Не задан BITRIX24_WEBHOOK_URL")
+        return CheckResult(NOT_CONFIGURED, "Битрикс24 не подключён: добавьте подключение «Битрикс24» в «Интеграции»")
     resp, err = _get(webhook.rstrip("/") + "/profile.json")
     if err:
         return CheckResult(ERROR, err)

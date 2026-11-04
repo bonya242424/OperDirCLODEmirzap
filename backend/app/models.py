@@ -108,6 +108,35 @@ class StoredFile(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class BitrixTaskState(Base):
+    """Последнее известное состояние задачи из Битрикс24: по нему находим, что изменилось между проверками."""
+
+    __tablename__ = "bitrix_task_state"
+
+    task_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[int] = mapped_column(Integer, default=2)
+    responsible_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_comment_id: Mapped[int] = mapped_column(Integer, default=0)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BitrixTaskEvent(Base):
+    """Что произошло с задачей: новая, сменился статус или срок, комментарий. Копится при периодической проверке."""
+
+    __tablename__ = "bitrix_task_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # new | status | deadline | responsible | title | comment
+    title: Mapped[str] = mapped_column(String(500), default="")
+    text: Mapped[str] = mapped_column(Text, default="")
+    responsible_id: Mapped[int] = mapped_column(Integer, default=0)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class BitrixTask(Base):
     __tablename__ = "bitrix_tasks"
 

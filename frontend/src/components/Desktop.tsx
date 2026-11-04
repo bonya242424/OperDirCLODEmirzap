@@ -1,4 +1,5 @@
 import ChangelogApp from "./apps/ChangelogApp";
+import BitrixApp from "./apps/BitrixApp";
 import InstructionsApp from "./apps/InstructionsApp";
 import RemoteApp from "./apps/RemoteApp";
 import MeApp from "./apps/MeApp";
@@ -42,6 +43,7 @@ const APPS: AppDef[] = [
   { key: "meetings", title: "Встречи", icon: "🎙️", colors: ["#7fd6e8", "#2f9bb8"], stage: 5 },
   { key: "integrations", title: "Интеграции", icon: "🔌", colors: ["#ff9fc4", "#d6478a"], size: [940, 620] },
   { key: "changes", title: "Изменения", icon: "🧩", colors: ["#c3b5ff", "#7c5ce6"], stage: 6 },
+  { key: "bitrix", title: "Задачи Б24", icon: "📋", colors: ["#8fb8ff", "#3a64c8"], size: [1080, 680] },
   { key: "remote", title: "Удалённые окна", icon: "🖥️", colors: ["#7fd6c2", "#2b8f7a"], size: [1180, 720] },
   { key: "instr1c", title: "Инструкции 1С", icon: "📘", colors: ["#8fb8ff", "#4a6fe0"], size: [1040, 640] },
   { key: "journal", title: "Журнал изменений", icon: "📝", colors: ["#9ad7c0", "#3a9c86"], size: [760, 600] },
@@ -65,6 +67,7 @@ function renderApp(app: AppDef, user: User): ReactNode {
   if (["gen", "tech", "ops", "fin"].includes(app.key)) return <DirectorApp key={app.key} direction={app.key} title={app.title} />;
   if (app.key === "tasks") return <TasksApp me={user} />;
   if (app.key === "remote") return <RemoteApp me={user} />;
+  if (app.key === "bitrix") return <BitrixApp me={user} />;
   if (app.key === "instr1c") return <InstructionsApp me={user} />;
   if (app.key === "journal") return <ChangelogApp />;
   if (app.key === "me") return <MeApp me={user} />;
@@ -75,7 +78,7 @@ function renderApp(app: AppDef, user: User): ReactNode {
 }
 
 export default function Desktop({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const apps = useMemo(() => APPS.filter((a) => (a.key !== "terminal" && a.key !== "remote") || user.role === "owner"), [user.role]);
+  const apps = useMemo(() => APPS.filter((a) => (a.key !== "terminal" && a.key !== "remote" && a.key !== "bitrix") || user.role === "owner"), [user.role]);
   const [windows, setWindows] = useState<WindowState[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [chatWidth, setChatWidth] = useState<number>(() => Math.round(window.innerWidth * 0.4));

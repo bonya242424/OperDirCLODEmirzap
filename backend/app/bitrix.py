@@ -65,10 +65,48 @@ def _pick(raw: dict, *names: str):
     return None
 
 
+def webhook_url() -> str:
+    """Вебхук Битрикс24: подключение компании «Битрикс24» из интерфейса, иначе BITRIX24_WEBHOOK_URL из настроек сервера."""
+    from .connections import decrypt
+    from .models import Connection
+
+    try:
+        with SessionLocal() as db:
+            row = db.scalar(select(Connection).where(Connection.kind == "bitrix24", Connection.owner_id.is_(None)).order_by(Connection.id.desc()))
+            own = decrypt(row.config_encrypted).get("webhook_url", "").strip() if row else ""
+    except Exception:  # noqa: BLE001
+        own = ""
+    return (own or settings.bitrix24_webhook_url.strip()).rstrip("/")
+
+
+def call(method: str, params: dict) -> dict:
+    """Один вызов REST Битрикс24. Ошибки приходят понятным текстом без адреса вебхука."""
+    import time
+
+    hook = webhook_url()
+    if not hook:
+        raise BitrixError("Битрикс24 не подключён: добавьте подключение «Битрикс24» в «Интеграции → Подключения»")
+    time.sleep(0.4)  # у Битрикс24 лимит около двух запросов в секунду
+    try:
+        resp = httpx.post(f"{hook}/{method}.json", data=params, timeout=25.0)
+    except httpx.TimeoutException:
+        raise BitrixError("Битрикс24 не ответил за 25 секунд") from None
+    except httpx.HTTPError as exc:
+        raise BitrixError(f"Ошибка сети ({type(exc).__name__})") from None
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if resp.status_code != 200 or "error" in data:
+        reason = str(data.get("error_description") or data.get("error") or "")[:160]
+        raise BitrixError(f"Битрикс24 ответил кодом {resp.status_code}" + (f": {reason}" if reason else "") + ". Проверьте вебхук и его права на задачи")
+    return data
+
+
 def fetch_open_tasks(responsible_id: int) -> list[RemoteTask]:
-    webhook = settings.bitrix24_webhook_url.strip().rstrip("/")
+    webhook = webhook_url()
     if not webhook:
-        raise BitrixError("Не задан BITRIX24_WEBHOOK_URL")
+        raise BitrixError("Битрикс24 не подключён: добавьте подключение «Битрикс24»")
     tasks: list[RemoteTask] = []
     start: int | None = 0
     for _ in range(MAX_PAGES):
@@ -151,7 +189,7 @@ def sync_tasks(db: Session) -> int:
 
 
 def run_scheduled_sync() -> None:
-    if not settings.bitrix24_webhook_url.strip():
+    if not webhook_url():
         return
     with SessionLocal() as db:
         try:

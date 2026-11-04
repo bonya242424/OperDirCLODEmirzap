@@ -12,6 +12,7 @@ from . import search as search_index
 from .guide_calc import reset_stale as reset_stale_guides
 from .returns_run import reset_stale as reset_stale_runs
 from .assembly_run import reset_stale as reset_stale_assembly
+from .routers import bitrix as bitrix_router
 from . import assembly_returns
 from . import project_context_seed
 from .routers.returns import backfill_doc_dates
@@ -101,6 +102,7 @@ app.include_router(instructions.router)
 app.include_router(remote.router)
 app.include_router(llm_settings.router)
 app.include_router(assembly.router)
+app.include_router(bitrix_router.router)
 
 
 @app.get("/api/health")
