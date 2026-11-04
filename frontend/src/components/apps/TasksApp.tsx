@@ -16,7 +16,7 @@ function deadlineChip(card: BoardCard): { text: string; tone: string } | null {
   const d = new Date(card.deadline);
   const days = Math.round((new Date(d.toDateString()).getTime() - new Date(new Date().toDateString()).getTime()) / 86400000);
   const date = d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
-  if (card.status === "done") return { text: date, tone: "" };
+  if (card.status === "done" || card.status === "cancelled") return { text: date, tone: "" };
   if (card.overdue) return { text: `${date} · просрочено`, tone: "late" };
   if (days === 0) return { text: "сегодня", tone: "soon" };
   if (days === 1) return { text: "завтра", tone: "soon" };
@@ -54,6 +54,9 @@ export default function TasksApp({ me }: { me: User }) {
   const [detailId, setDetailId] = useState<string | null>(null);
   const detail = detailId ? board?.columns.flatMap((c) => c.cards).find((c) => c.id === detailId) ?? null : null;
   const [syncing, setSyncing] = useState(false);
+  const [process, setProcess] = useState("");
+  const [kpiOnly, setKpiOnly] = useState(false);
+  const [processes, setProcesses] = useState<string[]>([]);
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : "Ошибка");
 
@@ -69,23 +72,26 @@ export default function TasksApp({ me }: { me: User }) {
   useEffect(() => {
     load();
     api<User[]>("/users").then(setUsers).catch(() => {});
+    api<string[]>("/board/processes").then(setProcesses).catch(() => {});
     const t = setInterval(load, 60_000);
     return () => clearInterval(t);
   }, [load]);
 
   const matches = useCallback(
     (c: BoardCard) => {
+      if (process && c.process !== process) return false;
+      if (kpiOnly && !c.kpi_impact) return false;
       if (search && !c.title.toLowerCase().includes(search.trim().toLowerCase())) return false;
       if (who === "mine") return c.assignee_id === me.id || (c.source === "bitrix" && c.assignee === (me.full_name || me.email));
       if (typeof who === "number") return c.assignee_id === who;
       return true;
     },
-    [search, who, me],
+    [search, who, me, process, kpiOnly],
   );
 
   const totals = useMemo(() => {
     const all = board?.columns.flatMap((c) => c.cards.filter(matches)) ?? [];
-    return { open: all.filter((c) => c.status !== "done").length, late: all.filter((c) => c.overdue).length };
+    return { open: all.filter((c) => c.status !== "done" && c.status !== "cancelled").length, late: all.filter((c) => c.overdue).length };
   }, [board, matches]);
 
   async function quickAdd(e: FormEvent) {
@@ -171,7 +177,7 @@ export default function TasksApp({ me }: { me: User }) {
   async function sync() {
     setSyncing(true);
     try {
-      await api("/tasks/sync", { method: "POST" });
+      await api(me.role === "owner" ? "/board/bitrix/refresh" : "/tasks/sync", { method: "POST" });
       load();
     } catch (err) {
       fail(err);
@@ -252,6 +258,15 @@ export default function TasksApp({ me }: { me: User }) {
               <option key={u.id} value={u.id}>{u.full_name || u.email}</option>
             ))}
           </select>
+          <select value={process} onChange={(e) => setProcess(e.target.value)} title="Процесс задачи">
+            <option value="">Все процессы</option>
+            {processes.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+          <label className="kcheck" title="Задачи, которые не обычная работа, но могут повлиять на показатели компании">
+            <input type="checkbox" checked={kpiOnly} onChange={(e) => setKpiOnly(e.target.checked)} /> Влияют на показатели
+          </label>
           <button className="ghost" onClick={sync} disabled={syncing} title="Забрать свежие задачи из Битрикс24">
             {syncing ? "Обновляем…" : "↻ Битрикс24"}
           </button>
@@ -313,6 +328,9 @@ export default function TasksApp({ me }: { me: User }) {
                       </div>
                       <div className="kmeta">
                         {c.source === "bitrix" && <span className="tag">Б24</span>}
+                        {c.kpi_impact && <span className="chipd soon" title={c.kpi_note || "Может влиять на показатели"}>★ показатели</span>}
+                        {c.process && <span className="chipd" title="Процесс">{c.process}</span>}
+                        {c.comments_count > 0 && <span className="muted small" title="Комментариев">💬 {c.comments_count}</span>}
                         {chip && <span className={`chipd ${chip.tone}`} title={formatDate(c.deadline)}>{chip.text}</span>}
                         <span className="grow" />
                         {c.assignee && <span className="avatar" title={c.assignee}>{initials(c.assignee)}</span>}
@@ -322,7 +340,7 @@ export default function TasksApp({ me }: { me: User }) {
                 })}
                 {over?.status === col.key && over.index >= cards.length && dragId && <div className="kline" />}
                 {cards.length === 0 && quick?.status !== col.key && (
-                  <p className="kempty">{col.key === "done" ? "Здесь появятся закрытые задачи" : "Перетащите сюда задачу"}</p>
+                  <p className="kempty">{col.key === "done" || col.key === "cancelled" ? "Здесь появятся закрытые задачи" : "Перетащите сюда задачу"}</p>
                 )}
                 {quick?.status === col.key ? (
                   <form onSubmit={quickAdd} className="kquick">
@@ -345,7 +363,7 @@ export default function TasksApp({ me }: { me: User }) {
       </div>
 
       {detail && !draft && (
-        <TaskDrawer card={detail} onClose={() => setDetailId(null)} onEdit={() => editCard(detail)} onOpenRelated={setDetailId} />
+        <TaskDrawer card={detail} onChanged={load} onClose={() => setDetailId(null)} onEdit={() => editCard(detail)} onOpenRelated={setDetailId} />
       )}
 
       {draft && (

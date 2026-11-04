@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from .agents.service import run_due_agents, stop_stale_runs
-from .bitrix import run_scheduled_sync
+from .bitrix_board import run_scheduled_board
 from .bitrix_watch import run_scheduled_watch
 from .config import settings
 from .integrations.service import run_scheduled_checks
@@ -26,7 +26,7 @@ def start_scheduler() -> BackgroundScheduler:
         coalesce=True,
     )
     scheduler.add_job(
-        run_scheduled_sync,
+        run_scheduled_board,
         "interval",
         minutes=settings.bitrix_sync_minutes,
         id="bitrix_sync",

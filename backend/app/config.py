@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     seed_project_context: bool = True  # класть в «Файлы» документы о системе (папка «Контекст проекта»)
     max_upload_mb: int = 100
 
-    bitrix_sync_minutes: int = 15
+    bitrix_sync_minutes: int = 60
     bitrix_watch_minutes: int = 30
 
     # Проверки интеграций

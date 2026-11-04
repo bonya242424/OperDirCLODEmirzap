@@ -20,7 +20,7 @@ from .models import AppSetting, BitrixTaskEvent, BitrixTaskState, User, utcnow
 log = logging.getLogger(__name__)
 
 STATUS = {1: "Новая", 2: "Ждёт выполнения", 3: "Выполняется", 4: "Ждёт контроля", 5: "Завершена", 6: "Отложена", 7: "Отклонена"}
-SELECT = ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "CREATED_DATE", "CHANGED_DATE", "CLOSED_DATE", "DEADLINE", "GROUP_ID", "PRIORITY"]
+SELECT = ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "CREATED_DATE", "CHANGED_DATE", "CLOSED_DATE", "DEADLINE", "GROUP_ID", "PRIORITY", "DESCRIPTION", "PARENT_ID", "COMMENTS_COUNT"]
 PAGE_LIMIT = 40  # страниц по 50 задач на один запрос: до 2000
 DATE_FIELDS = {"created": "CREATED_DATE", "closed": "CLOSED_DATE", "deadline": "DEADLINE", "changed": "CHANGED_DATE"}
 _CACHE: dict[tuple, tuple[float, list[dict]]] = {}
@@ -67,6 +67,9 @@ def _norm(raw: dict) -> dict:
         "closed": _dt(_pick(raw, "closedDate", "CLOSED_DATE")),
         "deadline": _dt(_pick(raw, "deadline", "DEADLINE")),
         "group_id": int(_pick(raw, "groupId", "GROUP_ID") or 0),
+        "parent_id": int(_pick(raw, "parentId", "PARENT_ID") or 0),
+        "description": str(_pick(raw, "description", "DESCRIPTION") or "")[:5000],
+        "comments_count": int(_pick(raw, "commentsCount", "COMMENTS_COUNT") or 0),
     }
 
 
@@ -121,7 +124,7 @@ def list_period(db: Session, date_from: date, date_to: date, kind: str = "any", 
         _CACHE[key] = (time.monotonic(), tasks)
     out = []
     for t in tasks:
-        out.append({**{k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in t.items()}, "responsible": users.get(t["responsible_id"], f"Б24 #{t['responsible_id']}")})
+        out.append({**{k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in t.items() if k != "description"}, "responsible": users.get(t["responsible_id"], f"Б24 #{t['responsible_id']}")})
     by_status: dict[str, int] = {}
     for t in out:
         by_status[t["status_name"]] = by_status.get(t["status_name"], 0) + 1

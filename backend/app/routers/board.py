@@ -12,21 +12,22 @@ from ..context import build_context
 from ..db import get_db
 from ..deps import current_user
 from ..llm import LLMError, get_provider
+from ..bitrix_board import column_of, processes, set_processes, sync_board, tag_tasks, comments as bitrix_comments
+from ..bitrix import BitrixError
 from ..models import BitrixTask, Task, TaskMessage, User, utcnow
 from ..schemas import _utc
 
 router = APIRouter(prefix="/api/board", tags=["board"])
 
-Status = Literal["new", "in_progress", "review", "done"]
+Status = Literal["new", "in_progress", "paused", "cancelled", "done", "review"]  # review — старый статус, показываем в «В работе»
 Priority = Literal["low", "normal", "high"]
 COLUMNS: list[tuple[str, str]] = [
-    ("new", "Новые"),
+    ("new", "План"),
     ("in_progress", "В работе"),
-    ("review", "На проверке"),
-    ("done", "Готово"),
+    ("cancelled", "Отмена"),
+    ("done", "Завершено"),
+    ("paused", "На паузе"),
 ]
-# Статусы Битрикс24: 1,2 ждёт; 3 в работе; 4 ждёт проверки; 6 отложена
-BITRIX_COLUMN = {1: "new", 2: "new", 3: "in_progress", 4: "review", 6: "new"}
 DONE_VISIBLE_DAYS = 14
 STEP = 1000.0
 
@@ -75,6 +76,11 @@ class CardOut(BaseModel):
     deadline: datetime | None
     overdue: bool
     editable: bool
+    process: str = ""
+    kpi_impact: bool = False
+    kpi_note: str = ""
+    tag_source: str = ""
+    comments_count: int = 0
 
     _fix = field_validator("deadline")(_utc)
 
@@ -102,10 +108,11 @@ def _names(db: Session) -> tuple[dict[int, str], dict[int, str]]:
 
 def _card(t: Task, names: dict[int, str]) -> CardOut:
     deadline = _utc(t.deadline)
+    status = "in_progress" if t.status == "review" else t.status
     return CardOut(
-        id=f"l-{t.id}", source="local", title=t.title, description=t.description, status=t.status,
+        id=f"l-{t.id}", source="local", title=t.title, description=t.description, status=status,
         priority=t.priority, assignee_id=t.assignee_id, assignee=names.get(t.assignee_id, "") if t.assignee_id else "",
-        deadline=deadline, overdue=bool(deadline and t.status != "done" and deadline < utcnow()), editable=True,
+        deadline=deadline, overdue=bool(deadline and t.status not in ("done", "cancelled") and deadline < utcnow()), editable=True,
     )
 
 
@@ -119,14 +126,20 @@ def board(db: Session = Depends(get_db), _: User = Depends(current_user)):
     for t in local:
         if t.status == "done" and t.completed_at and _utc(t.completed_at) < now - timedelta(days=DONE_VISIBLE_DAYS):
             continue
-        cols[t.status].append(_card(t, names))
-    for b in db.scalars(select(BitrixTask).where(BitrixTask.is_open.is_(True)).order_by(BitrixTask.deadline.is_(None), BitrixTask.deadline)):
+        cols["in_progress" if t.status == "review" else t.status].append(_card(t, names))
+    for b in db.scalars(select(BitrixTask).where(BitrixTask.removed.is_(False)).order_by(BitrixTask.deadline.is_(None), BitrixTask.deadline)):
+        col = column_of(b)
+        if col in ("done", "cancelled"):
+            ended = _utc(b.closed_at or b.changed_at or b.synced_at)
+            if ended is None or ended < now - timedelta(days=DONE_VISIBLE_DAYS):
+                continue
         deadline = _utc(b.deadline)
-        cols[BITRIX_COLUMN.get(b.status, "new")].append(
+        cols[col].append(
             CardOut(
-                id=f"b-{b.id}", source="bitrix", title=b.title, description=b.description, status=BITRIX_COLUMN.get(b.status, "new"),
+                id=f"b-{b.id}", source="bitrix", title=b.title, description=b.description, status=col,
                 priority="normal", assignee_id=bitrix_users[b.responsible_id].id if b.responsible_id in bitrix_users else None, assignee=bitrix_names.get(b.responsible_id, f"id {b.responsible_id}"),
-                deadline=deadline, overdue=bool(deadline and deadline < now), editable=False,
+                deadline=deadline, overdue=bool(deadline and col in ("new", "in_progress", "paused") and deadline < now), editable=False,
+                process=b.process, kpi_impact=b.kpi_impact, kpi_note=b.kpi_note, tag_source=b.tag_source, comments_count=b.comments_count,
             )
         )
     return BoardOut(columns=[ColumnOut(key=k, title=title, cards=cols[k]) for k, title in COLUMNS])
@@ -271,7 +284,7 @@ def related(ref: str, db: Session = Depends(get_db), _: User = Depends(current_u
     def out(t: BitrixTask, relation: str) -> RelatedOut:
         return RelatedOut(
             id=f"b-{t.id}", title=t.title, relation=relation,  # type: ignore[arg-type]
-            status="done" if not t.is_open else BITRIX_COLUMN.get(t.status, "new"),
+            status=column_of(t),
             assignee=bitrix_names.get(t.responsible_id, f"id {t.responsible_id}"),
         )
 
@@ -340,3 +353,116 @@ def chat_send(ref: str, body: TaskChatIn, db: Session = Depends(get_db), me: Use
     db.add(reply)
     db.commit()
     return TaskChatReply(reply=TaskChatOut.model_validate(reply))
+
+
+# ---- Теги, детали и перенос из Битрикс24 ----
+
+
+class TagsIn(BaseModel):
+    process: str | None = None
+    kpi_impact: bool | None = None
+    kpi_note: str | None = None
+
+
+class ProcessesIn(BaseModel):
+    items: list[str]
+
+
+def _owner(me: User) -> None:
+    if me.role != "owner":
+        raise HTTPException(status_code=403, detail="Это может только владелец")
+
+
+@router.get("/processes", response_model=list[str])
+def get_processes(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    return processes(db)
+
+
+@router.put("/processes", response_model=list[str])
+def put_processes(body: ProcessesIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    try:
+        return set_processes(db, body.items)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.patch("/cards/{ref}/tags", response_model=CardOut)
+def set_tags(ref: str, body: TagsIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    row = _bitrix_card(db, ref)
+    if not isinstance(row, BitrixTask):
+        raise HTTPException(status_code=422, detail="Теги ставятся только на задачи из Битрикс24")
+    if body.process is not None:
+        if body.process and body.process not in processes(db):
+            raise HTTPException(status_code=422, detail="Такого процесса нет в списке")
+        row.process = body.process
+    if body.kpi_impact is not None:
+        row.kpi_impact = body.kpi_impact
+        if not body.kpi_impact:
+            row.kpi_note = ""
+    if body.kpi_note is not None and row.kpi_impact:
+        row.kpi_note = body.kpi_note.strip()[:300]
+    row.tag_source, row.tagged_at = "owner", utcnow()
+    db.commit()
+    return _bitrix_out(db, row)
+
+
+def _bitrix_out(db: Session, b: BitrixTask) -> CardOut:
+    _, bitrix_names = _names(db)
+    users = _bitrix_users(db)
+    col = column_of(b)
+    deadline = _utc(b.deadline)
+    return CardOut(
+        id=f"b-{b.id}", source="bitrix", title=b.title, description=b.description, status=col, priority="normal",
+        assignee_id=users[b.responsible_id].id if b.responsible_id in users else None,
+        assignee=bitrix_names.get(b.responsible_id, f"id {b.responsible_id}"), deadline=deadline,
+        overdue=bool(deadline and col in ("new", "in_progress", "paused") and deadline < utcnow()), editable=False,
+        process=b.process, kpi_impact=b.kpi_impact, kpi_note=b.kpi_note, tag_source=b.tag_source, comments_count=b.comments_count,
+    )
+
+
+class CommentOut(BaseModel):
+    id: int
+    author: str
+    text: str
+    at: str
+
+
+class DetailOut(BaseModel):
+    status_name: str = ""
+    created_at: datetime | None = None
+    changed_at: datetime | None = None
+    closed_at: datetime | None = None
+    comments_count: int = 0
+    comments: list[CommentOut] = []
+    comments_error: str = ""
+
+    _fix = field_validator("created_at", "changed_at", "closed_at")(_utc)
+
+
+@router.get("/cards/{ref}/detail", response_model=DetailOut)
+def detail(ref: str, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    from ..bitrix_watch import STATUS
+
+    row = _bitrix_card(db, ref)
+    if not isinstance(row, BitrixTask):
+        return DetailOut()
+    out = DetailOut(status_name=STATUS.get(row.status, ""), created_at=row.created_at, changed_at=row.changed_at, closed_at=row.closed_at, comments_count=row.comments_count)
+    if row.comments_count:
+        try:
+            out.comments = [CommentOut(**c) for c in bitrix_comments(row.id)]
+        except BitrixError as exc:
+            out.comments_error = str(exc)
+    return out
+
+
+@router.post("/bitrix/refresh")
+def refresh_bitrix(db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Подтянуть задачи из Битрикс24 прямо сейчас и разметить новые."""
+    _owner(me)
+    try:
+        res = sync_board(db)
+    except BitrixError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    res["tagged"] = tag_tasks(db)
+    return res

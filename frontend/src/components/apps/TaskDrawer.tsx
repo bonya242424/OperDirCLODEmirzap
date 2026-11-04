@@ -16,15 +16,26 @@ interface Msg {
 }
 
 const REL: Record<Related["relation"], string> = { parent: "Родительская", child: "Подзадача", same_group: "Из того же проекта" };
-const STATUS: Record<string, string> = { new: "Новая", in_progress: "В работе", review: "На проверке", done: "Готово" };
+interface Detail {
+  status_name: string;
+  created_at: string | null;
+  changed_at: string | null;
+  closed_at: string | null;
+  comments_count: number;
+  comments: { id: number; author: string; text: string; at: string }[];
+  comments_error: string;
+}
+const STATUS: Record<string, string> = { new: "План", in_progress: "В работе", review: "В работе", paused: "На паузе", cancelled: "Отмена", done: "Завершено" };
 
 export default function TaskDrawer({
   card,
+  onChanged,
   onClose,
   onEdit,
   onOpenRelated,
 }: {
   card: BoardCard;
+  onChanged?: () => void;
   onClose: () => void;
   onEdit: () => void;
   onOpenRelated: (id: string) => void;
@@ -35,6 +46,25 @@ export default function TaskDrawer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const end = useRef<HTMLDivElement>(null);
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [processes, setProcesses] = useState<string[]>([]);
+
+  useEffect(() => {
+    setDetail(null);
+    if (card.source === "bitrix") api<Detail>(`/board/cards/${card.id}/detail`).then(setDetail).catch(() => {});
+  }, [card.id, card.source]);
+  useEffect(() => {
+    api<string[]>("/board/processes").then(setProcesses).catch(() => {});
+  }, []);
+
+  async function saveTags(body: { process?: string; kpi_impact?: boolean; kpi_note?: string }) {
+    try {
+      await api(`/board/cards/${card.id}/tags`, { method: "PATCH", body });
+      onChanged?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка");
+    }
+  }
 
   useEffect(() => {
     setRelated([]);
@@ -84,6 +114,40 @@ export default function TaskDrawer({
       <div className="tdrawer-body">
         {card.description && <p className="tdesc">{card.description}</p>}
         {card.editable && <button onClick={onEdit}>Изменить задачу</button>}
+        {card.source === "bitrix" && (
+          <>
+            <div className="tdtags">
+              <label>
+                Процесс {card.tag_source === "ai" && <span className="muted small">(оценка ИИ, можно поправить)</span>}
+                <select value={card.process} onChange={(e) => saveTags({ process: e.target.value })}>
+                  <option value="">Не определён</option>
+                  {processes.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="kcheck">
+                <input type="checkbox" checked={card.kpi_impact} onChange={(e) => saveTags({ kpi_impact: e.target.checked })} /> Может влиять на показатели компании
+              </label>
+              {card.kpi_impact && card.kpi_note && <p className="muted small">{card.kpi_note}</p>}
+            </div>
+            {detail && (
+              <p className="muted small">
+                Создана {detail.created_at ? formatDate(detail.created_at) : "—"} · изменена {detail.changed_at ? formatDate(detail.changed_at) : "—"}
+                {detail.closed_at ? ` · закрыта ${formatDate(detail.closed_at)}` : ""}
+                {detail.status_name ? ` · в Б24: ${detail.status_name}` : ""}
+              </p>
+            )}
+            <h4>Комментарии{detail ? ` (${detail.comments_count})` : ""}</h4>
+            {!detail ? <p className="muted small">Загружаем…</p> : detail.comments_error ? <p className="error">{detail.comments_error}</p> : detail.comments.length === 0 ? (
+              <p className="muted small">Комментариев нет.</p>
+            ) : (
+              detail.comments.map((c) => (
+                <div key={c.id} className="tcomm"><strong>{c.author}</strong> <span className="muted small">{c.at ? formatDate(c.at) : ""}</span><br />{c.text}</div>
+              ))
+            )}
+          </>
+        )}
         <h4>Связанные задачи</h4>
         {related.length === 0 ? (
           <p className="muted small">Связей нет: у задачи нет родителя, подзадач и соседей по проекту.</p>

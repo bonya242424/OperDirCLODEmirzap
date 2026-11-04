@@ -114,13 +114,18 @@ export interface BoardCard {
   source: "local" | "bitrix";
   title: string;
   description: string;
-  status: "new" | "in_progress" | "review" | "done";
+  status: "new" | "in_progress" | "paused" | "cancelled" | "done" | "review";
   priority: "low" | "normal" | "high";
   assignee_id: number | null;
   assignee: string;
   deadline: string | null;
   overdue: boolean;
   editable: boolean;
+  process: string;
+  kpi_impact: boolean;
+  kpi_note: string;
+  tag_source: string;
+  comments_count: number;
 }
 
 export interface BoardColumn {

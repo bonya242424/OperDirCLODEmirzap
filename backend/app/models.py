@@ -150,6 +150,17 @@ class BitrixTask(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # родительская задача
     group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # проект/группа в Битрикс24
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    comments_count: Mapped[int] = mapped_column(Integer, default=0)
+    removed: Mapped[bool] = mapped_column(Boolean, default=False)  # задачи больше нет у выбранных сотрудников
+    # Теги: за какой процесс отвечает задача и может ли она влиять на показатели компании
+    process: Mapped[str] = mapped_column(String(80), default="")
+    kpi_impact: Mapped[bool] = mapped_column(Boolean, default=False)
+    kpi_note: Mapped[str] = mapped_column(Text, default="")
+    tag_source: Mapped[str] = mapped_column(String(8), default="")  # "" не размечена | ai | owner
+    tagged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TaskMessage(Base):

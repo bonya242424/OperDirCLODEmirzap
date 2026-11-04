@@ -261,13 +261,19 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .kanban-bar p { margin: 2px 0 0; }
 .kanban-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .kanban-tools input { width: 180px; }
-.kanban-cols { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(172px, 1fr)); gap: 12px; padding-bottom: 16px; overflow-x: auto; }
+.kanban-cols { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(5, minmax(190px, 1fr)); gap: 12px; padding-bottom: 16px; overflow-x: auto; }
 .kcol { display: flex; flex-direction: column; min-height: 0; background: var(--panel-2); border-radius: 16px; padding: 10px; border: 2px solid transparent; transition: border-color 0.1s, background 0.1s; }
 .kcol.drop { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 6%, var(--panel-2)); }
 .kcol header { display: flex; align-items: center; gap: 8px; padding: 2px 4px 10px; }
 .kdot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
 .kdot.in_progress { background: var(--accent); }
-.kdot.review { background: var(--warn); }
+.kdot.paused { background: var(--warn); }
+.kdot.cancelled { background: var(--bad); }
+.kcheck { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; white-space: nowrap; }
+.kmeta { flex-wrap: wrap; }
+.tdtags { display: grid; gap: 6px; margin: 10px 0; padding: 10px; border: 1px solid var(--border, rgba(128,128,128,.25)); border-radius: 10px; }
+.tdtags label { display: grid; gap: 3px; font-size: 12.5px; }
+.tcomm { border-left: 3px solid var(--accent); padding: 4px 10px; margin: 6px 0; font-size: 13px; white-space: pre-wrap; }
 .kdot.done { background: var(--good); }
 .kcards { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
 .kcard { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 11px; display: grid; gap: 8px; cursor: grab; box-shadow: 0 1px 2px rgba(20, 30, 60, 0.06); transition: box-shadow 0.12s, transform 0.12s; }
