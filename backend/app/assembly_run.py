@@ -441,7 +441,7 @@ def _tool(db, key: int, run: AssemblyRun, period: str, name: str, a: dict, saved
         nums = [str(x) for x in (a.get("numbers") or [])] or numbers_in(m.clipboard(key))
         if not nums:
             return "Номера не найдены: выдели список в журнале (Control+a), скопируй (Control+c) и вызови снова, либо передай numbers"
-        return check_saved(db, "", nums)
+        return check_saved(db, "", nums, journal_rows(m.clipboard(key)) if not a.get("numbers") else None)
     if name in ("save_document", "save_document_text"):
         supplier, label = str(a.get("supplier", "")).strip(), str(a.get("label", "")).strip()
         if not supplier or not label:
@@ -499,7 +499,19 @@ def numbers_in(text: str) -> list[str]:
     return out
 
 
-def check_saved(db, supplier_hint: str, numbers: list[str]) -> str:
+def journal_rows(text: str) -> list[tuple[int, str, str]]:
+    """Строки скопированного журнала: (номер строки с 1, дата и время, номер документа без нулей). Колонка «Номер» на экране обрезана, поэтому берём её из буфера."""
+    rows: list[tuple[int, str, str]] = []
+    for line in text.replace("\r", "").split("\n"):
+        nums = numbers_in(line)
+        if not nums:
+            continue
+        d = re.search(r"\d{2}\.\d{2}\.\d{4}(?: \d{1,2}:\d{2}(?::\d{2})?)?", line)
+        rows.append((len(rows) + 1, d.group(0) if d else "", nums[0]))
+    return rows
+
+
+def check_saved(db, supplier_hint: str, numbers: list[str], rows: list[tuple[int, str, str]] | None = None) -> str:
     have: dict[str, str] = {}
     for fo in db.scalars(select(Folder).where(Folder.name.like("Сборка 1С — %"))):
         for f in db.scalars(select(StoredFile).where(StoredFile.folder_id == fo.id)):
@@ -509,8 +521,13 @@ def check_saved(db, supplier_hint: str, numbers: list[str]) -> str:
     nums = [str(x).strip().lstrip("0") for x in numbers if str(x).strip().lstrip("0")]
     saved_n = [n for n in nums if n in have]
     todo = [n for n in nums if n not in have]
-    return (f"Всего номеров: {len(nums)}. Уже сохранены (НЕ открывать): {', '.join(saved_n) or 'нет'}. "
-            f"Нужно собрать, в порядке списка: {', '.join(todo) or 'ничего, всё уже сохранено'}.")
+    out = (f"Всего номеров: {len(nums)}. Уже сохранены (НЕ открывать): {', '.join(saved_n) or 'нет'}. "
+           f"Нужно собрать, в порядке списка: {', '.join(todo) or 'ничего, всё уже сохранено'}.")
+    if rows and todo:
+        pos = [f"строка {i} ({d or 'дата не видна'}): №{n}" for i, d, n in rows if n in todo][:40]
+        out += (" Где они в журнале (строки считаются сверху, колонка «Номер» на экране обрезана, ориентируйся по дате и времени): " + "; ".join(pos) +
+                ". Чтобы открыть строку N: Control+Home, затем ArrowDown (N−1) раз, сверь дату и время выделенной строки на экране, затем Enter.")
+    return out
 
 
 def _progress(saved: list[dict]) -> str:

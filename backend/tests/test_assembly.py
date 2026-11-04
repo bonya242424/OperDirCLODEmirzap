@@ -377,6 +377,7 @@ def test_check_saved_and_saved_list(client, owner, term, monkeypatch):
     assert run["status"] == "done"
     results = str(script.seen[-1][0])
     assert "Уже сохранены (НЕ открывать): 6846" in results and "Нужно собрать, в порядке списка: 6871, 6891" in results
+    assert "строка 2 (15.10.2026 16:10:50): №6871" in results and "строка 3 (16.10.2026 0:20:00): №6891" in results
     saved = client.get("/api/assembly/saved", headers=owner).json()
     assert saved and saved[0]["supplier"] == "Армтек" and len(saved[0]["files"]) == 1
     assert client.get("/api/assembly/saved").status_code == 401
