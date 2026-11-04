@@ -57,6 +57,7 @@ function LiveScreen({ conn, running, log }: { conn: number; running: boolean; lo
 
 /** Запуск агента, который собирает документы «Сборка» из 1С через терминал и сохраняет их в «Файлы». */
 export default function AssemblyRunBox({ from, to, onOpenReturn }: { from: string; to: string; onOpenReturn?: (supplierId: number | null) => void }) {
+  const [stored, setStored] = useState<{ supplier: string; folder_id: number; files: { id: number; name: string }[] }[]>([]);
   const [viewing, setViewing] = useState<{ id: number; name: string } | null>(null);
   const [targets, setTargets] = useState<Targets | null>(null);
   const [conn, setConn] = useState(0);
@@ -77,6 +78,16 @@ export default function AssemblyRunBox({ from, to, onOpenReturn }: { from: strin
       .then((r) => r[0] && r[0].status === "running" && setRun(r[0]))
       .catch(() => undefined);
   }, []);
+
+  const loadStored = useCallback(() => {
+    api<typeof stored>("/assembly/saved").then(setStored).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    loadStored();
+    if (run?.status !== "running") return;
+    const t = window.setInterval(loadStored, 5000);
+    return () => window.clearInterval(t);
+  }, [loadStored, run?.status, run?.saved.length]);
 
   const loadHistory = useCallback(() => {
     api<Run[]>("/assembly/runs").then(setHistory).catch(() => undefined);
@@ -177,6 +188,22 @@ export default function AssemblyRunBox({ from, to, onOpenReturn }: { from: strin
           <LiveScreen conn={run.connection_id ?? conn} running={running} log={run.log ?? []} />
           {run.log && run.log.length > 0 && <pre className="remote-log">{run.log.slice(-40).join("\n")}</pre>}
         </div>
+      )}
+      {stored.length > 0 && (
+        <details className="assembly-history" open>
+          <summary>Сохранено в «Файлах» ({stored.reduce((n, x) => n + x.files.length, 0)})</summary>
+          {stored.map((g) => (
+            <div key={g.folder_id} className="assembly-history-item">
+              <strong>{g.supplier}</strong> <span className="muted small">{g.files.length} шт.</span>
+              <ul>
+                {g.files.slice(0, 15).map((f) => (
+                  <li key={f.id}><button className="link" onClick={() => setViewing({ id: f.id, name: f.name })}>{f.name}</button></li>
+                ))}
+              </ul>
+              {g.files.length > 15 && <span className="muted small">и ещё {g.files.length - 15}: в разделе «Файлы», папка «Сборка 1С — {g.supplier}»</span>}
+            </div>
+          ))}
+        </details>
       )}
       {history.length > 0 && (
         <details className="assembly-history">

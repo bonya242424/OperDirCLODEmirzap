@@ -90,6 +90,19 @@ def stop(run_id: int, db: Session = Depends(get_db), me: User = Depends(current_
     return _out(r, True, db)
 
 
+@router.get("/saved")
+def saved_files(db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Всё, что агент сохранил в «Файлы» за все запуски: список не пропадает после перезапуска сервера."""
+    from ..models import Folder, StoredFile
+
+    _owner(me)
+    out = []
+    for fo in db.scalars(select(Folder).where(Folder.name.like("Сборка 1С — %")).order_by(Folder.name)):
+        files = db.scalars(select(StoredFile).where(StoredFile.folder_id == fo.id).order_by(StoredFile.id.desc()).limit(300)).all()
+        out.append({"supplier": fo.name.removeprefix("Сборка 1С — "), "folder_id": fo.id, "files": [{"id": f.id, "name": f.name} for f in files]})
+    return out
+
+
 class AnswerIn(BaseModel):
     answer: str
 

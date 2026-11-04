@@ -355,3 +355,28 @@ def test_progress_hint_lists_processed_numbers():
 
     text = _progress([{"name": "Сборка №000006756 от 05.10.2026, сохранено 2026-11-04 12-34.csv"}, {"name": "Сборка 000006757, сохранено x.csv"}])
     assert "6756, 6757" in text and "СЛЕДУЮЩУЮ" in text and _progress([]).count("нет") == 1
+
+
+def test_check_saved_and_saved_list(client, owner, term, monkeypatch):
+    from app.assembly_run import numbers_in
+
+    journal = "10.10.2026 0:41:01\t000006846\tИркутская\tАрмтек\n15.10.2026 16:10:50\t000006871\tСПб\tАрмтек\n16.10.2026 0:20:00\t000006891\tИркутская\tАрмтек"
+    assert numbers_in(journal) == ["6846", "6871", "6891"]
+    cid, _ = term
+    monkeypatch.setattr(rdp_manager, "clipboard", lambda key: journal)
+    script = Script(
+        call("save_document", supplier="Армтек", label="№000006846 от 10.10.2026"),
+        call("check_saved"),
+        call("remember_1c", topic="Тема записи", how="Как это сделать по шагам"),
+        call("finish", summary="ok"),
+    )
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    monkeypatch.setattr("app.assembly_run.time.sleep", lambda s: None)
+    r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
+    run = _wait(client, owner, r.json()["id"])
+    assert run["status"] == "done"
+    results = str(script.seen[-1][0])
+    assert "Уже сохранены (НЕ открывать): 6846" in results and "Нужно собрать, в порядке списка: 6871, 6891" in results
+    saved = client.get("/api/assembly/saved", headers=owner).json()
+    assert saved and saved[0]["supplier"] == "Армтек" and len(saved[0]["files"]) == 1
+    assert client.get("/api/assembly/saved").status_code == 401

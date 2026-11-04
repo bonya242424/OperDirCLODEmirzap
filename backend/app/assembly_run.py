@@ -55,7 +55,7 @@ SYSTEM = (
     "ВАЖНО: никогда не отвечай по памяти и по тексту инструкций, не придумывай документы и номера. Всё, что ты сообщаешь, должно быть видно на экране 1С "
     "или в буфере обмена. Сначала открой журнал «Документы Сборка», отфильтруй его по нужному контрагенту и по периоду (поле отбора или Control+f), "
     "затем получи полный список: Control+a в списке, Control+c и rdp_clipboard (можно запросить больше текста через chars). Это и есть перечень документов: "
-    "бери из него ВСЕ строки периода, а не одну. Каждый документ открывай (Enter на строке или двойной клик). Печатная форма с товарами находится ВНУТРИ каждого документа «Сборка», а не в списке: открыв документ, найди в нём печатную форму (вкладка, кнопка или пункт меню «Печать» внутри документа, на экран, не на принтер) и забирай данные ТОЛЬКО оттуда: кликни в неё, Control+a, Control+c, проверь rdp_clipboard, что там товары. Список документов нужен лишь для перечня номеров и дат, товары из него не копируй. Печатать на принтер нельзя. "
+    "бери из него ВСЕ строки периода, а не одну. СНАЧАЛА проверь по базе: вызови check_saved (она разберёт скопированный журнал) и открывай ТОЛЬКО документы из списка «Нужно собрать», уже сохранённые не открывай. Каждый документ открывай (Enter на строке или двойной клик). Печатная форма с товарами находится ВНУТРИ каждого документа «Сборка», а не в списке: открыв документ, найди в нём печатную форму (вкладка, кнопка или пункт меню «Печать» внутри документа, на экран, не на принтер) и забирай данные ТОЛЬКО оттуда: кликни в неё, Control+a, Control+c, проверь rdp_clipboard, что там товары. Список документов нужен лишь для перечня номеров и дат, товары из него не копируй. Печатать на принтер нельзя. "
     "Сохраняй, затем закрой печатную форму и документ (Escape, на вопрос о сохранении «Нет»), затем ArrowDown к следующему. Если дат в пожелании нет, период бери из поля «Период сборки»; "
     "если пожелание и период расходятся, работай по периоду и скажи об этом в итоге. Нельзя завершать работу, пока не обработаны все документы или не названа причина. ЕСЛИ ЧТО-ТО ПОШЛО НЕ ТАК (открылось не то окно или документ, не та форма, ошибка 1С, диалог, копирование не сработало): не останавливайся и не начинай заново. Нажми Escape (при необходимости несколько раз; на вопрос о сохранении «Нет»), "
     "сделай rdp_view, вернись в журнал «Документы Сборка» и продолжи с того же документа, на котором остановился. Если один документ не получается после двух попыток, "
@@ -77,6 +77,7 @@ TOOLS = [
     {"name": "rdp_key", "description": "Нажать клавишу: " + ", ".join(sorted(AGENT_KEYS)) + "; сочетания: " + ", ".join(sorted(AGENT_COMBOS)) + ".", "input_schema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
     {"name": "rdp_scroll", "description": "Прокрутка колесом (пиксели, вниз положительные).", "input_schema": {"type": "object", "properties": {"dy": {"type": "number"}}, "required": ["dy"]}},
     {"name": "rdp_clipboard", "description": "Показать начало текста из буфера обмена (после Control+c в 1С) и его размер.", "input_schema": {"type": "object", "properties": {"chars": {"type": "number", "description": "сколько символов показать (по умолчанию 1500, максимум 8000)"}}}},
+    {"name": "check_saved", "description": "ПЕРЕД открытием документов: проверить по базе, какие номера уже сохранены. Без аргументов разбирает номера из буфера обмена (после Control+a, Control+c в журнале «Документы Сборка»), можно передать numbers. Возвращает, какие документы уже сохранены (их не открывать) и какие ещё нужно собрать, в порядке списка.", "input_schema": {"type": "object", "properties": {"numbers": {"type": "array", "items": {"type": "string"}}}}},
     {"name": "save_document", "description": "Сохранить текст из буфера обмена в «Файлы» в папку поставщика.", "input_schema": {"type": "object", "properties": {"supplier": {"type": "string"}, "label": {"type": "string", "description": "номер и дата документа"}}, "required": ["supplier", "label"]}},
     {"name": "save_document_text", "description": "Сохранить текст, который ты переписал сам (только если копирование невозможно).", "input_schema": {"type": "object", "properties": {"supplier": {"type": "string"}, "label": {"type": "string"}, "text": {"type": "string"}}, "required": ["supplier", "label", "text"]}},
     {"name": "ask_owner", "description": "Задать вопрос владельцу и дождаться ответа (до часа). Используй, когда не знаешь, куда нажимать, что выбрать или что значит экран. Опиши, что видишь, и что предполагаешь. Ответы сохраняются в базу знаний.", "input_schema": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]}},
@@ -436,6 +437,11 @@ def _tool(db, key: int, run: AssemblyRun, period: str, name: str, a: dict, saved
         text = m.clipboard(key)
         n = max(200, min(int(a.get("chars") or 1500), 8000))
         return f"В буфере {len(text)} символов, {text.count(chr(10)) + 1} строк. Начало:\n{text[:n]}"
+    if name == "check_saved":
+        nums = [str(x) for x in (a.get("numbers") or [])] or numbers_in(m.clipboard(key))
+        if not nums:
+            return "Номера не найдены: выдели список в журнале (Control+a), скопируй (Control+c) и вызови снова, либо передай numbers"
+        return check_saved(db, "", nums)
     if name in ("save_document", "save_document_text"):
         supplier, label = str(a.get("supplier", "")).strip(), str(a.get("label", "")).strip()
         if not supplier or not label:
@@ -481,6 +487,30 @@ def _make_batch(db, run: AssemblyRun, f: StoredFile, supplier: str, text: str, s
         return None, str(exc)
     say(f"Создан документ возврата {b.number} у поставщика {b.supplier}")
     return b.id, ""
+
+
+def numbers_in(text: str) -> list[str]:
+    """Номера документов из скопированного журнала: числа из 5-9 цифр, не части дат и времени; без нулей и повторов, в порядке списка."""
+    out: list[str] = []
+    for m in re.finditer(r"(?<![\d.:,-])\d{5,9}(?![\d.:,-])", text):
+        n = m.group(0).lstrip("0")
+        if n and n not in out:
+            out.append(n)
+    return out
+
+
+def check_saved(db, supplier_hint: str, numbers: list[str]) -> str:
+    have: dict[str, str] = {}
+    for fo in db.scalars(select(Folder).where(Folder.name.like("Сборка 1С — %"))):
+        for f in db.scalars(select(StoredFile).where(StoredFile.folder_id == fo.id)):
+            n = doc_number(f.name.split(", сохранено")[0])
+            if n:
+                have[n] = fo.name.removeprefix("Сборка 1С — ")
+    nums = [str(x).strip().lstrip("0") for x in numbers if str(x).strip().lstrip("0")]
+    saved_n = [n for n in nums if n in have]
+    todo = [n for n in nums if n not in have]
+    return (f"Всего номеров: {len(nums)}. Уже сохранены (НЕ открывать): {', '.join(saved_n) or 'нет'}. "
+            f"Нужно собрать, в порядке списка: {', '.join(todo) or 'ничего, всё уже сохранено'}.")
 
 
 def _progress(saved: list[dict]) -> str:
