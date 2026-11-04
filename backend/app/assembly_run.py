@@ -166,7 +166,9 @@ QA_TITLE = onec_memory.QA_TITLE
 
 def add_to_knowledge(db, q: AssemblyQuestion) -> None:
     """Вопрос и ответ владельца записываются в «Память агентов 1С» (раздел «Инструкции 1С»): агенты читают её перед работой и не спрашивают второй раз."""
-    onec_memory.remember(db, "Вопрос агента: " + q.question, "Ответ владельца: " + (q.answer or "").strip(), "ответ владельца", topic_limit=400, how_limit=1500)
+    # двоеточие в теме нельзя: запись находится по тексту до первого двоеточия, иначе все вопросы «слились» бы в одну запись
+    topic = "Вопрос агента " + q.question.replace(":", " -")
+    onec_memory.remember(db, topic, "Ответ владельца: " + (q.answer or "").strip(), "ответ владельца", topic_limit=400, how_limit=1500)
 
 
 def instructions_text(db) -> str:
@@ -543,10 +545,20 @@ def _progress(saved: list[dict]) -> str:
     )
 
 
+_ASKED_AFTER_MEMORY: set[tuple[int, frozenset]] = set()
+
+
 def _ask_owner(db, run: AssemblyRun, text: str, say) -> str:
     """Ставит вопрос и ждёт ответа в окне запуска. Остановка владельцем прерывает ожидание."""
     if not text:
         return "Ошибка: сформулируй вопрос"
+    known = onec_memory.find_answers(db, text)
+    ask_key = (run.id, onec_memory.words_key(text))
+    if known and ask_key not in _ASKED_AFTER_MEMORY:
+        _ASKED_AFTER_MEMORY.add(ask_key)  # второй раз тот же вопрос пропускаем к владельцу: значит, ответ из памяти не подошёл
+        say("Ответ на похожий вопрос уже есть в памяти: владельца не беспокою")
+        return ("В памяти уже есть ответ владельца на похожий вопрос, владельцу не пишу:\n" + "\n".join(known) +
+                "\nДействуй по нему. Если он действительно не подходит, повтори вопрос и объясни, чего именно не хватает.")
     q = AssemblyQuestion(run_id=run.id, question=text)
     db.add(q)
     db.commit()

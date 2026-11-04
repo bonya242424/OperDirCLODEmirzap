@@ -381,3 +381,23 @@ def test_check_saved_and_saved_list(client, owner, term, monkeypatch):
     saved = client.get("/api/assembly/saved", headers=owner).json()
     assert saved and saved[0]["supplier"] == "Армтек" and len(saved[0]["files"]) == 1
     assert client.get("/api/assembly/saved").status_code == 401
+
+
+def test_memory_keeps_every_answer_and_agent_is_not_asked_twice(client, owner, term, monkeypatch):
+    from app import onec_memory
+    from app.assembly_run import add_to_knowledge
+    from app.models import AssemblyQuestion, InstrSection
+
+    cid, _ = term
+    with SessionLocal() as db:
+        run = AssemblyRun(connection_id=cid, date_from=__import__("datetime").date(2026, 10, 1), date_to=__import__("datetime").date(2026, 10, 31), status="done", created_by=1)
+        db.add(run)
+        db.flush()
+        for q, a in (("Где находится кнопка Печать: в меню или на панели?", "На панели документа"), ("Как выбрать контрагента Армтек в отборе?", "Флажок Контрагент и вставить Армтек")):
+            add_to_knowledge(db, AssemblyQuestion(run_id=run.id, question=q, answer=a))
+        db.commit()
+        sec = db.scalar(select(InstrSection).where(InstrSection.title.like("Память агентов 1С%")))
+        assert "На панели документа" in sec.notes and "Флажок Контрагент" in sec.notes  # обе записи, а не последняя
+        found = onec_memory.find_answers(db, "Где кнопка Печать: в меню или на панели документа?")
+        assert found and "На панели документа" in found[0]
+        assert onec_memory.find_answers(db, "Совсем другой вопрос про склады") == []

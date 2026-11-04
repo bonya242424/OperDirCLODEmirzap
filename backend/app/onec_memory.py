@@ -85,3 +85,31 @@ def knowledge_text(db, limit: int = 15000) -> str:
         rest.append(f"### {sec.title}\nОписание владельца: {sec.notes or 'нет'}\n" + ("\n".join(vids) if vids else ""))
     head = "\n\n".join(p for p in (memory[:6000], qa[-4000:]) if p)
     return (head + "\n\n" + "\n\n".join(rest))[:limit].strip()
+
+
+def words_key(text: str) -> frozenset:
+    """Значимые слова вопроса (4+ букв) для сравнения похожих вопросов."""
+    return frozenset(w for w in re.findall(r"[\wа-яё]{4,}", text.lower()))
+
+
+def find_answers(db, question: str, threshold: float = 0.4, limit: int = 3) -> list[str]:
+    """Прежние вопросы владельцу, похожие на новый (по общим словам), с его ответами: из памяти и из старого раздела «Уточнения»."""
+    want = words_key(question)
+    if len(want) < 3:
+        return []
+    pairs: list[tuple[str, str]] = []
+    for sec in db.scalars(select(InstrSection).where(InstrSection.area == AREA, InstrSection.title.in_([MEMORY_TITLE, QA_TITLE]))):
+        text = sec.notes or ""
+        for ln in text.split("\n"):
+            if ln.startswith("• Вопрос агента ") and ": Ответ владельца:" in ln:
+                q, a = ln[2:].split(": Ответ владельца:", 1)
+                pairs.append((q.removeprefix("Вопрос агента "), a))
+        for m in re.finditer(r"Вопрос: (.+?)\nОтвет владельца: (.+?)(?=\n\[|\Z)", text, re.S):
+            pairs.append((m.group(1), m.group(2)))
+    scored = []
+    for q, a in pairs:
+        got = words_key(q)
+        score = len(want & got) / max(1, len(want | got))
+        if score >= threshold:
+            scored.append((score, f"Вопрос: {q.strip()[:300]} → Ответ владельца: {a.strip()[:700]}"))
+    return [x for _, x in sorted(scored, reverse=True)[:limit]]
