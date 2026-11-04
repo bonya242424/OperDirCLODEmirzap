@@ -316,3 +316,15 @@ def test_print_form_without_goods_is_explained():
 
     with pytest.raises(ValueError, match="шапка"):
         parse_print_form("Номер\tДата\n7\t01.11.2026\n")
+
+
+def test_assembly_forces_question_when_stuck(client, owner, term, monkeypatch):
+    cid, _ = term
+    script = Script(*[call("rdp_key", key="Control+c") for _ in range(12)], call("finish", summary="ok"))
+    monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
+    monkeypatch.setattr("app.assembly_run.time.sleep", lambda s: None)
+    r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
+    run = _wait(client, owner, r.json()["id"])
+    assert any("спросить владельца" in x for x in run["log"])
+    last_user = script.seen[-1][0][-1]["content"]
+    assert any(isinstance(b, dict) and b.get("type") == "text" and "ask_owner" in b["text"] for b in last_user)

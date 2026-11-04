@@ -272,6 +272,7 @@ def run_assembly(run_id: int) -> None:
         early = 0
         remaining: int | None = None
         unfinished = False  # запуск оборвался не по воле агента: продолжить новым запуском
+        idle = 0  # действий подряд без сохранения документа и без вопроса владельцу
         say("Подключено, отправляю задачу модели")
         try:
             for _ in range(MAX_STEPS):
@@ -345,6 +346,13 @@ def run_assembly(run_id: int) -> None:
                         last["content"] = [{"type": "text", "text": str(last["content"]) + ". Экран после действий ниже."}, shot] if isinstance(last["content"], str) else last["content"]
                     except Exception:  # noqa: BLE001
                         pass
+                idle += sum(1 for c in step.calls if c.name in ACTIONS)
+                if any(c.name in ("save_document", "save_document_text", "ask_owner") for c in step.calls):
+                    idle = 0
+                if idle >= 12 and results:
+                    idle = 6
+                    say("Много действий без результата: прошу агента спросить владельца")
+                    results.append({"type": "text", "text": "Ты сделал уже много действий и пока ничего не сохранил. Не нажимай наугад: вызови ask_owner, опиши, что видишь на экране и где не уверен, и дождись ответа владельца."})
                 messages.append({"role": "user", "content": results})
                 _prune(messages)
                 if finished:
