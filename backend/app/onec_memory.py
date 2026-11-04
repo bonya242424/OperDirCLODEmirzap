@@ -45,9 +45,9 @@ def memory_section(db) -> InstrSection:
     return sec
 
 
-def remember(db, topic: str, how: str, who: str = "агент") -> str:
+def remember(db, topic: str, how: str, who: str = "агент", topic_limit: int = 150, how_limit: int = 800) -> str:
     """Добавляет или обновляет запись «• тема: как (дата, кто)». Возвращает текст для модели."""
-    topic, how = " ".join(topic.split())[:150], " ".join(how.split())[:800]
+    topic, how = " ".join(topic.split())[:topic_limit], " ".join(how.split())[:how_limit]
     if len(topic) < 3 or len(how) < 5:
         return "Ошибка: нужны тема и описание, как это сделать"
     sec = memory_section(db)

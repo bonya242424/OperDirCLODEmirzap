@@ -182,7 +182,7 @@ def test_agent_asks_owner_and_answer_goes_to_knowledge(client, owner, term, monk
     run = _wait(client, owner, rid)
     assert run["status"] == "done" and run["qa"][0]["answer"] == "Меню Печать вверху документа"
     with SessionLocal() as db:
-        sec = db.scalar(select(InstrSection).where(InstrSection.title.like("Уточнения агента%")))
+        sec = db.scalar(select(InstrSection).where(InstrSection.title.like("Память агентов 1С%")))
         assert sec and "Где кнопка печатной формы?" in sec.notes and "Меню Печать вверху документа" in sec.notes
         from app.assembly_run import instructions_text
 
