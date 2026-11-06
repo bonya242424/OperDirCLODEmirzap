@@ -179,7 +179,7 @@ def import_url(body: UrlIn, db: Session = Depends(get_db), me: User = Depends(cu
 
 def _summary(db: Session, batch: ReturnBatch) -> dict:
     lines = list(db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch.id).order_by(ReturnLine.id)))
-    by_inv: dict[str, dict] = defaultdict(lambda: {"positions": 0, "qty": 0, "date": "", "status": "pending", "note": ""})
+    by_inv: dict[str, dict] = defaultdict(lambda: {"positions": 0, "qty": 0, "date": "", "status": "pending", "note": "", "items": []})
     by_wh: dict[str, dict] = defaultdict(lambda: {"positions": 0, "qty": 0})
     by_reason: dict[str, int] = defaultdict(int)
     by_status: dict[str, int] = defaultdict(int)
@@ -188,6 +188,7 @@ def _summary(db: Session, batch: ReturnBatch) -> dict:
         i["positions"] += 1
         i["qty"] += ln.qty
         i["date"] = ln.invoice_date
+        i["items"].append({"article": ln.article, "name": ln.name, "brand": ln.brand, "qty": ln.qty})
         if ln.status != "pending":
             i["status"], i["note"] = ln.status, ln.note
         w = by_wh[ln.warehouse or "не указан"]

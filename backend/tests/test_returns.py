@@ -24,6 +24,8 @@ def test_import_sample_summary(client, owner):
     assert len(client.get("/api/returns/batches", headers=owner).json()) == 1
     lines = client.get(f"/api/returns/batches/{s['id']}/lines", headers=owner).json()
     assert lines[0]["article"] == "SLKH073" and lines[0]["status"] == "pending"
+    item = {key: lines[0][key] for key in ("article", "name", "brand", "qty")}
+    assert item in inv[lines[0]["invoice_no"]]["items"]
 
 
 def test_missing_reason_is_reported(client, owner):

@@ -75,7 +75,15 @@ interface Summary {
   source: string;
   positions: number;
   qty: number;
-  invoices: { invoice_no: string; positions: number; qty: number; date: string; status: string; note: string }[];
+  invoices: {
+    invoice_no: string;
+    positions: number;
+    qty: number;
+    date: string;
+    status: string;
+    note: string;
+    items: { article: string; name: string; brand: string; qty: number }[];
+  }[];
   warehouses: { warehouse: string; positions: number; qty: number }[];
   reasons: { reason: string; qty: number }[];
   status: Record<string, number>;
@@ -427,10 +435,16 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
 
             <h4>По счетам: одна заявка на счёт</h4>
             <table className="ag-table">
-              <thead><tr><th>Счёт</th><th>Дата</th><th>Позиций</th><th>Штук</th><th>Проверка на сайте</th></tr></thead>
+              <thead><tr><th>Счёт</th><th>Дата</th><th>Товары</th><th>Позиций</th><th>Штук</th><th>Проверка на сайте</th></tr></thead>
               <tbody>
                 {current.invoices.map((i) => (
-                  <tr key={i.invoice_no}><td>{i.invoice_no}</td><td>{i.date}</td><td>{i.positions}</td><td>{i.qty}</td><td className={`inv-${i.status}`}>{INV_STATUS[i.status] ?? i.status}{i.note && <span className="muted small"> · {i.note}</span>}</td></tr>
+                  <tr key={i.invoice_no}><td>{i.invoice_no}</td><td>{i.date}</td>
+                    <td>{i.items?.map((item, index) => (
+                      <div key={index}>
+                        <b>{item.article}</b> {[item.brand, item.name].filter(Boolean).join(" ")} · {item.qty} шт.
+                      </div>
+                    ))}</td>
+                    <td>{i.positions}</td><td>{i.qty}</td><td className={`inv-${i.status}`}>{INV_STATUS[i.status] ?? i.status}{i.note && <span className="muted small"> · {i.note}</span>}</td></tr>
                 ))}
               </tbody>
             </table>
