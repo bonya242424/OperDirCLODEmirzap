@@ -33,6 +33,7 @@ const EMPTY_SUP: SupplierForm = { id: null, name: "", portal_url: "", contact: "
 
 interface Run {
   id: number;
+  batch_id: number;
   status: "running" | "done" | "failed" | "stopped";
   summary: string;
   has_shot: boolean;
@@ -75,24 +76,31 @@ interface Summary {
   source: string;
   positions: number;
   qty: number;
-  invoices: {
-    invoice_no: string;
-    positions: number;
-    qty: number;
-    date: string;
-    status: string;
-    note: string;
-    items: { article: string; name: string; brand: string; qty: number }[];
-  }[];
+  invoices: { invoice_no: string; positions: number; qty: number; date: string; status: string; note: string }[];
   warehouses: { warehouse: string; positions: number; qty: number }[];
   reasons: { reason: string; qty: number }[];
   status: Record<string, number>;
   problems: string[];
 }
 
+interface ReturnItem {
+  id: number;
+  article: string;
+  name: string;
+  brand: string;
+  qty: number;
+  warehouse: string;
+  invoice_date: string;
+  invoice_no: string;
+  reason: string;
+  status: string;
+  request_no: string;
+  note: string;
+}
+
 const TEMPLATE: Omit<Step, "state">[] = [
   { title: "Открыть «Оформление возврата»", detail: "Вход уже выполнен вами в браузере; агент пароли не вводит" },
-  { title: "Найти счёт по номеру из таблицы", detail: "Ищу по номеру счёта; если период поиска короче даты счёта, расширяю его" },
+  { title: "Найти товар по артикулу", detail: "Сверяю номер и дату счёта по найденной фактуре" },
   { title: "Выставить количество «К возврату»", detail: "Для каждой позиции счёта количество берётся из таблицы" },
   { title: "Заполнить окно возврата", detail: "Причина из таблицы; адрес и контактное лицо сайт подставляет сам; файлы не нужны" },
   { title: "Отправить заявку", detail: "Необратимое действие: заявку нельзя отозвать", needsConfirm: true },
@@ -103,7 +111,11 @@ const TEMPLATE: Omit<Step, "state">[] = [
 /** Агент по возвратам. Таблица и саммари настоящие; шаги работы на сайте пока показаны для примера: запуск на сайте подключим после первой проверки. */
 function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number | null }) {
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
-  const [supSel, setSupSel] = useState<number | null>(focusSupplier);
+  const supplierKey = `operdir_returns_supplier_${me.id}`;
+  const [supSel, setSupSel] = useState<number | null>(() => focusSupplier ?? (Number(sessionStorage.getItem(supplierKey)) || null));
+  useEffect(() => {
+    if (supSel !== null) sessionStorage.setItem(supplierKey, String(supSel));
+  }, [supplierKey, supSel]);
   const [supForm, setSupForm] = useState<SupplierForm | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [allBatches, setBatches] = useState<Summary[] | null>(null);
@@ -171,29 +183,45 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   }
 
   const reset = () => undefined;
-  const [runs, setRuns] = useState<Run[]>([]);
-  const lastRun = runs[0] ?? null;
-  const checking = lastRun?.status === "running";
+  const [runsBySupplier, setRunsBySupplier] = useState<Partial<Record<number, Run[]>>>({});
+  const runs = supSel === null ? undefined : runsBySupplier[supSel];
+  const activeRun = runs?.find((run) => run.status === "running");
+  const lastRun = activeRun ?? runs?.[0] ?? null;
+  const checking = !!activeRun;
+
+  const batchId = current?.id;
+  const [itemResult, setItemResult] = useState<{ batchId: number; rows?: ReturnItem[]; error?: string }>();
+  useEffect(() => {
+    if (batchId === undefined) return;
+    let stale = false;
+    api<ReturnItem[]>(`/returns/batches/${batchId}/lines`)
+      .then((rows) => { if (!stale) setItemResult({ batchId, rows }); })
+      .catch((err) => {
+        if (!stale) setItemResult({ batchId, error: err instanceof Error ? err.message : "Не удалось загрузить товары" });
+      });
+    return () => { stale = true; };
+  }, [batchId, allBatches, lastRun?.id, lastRun?.status]);
 
   const [runsError, setRunsError] = useState("");
   const loadRuns = useCallback(() => {
-    if (supSel === null) return setRuns([]);
+    if (supSel === null) return;
     api<Run[]>(`/returns/suppliers/${supSel}/runs`)
       .then((r) => {
-        setRuns(r);
+        setRunsBySupplier((previous) => ({ ...previous, [supSel]: r }));
         setRunsError("");
       })
       .catch((e) => setRunsError(e instanceof Error ? e.message : "Не удалось загрузить журнал"));
   }, [supSel]);
-  useEffect(loadRuns, [loadRuns]);
+  useEffect(() => {
+    loadRuns();
+    const t = setInterval(loadRuns, 2500);
+    return () => clearInterval(t);
+  }, [loadRuns]);
   useEffect(() => {
     if (!checking) return;
-    const t = setInterval(() => {
-      loadRuns();
-      load();
-    }, 2500);
+    const t = setInterval(load, 2500);
     return () => clearInterval(t);
-  }, [checking, loadRuns, load]);
+  }, [checking, load]);
 
   useEffect(() => {
     if (me.role !== "owner" || !supSel) return;
@@ -239,7 +267,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   }
 
   async function startCheck() {
-    if (!current) return;
+    if (!current || !runs || activeRun) return;
     setError("");
     setRunsError("");
     try {
@@ -251,9 +279,9 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   }
 
   async function stopCheck() {
-    if (!lastRun) return;
+    if (!activeRun) return;
     try {
-      await api(`/returns/runs/${lastRun.id}/stop`, { method: "POST" });
+      await api(`/returns/runs/${activeRun.id}/stop`, { method: "POST" });
       loadRuns();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка");
@@ -414,9 +442,9 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               <div className="ag-actions">
                 <button className="ghost" onClick={() => remove(current)} disabled={running}>Удалить</button>
                 {me.role === "owner" && (checking ? (
-                  <button className="danger" onClick={stopCheck}>Остановить</button>
+                  <button className="danger" onClick={stopCheck}>Остановить{activeRun?.batch_id !== current.id ? " проверку другой сборки" : ""}</button>
                 ) : (
-                  <button className="primary" onClick={startCheck} disabled={!supplier?.has_session} title={supplier?.has_session ? "Агент найдёт счета на сайте и проверит, можно ли вернуть. Ничего не отправляет" : "Сначала войдите в кабинет и сохраните вход"}>
+                  <button className="primary" onClick={startCheck} disabled={!runs || !supplier?.has_session} title={supplier?.has_session ? "Агент найдёт счета на сайте и проверит, можно ли вернуть. Ничего не отправляет" : "Сначала войдите в кабинет и сохраните вход"}>
                     Проверить счета на сайте
                   </button>
                 ))}
@@ -433,21 +461,24 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               <p key={p} className="ag-problem">{p}</p>
             ))}
 
-            <h4>По счетам: одна заявка на счёт</h4>
-            <table className="ag-table">
-              <thead><tr><th>Счёт</th><th>Дата</th><th>Товары</th><th>Позиций</th><th>Штук</th><th>Проверка на сайте</th></tr></thead>
-              <tbody>
-                {current.invoices.map((i) => (
-                  <tr key={i.invoice_no}><td>{i.invoice_no}</td><td>{i.date}</td>
-                    <td>{i.items?.map((item, index) => (
-                      <div key={index}>
-                        <b>{item.article}</b> {[item.brand, item.name].filter(Boolean).join(" ")} · {item.qty} шт.
-                      </div>
-                    ))}</td>
-                    <td>{i.positions}</td><td>{i.qty}</td><td className={`inv-${i.status}`}>{INV_STATUS[i.status] ?? i.status}{i.note && <span className="muted small"> · {i.note}</span>}</td></tr>
-                ))}
-              </tbody>
-            </table>
+            <h4>Товары в сборке</h4>
+            {itemResult?.batchId === current.id && itemResult.error && <p className="error">{itemResult.error}</p>}
+            {itemResult?.batchId === current.id && itemResult.rows ? (
+              <table className="ag-table">
+                <thead><tr><th>Артикул</th><th>Наименование</th><th>Производитель</th><th>К возврату, шт.</th><th>Склад возврата</th><th>Дата счёта</th><th>Номер счёта</th><th>Причина возврата</th><th>Проверка на сайте</th><th>Номер заявки</th></tr></thead>
+                <tbody>
+                  {itemResult.rows.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.article}</td><td>{item.name}</td><td>{item.brand}</td>
+                      <td>{item.qty}</td><td>{item.warehouse}</td>
+                      <td>{item.invoice_date}</td><td>{item.invoice_no}</td><td>{item.reason}</td>
+                      <td className={`inv-${item.status}`}>{INV_STATUS[item.status] ?? item.status}{item.note && <span className="muted small"> · {item.note}</span>}</td>
+                      <td>{item.request_no}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : itemResult?.batchId !== current.id && <p className="muted small">Загружаю товары…</p>}
             <p className="muted small">
               Причина: {current.reasons.map((r) => `${r.reason} (${r.qty} шт.)`).join(", ")}. Склады: {current.warehouses.map((w) => `${w.warehouse} ${w.qty}`).join(", ")}.
             </p>
