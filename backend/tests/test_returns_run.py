@@ -209,3 +209,17 @@ def test_repeated_finish_and_step_limit_are_incomplete(client, owner, monkeypatc
     run = _last(client, owner, bid)
     assert run["status"] == "failed"
     assert "предел шагов" in run["summary"]
+
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://etp.armtek.ru", "обязательно выбери в нём товар с сочетанием артикула и бренда"),
+    ("https://itrade.forum-auto.ru", "ищи в разделе возвратов по артикулу товара из сборки"),
+])
+def test_supplier_search_rules_are_system_instructions(client, owner, monkeypatch, no_browser, url, expected):
+    bid = _batch(client, owner, url)
+    script = Script(call("finish", reason="blocked", summary="Тест"))
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    assert expected in script.systems[0]
+    assert "Номер счёта или УПД не вводи в поле поиска товара" in script.systems[0]
