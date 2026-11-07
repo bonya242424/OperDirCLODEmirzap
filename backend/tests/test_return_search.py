@@ -35,12 +35,14 @@ def test_armtek_search_logs_actual_input_and_needs_fallback_before_not_found(cli
     returns_run.manager.search_article = search
     script = Script(
         call("record_item_result", line_id=lid, status="not_found", note="Нет товара"),
+        call("armtek_search_article", line_id=lid, control="1-1", variant=1),
         call("armtek_search_article", line_id=lid, control="1-1", variant=0),
         call("finish", reason="blocked", summary="Тест"),
     )
     monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
     assert inputs == ["AR113"]
+    assert "Сначала выполните полный поиск" in "\n".join(_last(client, owner, bid)["log"])
     logs = "\n".join(_last(client, owner, bid)["log"])
     assert "Не все варианты" in logs and "в поле артикула «AR113»" in logs
     assert "Подсказки Армтека: AR113 AREOL" in logs
