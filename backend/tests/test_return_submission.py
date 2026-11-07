@@ -207,3 +207,103 @@ def test_supported_vendor_domains():
     assert supplier_kind("https://itrade.forum-auto.ru") == "forum"
     assert supplier_kind("https://forum-auto.ru.evil.example") is None
     assert supplier_kind("http://itrade.forum-auto.ru") is None
+
+
+def test_unknown_submission_is_parked_and_next_item_continues(client, owner, monkeypatch):
+    bid, line_id, browser, _ = setup_submission(client, owner, monkeypatch)
+    visits = []
+    browser.wait_response = lambda *args: None
+    with SessionLocal() as db:
+        row = db.query(ReturnLine).filter(ReturnLine.batch_id == bid, ReturnLine.id != line_id).first()
+        next_id, article, brand, qty = row.id, row.article, row.brand, row.qty
+
+    def goto(*args):
+        visits.append(args[-1])
+        browser.preview = {**browser.preview, "text": f"Создание нового возврата {article} {brand}", "quantities": [qty]}
+
+    def send(*args):
+        browser.clicks += 1
+        if browser.clicks == 2:
+            browser.text = "Заявка 987654322 отправлена"
+
+    browser.navigate, browser.send_return = goto, send
+    script = Script(
+        call("submit_return", line_ids=[line_id], x=10, y=10),
+        call("browser_wait"),
+        call("finish", reason="blocked", summary="Нет номера заявки, результат требует сверки"),
+        call("submit_return", line_ids=[next_id], x=10, y=10),
+        call("record_submission", request_no="987654322"),
+        call("finish", reason="blocked", summary="Сессия истекла"),
+    )
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/submit-run", headers=owner, json={"confirmed": True})
+    assert not script.steps and browser.clicks == 2
+    assert visits == ["https://itrade.forum-auto.ru"]
+    with SessionLocal() as db:
+        assert db.get(ReturnLine, line_id).status == "uncertain"
+        assert db.get(ReturnLine, next_id).status == "submitted"
+        assert db.get(ReturnLine, next_id).request_no == "987654322"
+        run = db.query(ReturnRun).filter_by(batch_id=bid).first()
+        from app.return_submission import read_approval
+        approval = read_approval(run)
+        assert "attempt" not in approval
+        assert approval["unresolved_attempts"][0]["ids"] == [line_id]
+    assert "Требуют сверки отправки: 1" in _last(client, owner, bid)["summary"]
+    client.post(f"/api/returns/batches/{bid}/reset-errors", headers=owner)
+    with SessionLocal() as db:
+        assert db.get(ReturnLine, line_id).status == "uncertain"
+
+
+def test_owner_can_requeue_only_after_history_check_and_audit_is_retained(client, owner, monkeypatch):
+    bid, line_id, browser, _ = setup_submission(client, owner, monkeypatch, fail=True)
+    client.post(f"/api/returns/batches/{bid}/submit-run", headers=owner, json={"confirmed": True})
+    url = f"/api/returns/lines/{line_id}/reconcile"
+    body = {"outcome": "not_sent", "verified": False, "note": "В истории по артикулу и количеству заявки нет"}
+    assert client.post(url, headers=owner, json=body).status_code == 422
+    body["verified"] = True
+    assert client.post(url, headers=owner, json=body).json()["status"] == "pending"
+    with SessionLocal() as db:
+        row = db.get(ReturnLine, line_id)
+        assert row.status == "pending" and not row.request_no
+        run = db.query(ReturnRun).filter_by(batch_id=bid).first()
+        entries = json.loads(run.log)
+        assert entries[0].startswith(APPROVAL_PREFIX)
+        audit = json.loads(entries[-1].split(": ", 1)[1])
+        assert audit["line_id"] == line_id and audit["outcome"] == "not_sent"
+        assert audit["previous_note"] and audit["owner_id"]
+    assert client.post(url, headers=owner, json=body).status_code == 409
+    browser.fail = False
+    script = Script(call("submit_return", line_ids=[line_id], x=10, y=10),
+                    call("record_submission", request_no="987654321"),
+                    call("finish", reason="blocked", summary="Нужен вход"))
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/submit-run", headers=owner, json={"confirmed": True})
+    assert browser.clicks == 2  # одна спорная попытка + одна после явной сверки
+    with SessionLocal() as db:
+        assert db.get(ReturnLine, line_id).status == "submitted"
+
+
+def test_reconciliation_records_found_receipt_and_rejects_active_or_staff(client, owner, monkeypatch):
+    from tests.conftest import login
+    bid, line_id, _, _ = setup_submission(client, owner, monkeypatch, fail=True)
+    client.post(f"/api/returns/batches/{bid}/submit-run", headers=owner, json={"confirmed": True})
+    url = f"/api/returns/lines/{line_id}/reconcile"
+    body = {"outcome": "submitted", "verified": True, "request_no": "R-123", "note": "Найдена заявка с правильными товаром и количеством"}
+    client.post("/api/users", headers=owner, json={"email": "reconcile@test.local", "password": "worker-pass-1234", "full_name": "С"})
+    staff = login(client, "reconcile@test.local", "worker-pass-1234")
+    assert client.post(url, headers=staff, json=body).status_code == 403
+    assert client.post(url, headers=owner, json={**body, "request_no": ""}).status_code == 422
+    with SessionLocal() as db:
+        run = db.query(ReturnRun).filter_by(batch_id=bid).first()
+        run.status = "running"
+        db.commit()
+    assert client.post(url, headers=owner, json=body).status_code == 409
+    with SessionLocal() as db:
+        db.query(ReturnRun).filter_by(batch_id=bid).first().status = "failed"
+        db.commit()
+    assert client.post(url, headers=owner, json=body).json()["status"] == "submitted"
+    assert client.post(url, headers=owner, json={**body, "outcome": "not_sent", "request_no": ""}).status_code == 409
+    client.post(f"/api/returns/batches/{bid}/reset-errors", headers=owner)
+    assert client.delete(f"/api/returns/batches/{bid}", headers=owner).status_code == 409
+    with SessionLocal() as db:
+        assert db.get(ReturnLine, line_id).request_no == "R-123"

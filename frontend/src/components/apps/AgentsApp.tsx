@@ -129,6 +129,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   const [picked, setPicked] = useState<number[]>([]);
   const [queue, setQueue] = useState<{ active: boolean; active_suppliers?: number[]; total: number; pos: number; current: { id: number; number: string } | null; done: { batch_id: number; status: string }[] } | null>(null);
   const [info, setInfo] = useState("");
+  const [reconcile, setReconcile] = useState<{ item: ReturnItem; outcome: "not_sent" | "submitted"; request: string; note: string; verified: boolean } | null>(null);
   const supplier = suppliers?.find((x) => x.id === supSel) ?? null;
   const [dFrom, setDFrom] = useState("");
   const [dTo, setDTo] = useState("");
@@ -308,6 +309,27 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось сбросить ошибки");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveReconciliation(e: FormEvent) {
+    e.preventDefault();
+    if (!reconcile || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/returns/lines/${reconcile.item.id}/reconcile`, { method: "POST", body: {
+        outcome: reconcile.outcome, verified: reconcile.verified,
+        request_no: reconcile.outcome === "submitted" ? reconcile.request.trim() : "", note: reconcile.note.trim(),
+      } });
+      setInfo(reconcile.outcome === "submitted" ? "Номер заявки сохранён. Повторная отправка запрещена." : "Сверка сохранена. Товар вернулся в очередь для нового запуска оформления.");
+      setReconcile(null);
+      load();
+      loadRuns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось сохранить сверку");
     } finally {
       setBusy(false);
     }
@@ -517,7 +539,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                       <td>{item.qty}</td><td>{item.warehouse}</td>
                       <td>{item.invoice_date}</td><td>{item.invoice_no}</td><td>{item.reason}</td>
                       <td className={`inv-${item.status}`}>{INV_STATUS[item.status] ?? item.status}{item.note && <span className="muted small"> · {item.note}</span>}</td>
-                      <td>{item.request_no}</td>
+                      <td>{item.request_no}{me.role === "owner" && item.status === "uncertain" && <button className="ghost" disabled={checking || !!queue?.active || busy} onClick={() => { setError(""); setReconcile({ item, outcome: "not_sent", request: "", note: "", verified: false }); }}>Сверить отправку</button>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -549,6 +571,24 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
 
       {loginOpen && supplier && (
         <BrowserLogin supplierId={supplier.id} name={supplier.name} onClose={() => { setLoginOpen(false); load(); }} />
+      )}
+      {reconcile && (
+        <div className="modal-bg" onPointerDown={() => { if (!busy) setReconcile(null); }}>
+          <form className="modal" onSubmit={saveReconciliation} onPointerDown={(e) => e.stopPropagation()}>
+            <h3>Сверить отправку</h3>
+            <p>{reconcile.item.brand} {reconcile.item.article} · {reconcile.item.qty} шт.</p>
+            <p className="muted small">Откройте историю возвратов поставщика и проверьте, появилась ли заявка после прошлой попытки. Если результат неизвестен, закройте окно: блокировка останется.</p>
+            <label>Результат сверки<select value={reconcile.outcome} onChange={(e) => setReconcile({ ...reconcile, outcome: e.target.value as "not_sent" | "submitted" })}>
+              <option value="not_sent">Заявки нет — вернуть товар в очередь</option>
+              <option value="submitted">Возврат оформлен — сохранить номер</option>
+            </select></label>
+            {reconcile.outcome === "submitted" && <input required maxLength={100} placeholder="Номер заявки в кабинете поставщика" value={reconcile.request} onChange={(e) => setReconcile({ ...reconcile, request: e.target.value })} />}
+            <textarea required minLength={5} maxLength={1000} placeholder="Что проверили в истории и какой результат получили" value={reconcile.note} onChange={(e) => setReconcile({ ...reconcile, note: e.target.value })} />
+            <label><input type="checkbox" required checked={reconcile.verified} onChange={(e) => setReconcile({ ...reconcile, verified: e.target.checked })} />Я проверил историю возвратов по этому товару и количеству</label>
+            {error && <p className="error">{error}</p>}
+            <div className="modal-actions"><button type="button" disabled={busy} onClick={() => setReconcile(null)}>Отмена</button><button type="submit" className="primary" disabled={busy}>Сохранить сверку</button></div>
+          </form>
+        </div>
       )}
       {supForm && (
         <div className="modal-bg" onPointerDown={() => setSupForm(null)}>

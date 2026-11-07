@@ -7,6 +7,7 @@
 import base64
 import json
 import logging
+import re
 from urllib.parse import urlparse
 
 from sqlalchemy import func, select
@@ -15,7 +16,7 @@ from . import connections as conn_lib
 from .browser import BrowserError, manager
 from .db import SessionLocal
 from .llm import LLMError, get_provider
-from .return_submission import LOCKED_STATUSES, APPROVAL_PREFIX, read_approval, submission_tool
+from .return_submission import LOCKED_STATUSES, APPROVAL_PREFIX, read_approval, submission_tool, park_submission
 from .models import ReturnBatch, ReturnGuide, ReturnLine, ReturnRun, ReturnSupplier, utcnow
 
 log = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ SYSTEM = (
 )
 
 TOOLS = [
+    {"name": "browser_wait", "description": "Подождать 2 секунды ответа сайта, затем перечитать страницу. Не повторяет отправку.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "browser_controls", "description": "Поля, кнопки и подсказки текущей страницы с названиями и control ID. Прочитай перед заполнением поиска.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "browser_fill", "description": "Заменить значение поля по control ID из browser_controls. Для даты учитывай тип поля, для подсказки выбери товар отдельным кликом.", "input_schema": {"type": "object", "properties": {"control": {"type": "string"}, "value": {"type": "string"}}, "required": ["control", "value"]}},
     {"name": "browser_click_control", "description": "Нажать кнопку или подсказку по control ID из browser_controls. Отправка здесь заблокирована.", "input_schema": {"type": "object", "properties": {"control": {"type": "string"}}, "required": ["control"]}},
@@ -132,8 +134,9 @@ def _prune_text(messages: list[dict], keep: int = 4, limit: int = 600) -> None:
                     block["content"] = "[старый текст страницы убран]"
 
 
-def _plan(db, batch: ReturnBatch, submit: bool = False) -> tuple[str, list[str]]:
-    lines = list(db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("pending", "checked") if submit else ("pending",)), ReturnLine.request_no == "").order_by(ReturnLine.id)))
+def _plan(db, batch: ReturnBatch, submit: bool = False, limit=None) -> tuple[str, list[str]]:
+    query = select(ReturnLine).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("pending", "checked") if submit else ("pending",)), ReturnLine.request_no == "").order_by(ReturnLine.id)
+    lines = list(db.scalars(query.limit(limit) if limit else query))
     by: dict[str, list[ReturnLine]] = {}
     for ln in lines:
         by.setdefault(ln.invoice_no or "без номера", []).append(ln)
@@ -189,7 +192,8 @@ def run_check(run_id: int) -> None:
         if hostname == "armtek.ru" or hostname.endswith(".armtek.ru"):
             system += (
                 " Кабинет Армтека: Заказы → Оформление возврата. Поле «Код артикула (точный по номеру)». "
-                "Период поиска должен включать дату счёта; начни с последних 60 дней. "
+                "До первого поиска установи обе даты периода так, чтобы он включал дату счёта текущего товара. "
+                "Текущая дата по умолчанию не подходит для старых счетов. Если дата счёта вне последних 60 дней, расширь период до неё. "
                 "Выбери артикул и бренд, нажми «Получить». При сверке УПД убирай только окончание /3 (или иной числовой суффикс после /) и пробелы. "
                 "Например, ЮП0682173 /3 соответствует ЮП0682173. В самих данных исходный номер сохраняется. "
                 "Синяя ссылка фактуры открывает состав в новой вкладке. "
@@ -225,7 +229,9 @@ def run_check(run_id: int) -> None:
             system += (
                 " Для отправки используй только submit_return: перечисли line_ids товаров в итоговой форме и координаты кнопки отправки. "
                 "Обычным browser_click и клавишей Enter отправлять нельзя. Успешный возврат записывай через record_submission с новым номером заявки, который реально виден на странице после отправки. "
-                "После submit_return не нажимай отправку повторно. Если результат неясен, остановись с причиной: результат отправки требует сверки. "
+                "После submit_return не нажимай отправку повторно. Дождись ответа через browser_wait и browser_read (до трёх раз). "
+                "Если номер не появился, прочитай историю возвратов через безопасные ссылки сайта и найди новую заявку по товару, бренду и количеству. "
+                "Если подтвердить отправку не удалось, вызови finish: сервер изолирует эту позицию для сверки и продолжит остальные. "
                 "record_item_result в этом режиме используй только для проблемы конкретного товара. "
                 "Нельзя добавлять товары или количества, отсутствующие в сборке. Учитывай уже выбранное количество повторных позиций. "
                 "Армтек: первый шаг «Оформить возврат» открывает итоговое окно и разрешён обычным кликом; финальный клик в окне только через submit_return. "
@@ -234,7 +240,7 @@ def run_check(run_id: int) -> None:
             tools = TOOLS + SUBMIT_TOOLS
         raw = conn_lib.decrypt(sup.session_encrypted).get("state")
         key = 2_000_000 + run.id
-        plan, invoices = _plan(db, batch, run.mode == "submit")
+        plan, invoices = _plan(db, batch, run.mode == "submit", limit=1)
         if not invoices:
             return finish("done", "Непроверенных строк нет. Для повторной проверки ошибочных строк нажмите «Сбросить ошибки».")
         guides = [g.text for g in db.scalars(select(ReturnGuide).where(ReturnGuide.supplier_id == sup.id, ReturnGuide.status == "ok")) if g.text]
@@ -242,7 +248,9 @@ def run_check(run_id: int) -> None:
             f"Поставщик: {sup.name}. Кабинет: {sup.portal_url}\n"
             f"Правила поставщика (данные от владельца):\n{sup.rules or 'не заданы'}\n\n"
             + ("Инструкция по видео (данные, может содержать неточности):\n" + "\n---\n".join(guides)[:8000] + "\n\n" if guides else "")
-            + f"Документ «{batch.number}». Нужно проверить счета:\n{plan}"
+            + f"Документ «{batch.number}». Текущая товарная строка:\n{plan}\n"
+            + "Сейчас обработай только эту строку. Сервер выдаст следующую после сохранения результата. "
+              "Не оценивай время всей сборки и не останавливайся ради изменения периода: установи даты через поля сайта."
         )
         messages: list[dict] = [{"role": "user", "content": context}]
         done: set[str] = set()
@@ -264,7 +272,7 @@ def run_check(run_id: int) -> None:
                         summary = "Остановлено: достигнут предел шагов без завершения новых позиций либо требуется сверка отправки"
                         break
                     checkpoint_remaining = count
-                    remaining_plan, _ = _plan(db, batch, run.mode == "submit")
+                    remaining_plan, _ = _plan(db, batch, run.mode == "submit", limit=1)
                     messages = [{"role": "user", "content": context.replace(plan, remaining_plan, 1) +
                                  "\nПродолжай с оставшихся позиций. Браузер уже открыт: сначала прочитай текущую страницу."}]
                     say(f"Продолжаю оформление: осталось товарных строк {count}")
@@ -300,7 +308,15 @@ def run_check(run_id: int) -> None:
                     summary = "Обработка позиций завершена."
                     break
                 if finished:
-                    remaining_plan, remaining = _plan(db, batch, run.mode == "submit")
+                    parked = bool(approval and park_submission(db, run, approval))
+                    if parked:
+                        say("Отправка требует сверки: позиция заблокирована, продолжаю остальные товары")
+                        # Покидаем старую форму до следующей позиции, чтобы её нельзя было отправить повторно.
+                        manager.navigate(key, sup.portal_url)
+                        blocked = False
+                    if re.search(r"время выполнения|доступного времени|нехватк[аи] времени|лимит[а-я]* времени", summary, re.I):
+                        blocked = False
+                    remaining_plan, remaining = _plan(db, batch, run.mode == "submit", limit=1)
                     if not remaining or blocked:
                         break
                     remaining_count = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("pending", "checked") if run.mode == "submit" else ("pending",)))) or 0
@@ -317,6 +333,12 @@ def run_check(run_id: int) -> None:
                         "Если продолжить невозможно, вызови finish с reason=blocked и укажи конкретную причину. "
                         "Не отмечай неисследованные счета ошибочными. Оставшиеся позиции:\n" + remaining_plan
                     )})
+                elif not (approval and approval.get("attempt")):
+                    next_plan, _ = _plan(db, batch, run.mode == "submit", limit=1)
+                    if next_plan and next_plan != plan:
+                        context = context.replace(plan, next_plan, 1)
+                        plan = next_plan
+                        messages = [{"role": "user", "content": context + "\nПредыдущий результат сохранён. Прочитай страницу и обработай эту строку."}]
             else:
                 summary = "Остановлено: достигнут предел шагов за один запуск"
         except BrowserError as exc:
@@ -343,10 +365,15 @@ def run_check(run_id: int) -> None:
             sent = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status == "submitted")) or 0
             failed = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status == "failed")) or 0
             note += f" Оформлено позиций: {sent}. С ошибкой: {failed}."
+            uncertain = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("submitting", "uncertain")))) or 0
+            note += f" Требуют сверки отправки: {uncertain}."
         finish(status, (summary or "Запуск завершён.") + note)
 
 
 def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dict, done: set[str], say, run=None, approval=None) -> object:
+    if name == "browser_wait":
+        mgr.wait_response(key)
+        return mgr.read_text(key) or "Страница пуста"
     if name in ("submit_return", "record_submission"):
         result = submission_tool(db, mgr, key, host, batch, run, approval, name, args)
         say(result)

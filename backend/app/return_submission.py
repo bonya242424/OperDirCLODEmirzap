@@ -69,6 +69,23 @@ def normalized(value):
     return re.sub(r"[^\w]", "", str(value).casefold(), flags=re.UNICODE)
 
 
+def park_submission(db, run, approval):
+    """Изолируем неизвестный результат, сохраняя запрет повторной отправки."""
+    attempt = approval.get("attempt")
+    if not attempt:
+        return False
+    for row in db.scalars(select(ReturnLine).where(
+        ReturnLine.batch_id == run.batch_id, ReturnLine.id.in_(attempt["ids"]),
+        ReturnLine.status.in_(("submitting", "uncertain")),
+    )):
+        row.status = "uncertain"
+        row.note = "Отправка требует сверки в истории поставщика. Повторная отправка и очистка заблокированы."
+    approval.setdefault("unresolved_attempts", []).append(approval.pop("attempt"))
+    save_approval(run, approval)
+    db.commit()
+    return True
+
+
 def validate_preview(preview, rows, host):
     if urlparse(preview["url"]).netloc != host:
         raise BrowserError("Форма открыта на другом сайте")
