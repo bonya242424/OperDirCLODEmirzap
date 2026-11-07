@@ -34,6 +34,7 @@ router = APIRouter(prefix="/api/returns", tags=["returns"])
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_LINES = 2000
+VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
 SHEET_RE = re.compile(r"^https://docs\.google\.com/spreadsheets/d/([A-Za-z0-9_-]{20,})")
 
 
@@ -428,7 +429,6 @@ def archive_supplier(supplier_id: int, db: Session = Depends(get_db), _: User = 
         db.commit()
 
 
-    VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
 
 
 def _guide_out(g: ReturnGuide) -> dict:
