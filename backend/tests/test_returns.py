@@ -303,6 +303,8 @@ def test_supplier_check_statuses_and_parallel_activity(client, owner, monkeypatc
     assert statuses() == {first["id"]: "running", second["id"]: "not_started"}
     with SessionLocal() as db:
         db.get(ReturnRun, rid).status = "done"
+        for row in db.query(ReturnLine).filter_by(batch_id=batch["id"]):
+            row.status = "checked"
         db.commit()
     assert statuses()[first["id"]] == "done"
     with SessionLocal() as db:

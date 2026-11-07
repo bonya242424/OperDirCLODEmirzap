@@ -430,7 +430,7 @@ def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
     elif last_run and last_run.status == "failed":
         check_status = "error"
     elif last_run and last_run.status == "done":
-        unresolved_statuses = ("failed", "uncertain", "submitting", "pending", "checked") if last_run.mode == "submit" else ("failed", "uncertain", "submitting")
+        unresolved_statuses = ("failed", "uncertain", "submitting", "pending", "checked") if last_run.mode == "submit" else ("failed", "uncertain", "submitting", "pending")
         has_errors = db.scalar(
             select(ReturnLine.id).where(ReturnLine.batch_id == last_run.batch_id, ReturnLine.status.in_(unresolved_statuses)).limit(1)
         )
