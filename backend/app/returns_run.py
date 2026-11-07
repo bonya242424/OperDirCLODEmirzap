@@ -77,6 +77,7 @@ SYSTEM = (
 )
 
 TOOLS = [
+    {"name": "armtek_find_product", "description": "Найти текущий артикул и бренд во всех загруженных строках открытой фактуры Армтека, включая строки ниже начала страницы. Возвращает полные строки, заголовки и элементы управления без обрезки текста всей фактуры.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}}, "required": ["line_id"]}},
     {"name": "armtek_search_page", "description": "Вернуться к уже открытой вкладке поиска возвратов Армтека после просмотра фактуры. Если вкладки нет, открыть известную страницу /order_return. Возвращает текст и поля поиска; не отправляет заявок.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "armtek_search_article", "description": "Ввести только артикул текущей строки с реальными событиями клавиатуры и получить подсказки. variant=0 — исходный артикул; ответ содержит все варианты, включая пробелы и короткий запрос. После ввода выберите полный артикул и бренд в подсказках.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}, "control": {"type": "string"}, "variant": {"type": "integer", "minimum": 0}}, "required": ["line_id", "control"]}},
     {"name": "forum_available_returns", "description": "Прочитать только таблицу «Создание возвратов» Форума. Возвращает доступные поставки текущего артикула и бренда с количеством и ссылкой «Отказ от товара», отдельно от истории старых заявок.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}}, "required": ["line_id"]}},
@@ -226,6 +227,7 @@ def run_check(run_id: int) -> None:
                 "Если следующий товар есть в уже открытой нужной фактуре, используй её состав без повторного поиска и открытия кабинета. "
                 "Если открыта фактура предыдущего товара с другим УПД, вызови armtek_search_page, введи текущий артикул и открой нужную фактуру. "
                 "Отсутствие товара в чужой фактуре НЕ означает, что товар не найден или недоступен. "
+                "В правильной фактуре используй armtek_find_product: browser_read может обрезать длинную таблицу. Не делай вывод об отсутствии товара только по началу текста страницы. "
                 "Причина оформления — «Отказ клиента (годный товар)». "
                 " Кабинет Армтека: введи артикул товара в поле поиска, дождись выпадающего списка "
                 "и обязательно выбери в нём товар с сочетанием артикула и бренда из сборки. "
@@ -409,7 +411,7 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
         result = mgr.armtek_search_page(key, f"https://{host}/order_return")
         say("Вернулся к вкладке поиска возвратов Армтека")
         return json.dumps(result, ensure_ascii=False)
-    if name in ("armtek_search_article", "forum_available_returns"):
+    if name in ("armtek_search_article", "forum_available_returns", "armtek_find_product"):
         line_id = args.get("line_id")
         if type(line_id) is not int:
             raise BrowserError("Укажите line_id текущего товара")
@@ -418,6 +420,13 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             raise BrowserError("Товар не найден")
         row = validate_item(db, mgr, key, batch, {"line_id": line_id, "article": row.article, "brand": row.brand, "status": "error"},
             submit=bool(run and run.mode == "submit"), line_ids=[item["id"] for item in approval["lines"]] if approval else None)
+        if name == "armtek_find_product":
+            if supplier_kind(f"https://{host}") != "armtek":
+                raise BrowserError("Этот инструмент доступен только Армтеку")
+            guard_armtek_invoice(row, mgr.read_text(key, limit=20000))
+            result = mgr.find_product(key, row.article, row.brand)
+            say(f"Фактура Армтека: найдено строк {len(result['rows'])} для {row.article} · {row.brand}")
+            return json.dumps(result, ensure_ascii=False)
         if name == "armtek_search_article":
             if not (supplier_kind(f"https://{host}") == "armtek"):
                 raise BrowserError("Этот инструмент доступен только Армтеку")

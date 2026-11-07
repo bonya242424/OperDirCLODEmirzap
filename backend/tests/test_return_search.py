@@ -171,3 +171,22 @@ def test_forum_shared_return_link_keeps_all_supply_rows():
     assert [offer["document_key"] for offer in offers] == ["71672138", "69471717", "68642088"]
     assert all(offer["control"] == "1-1" for offer in offers)
     assert offers[1]["product"] == "225070 EAG Хомут"
+
+
+def test_product_lookup_reads_rows_beyond_truncated_page_text():
+    import asyncio
+    from types import SimpleNamespace
+    from app.browser import BrowserManager, _Session
+
+    async def check():
+        async def rows(*args):
+            return [{"text": "AR113 AREOL Масло 2 шт.", "controls": [], "headers": []},
+                    {"text": "AR1132 AREOL другой товар", "controls": [], "headers": []}]
+
+        browser = BrowserManager()
+        browser._sessions[1] = _Session(None, SimpleNamespace(evaluate=rows))
+        result = await browser._find_product(1, "AR113", "AREOL")
+        assert len(result["rows"]) == 1
+        assert result["rows"][0]["text"] == "AR113 AREOL Масло 2 шт."
+
+    asyncio.run(check())

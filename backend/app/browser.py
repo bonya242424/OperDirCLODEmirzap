@@ -327,6 +327,28 @@ class BrowserManager:
     def forum_returns(self, key: int) -> dict:
         return self._run(lambda: self._forum_returns(key))
 
+    def find_product(self, key: int, article: str, brand: str) -> dict:
+        return self._run(lambda: self._find_product(key, article, brand))
+
+    async def _find_product(self, key: int, article: str, brand: str) -> dict:
+        session = self._get(key)
+        session.controls_version = getattr(session, "controls_version", 0) + 1
+        rows = await session.page.evaluate(r"""({article,brand,version}) => {
+            const norm=s=>s.toUpperCase().replace(/[\s./-]+/g,'');
+            let index=0;
+            return Array.from(document.querySelectorAll('tr')).filter(row=>!row.querySelector('tr') && row.getClientRects().length && norm(row.innerText).includes(norm(article)) && norm(row.innerText).includes(norm(brand))).map(row=>({
+                text:row.innerText,
+                headers:Array.from(row.closest('table')?.rows[0]?.cells || []).map(c=>c.innerText.trim()),
+                controls:Array.from(row.querySelectorAll('input,select,button,a')).filter(e=>e.getClientRects().length && !['hidden','password','file'].includes(e.type)).map(e=>{
+                    const control=version+'-'+index++;e.setAttribute('data-operdir-control',control);
+                    return {control,tag:e.tagName,type:e.type || '',label:(e.labels?.[0]?.innerText || e.placeholder || e.title || e.innerText || e.name || '').trim(),value:e.value || '',href:e.href || '',disabled:!!e.disabled,
+                        options:e.tagName==='SELECT'?Array.from(e.options).map(o=>({value:o.value,text:o.text})):undefined};
+                })
+            }));
+        }""", {"article": article, "brand": brand, "version": session.controls_version})
+        from .return_verification import on_page
+        return {"article": article, "brand": brand, "rows": [row for row in rows if on_page(article, row["text"]) and on_page(brand, row["text"])]}
+
     async def _forum_returns(self, key: int) -> dict:
         await self._controls(key)
         raw = await self._get(key).page.evaluate(r"""() => ({

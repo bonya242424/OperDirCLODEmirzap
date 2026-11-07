@@ -56,7 +56,10 @@ def validate_item(db, mgr, key, batch, args, submit=False, line_ids=None):
         raise BrowserError("Артикул или бренд результата не совпадает с товарной строкой. Проверьте текущий товар.")
     status = args.get("status")
     if status in ("ok", "already_returned", "mismatch"):
-        page = mgr.read_text(key, limit=20000)
+        if hasattr(mgr, "find_product"):
+            page = "\n".join(item["text"] for item in mgr.find_product(key, row.article, row.brand)["rows"])
+        else:
+            page = mgr.read_text(key, limit=20000)
         if not on_page(row.article, page) or not on_page(row.brand, page):
             raise BrowserError("На странице не подтверждено сочетание артикула и бренда текущего товара")
     available = args.get("available_qty")
