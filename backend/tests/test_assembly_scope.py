@@ -45,6 +45,21 @@ def test_saved_one_of_three_does_not_complete_inventory(client, owner, term, mon
         assert complete and not left and errors == ["7143"]
 
 
+def test_one_supplier_cannot_confirm_entire_scope(client, owner, term):
+    from app.models import ReturnSupplier
+    cid, _ = term
+    with SessionLocal() as db:
+        db.add_all([ReturnSupplier(name="Армтек"), ReturnSupplier(name="Шате")])
+        db.commit()
+        run = AssemblyRun(connection_id=cid, date_from=date(2026, 11, 6), date_to=date(2026, 11, 6))
+        db.add(run)
+        db.commit()
+        assembly_scope.register(db, run, ["7141"], True, source="000007141\tШате")
+        assert not assembly_scope.progress(db, run)[0]
+        assembly_scope.register(db, run, [], supplier="Армтек")  # явно проверен пустой отбор
+        assert assembly_scope.progress(db, run)[0]
+
+
 def test_plain_text_after_saved_file_is_not_success(client, owner, term, monkeypatch):
     cid, _ = term
     monkeypatch.setattr(rdp_manager, "clipboard", lambda key: PRINT_FORM)

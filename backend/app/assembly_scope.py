@@ -38,10 +38,20 @@ def store(db, run, data):
     db.commit()
 
 
-def register(db, run, numbers, all_suppliers=False):
+def register(db, run, numbers, all_suppliers=False, supplier="", source=""):
     data = scope(db, run)
     data["numbers"] = list(dict.fromkeys(data["numbers"] + [number(n) for n in numbers if number(n)]))
-    data["complete"] = data.get("complete", False) or all_suppliers
+    scanned = set(data.get("scanned_suppliers", []))
+    targets = data.get("suppliers", [])
+    if supplier:
+        matched = next((name for name in targets if name.casefold() == supplier.strip().casefold()), None)
+        if not matched:
+            raise BrowserError("Поставщик не входит в сохранённое задание")
+        scanned.add(matched)
+    if all_suppliers:
+        scanned.update(name for name in targets if name.casefold() in source.casefold())
+    data["scanned_suppliers"] = sorted(scanned)
+    data["complete"] = data.get("complete", False) or bool((all_suppliers or supplier) and set(targets).issubset(scanned))
     store(db, run, data)
 
 
