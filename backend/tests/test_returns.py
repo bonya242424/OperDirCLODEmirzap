@@ -275,3 +275,39 @@ def test_reset_errors_preserves_other_results(client, owner):
         db.add(run)
         db.commit()
     assert client.post(url, headers=owner).status_code == 409
+
+
+def test_supplier_check_statuses_and_parallel_activity(client, owner, monkeypatch):
+    from app.models import ReturnLine, ReturnRun
+    from app.routers import returns
+
+    first = _supplier(client, owner, name="Первый", portal_url="https://example.com").json()
+    second = _supplier(client, owner, name="Второй", portal_url="https://example.org").json()
+    assert first["check_status"] == second["check_status"] == "not_started"
+    batch = client.post(f"/api/returns/import?supplier_id={first['id']}", headers=owner,
+                        files={"file": ("r.csv", SAMPLE.read_bytes(), "text/csv")}).json()
+
+    def statuses():
+        return {s["id"]: s["check_status"] for s in client.get("/api/returns/suppliers", headers=owner).json()}
+
+    with SessionLocal() as db:
+        run = ReturnRun(batch_id=batch["id"], mode="check", status="running")
+        db.add(run)
+        db.commit()
+        rid = run.id
+    assert statuses() == {first["id"]: "running", second["id"]: "not_started"}
+    with SessionLocal() as db:
+        db.get(ReturnRun, rid).status = "done"
+        db.commit()
+    assert statuses()[first["id"]] == "done"
+    with SessionLocal() as db:
+        row = db.query(ReturnLine).filter_by(batch_id=batch["id"]).first()
+        row.status = "failed"
+        db.commit()
+    assert statuses()[first["id"]] == "error"
+    with SessionLocal() as db:
+        db.get(ReturnRun, rid).status = "stopped"
+        db.commit()
+    assert statuses()[first["id"]] == "not_started"
+    monkeypatch.setitem(returns._QUEUES, second["id"], {"active": True})
+    assert statuses()[second["id"]] == "running"
