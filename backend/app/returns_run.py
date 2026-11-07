@@ -269,6 +269,7 @@ def run_check(run_id: int) -> None:
                 "Если нужного сочетания нет, проверь вариант артикула без разделителей, сохраняя проверку бренда."
                 " Для ввода артикула используй armtek_search_article: он запускает подсказки событиями клавиатуры. "
                 "Поле получает только артикул, бренд выбирается отдельной подсказкой. Сначала variant=0, при отсутствии нужного товара используй остальные варианты из ответа. "
+                "Если подсказки не найдены, не нажимай ArrowDown и не кликай наугад по координатам. Прочитай browser_controls; выбирай только видимую подсказку полного артикула и бренда по control. "
                 "Для VAG код 6V08671749B9 может отображаться как 6V0867174 9B9: пробел не меняет товар. "
                 "Укороченный поисковый запрос допустим только для получения подсказок; выбирать можно лишь полный совпадающий артикул и бренд."
             )
@@ -533,15 +534,24 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             variant = args.get("variant", 0)
             if type(variant) is not int or not 0 <= variant < len(variants):
                 return json.dumps({"error": "Неверный номер варианта", "variants": variants}, ensure_ascii=False)
+            prior = json.loads(row.check_evidence or "{}")
+            if variant and (prior.get("search_revision") != "autocomplete-v2" or prior.get("search_run_id") != (run.id if run else None) or variants[0] not in prior.get("searches", [])):
+                raise BrowserError("Сначала выполните полный поиск variant=0 и дождитесь подсказок; сокращённый запрос пока запрещён")
             result = mgr.search_article(key, str(args.get("control", "")), variants[variant])
+            if result["input_value"] != variants[variant]:
+                raise BrowserError(f"В поле введён другой запрос: ожидалось «{variants[variant]}», получено «{result['input_value']}»")
             evidence = json.loads(row.check_evidence or "{}")
-            if evidence.get("search_run_id") != (run.id if run else None):
+            if evidence.get("search_run_id") != (run.id if run else None) or evidence.get("search_revision") != "autocomplete-v2":
                 evidence["searches"] = []
-            evidence.update({"search_run_id": run.id if run else None, "searches": list(dict.fromkeys(evidence.get("searches", []) + [variants[variant]]))})
+            evidence.update({"search_revision": "autocomplete-v2", "search_run_id": run.id if run else None, "searches": list(dict.fromkeys(evidence.get("searches", []) + [variants[variant]]))})
             row.check_evidence = json.dumps(evidence, ensure_ascii=False)
             db.commit()
-            say(f"Армтек: в поле артикула «{result['input_value']}», товар {row.article} · {row.brand}")
-            say("Подсказки Армтека: " + ("; ".join(result.get("suggestions", [])) or "не появились; проверьте страницу или дождитесь ответа"))
+            query_type = "полный артикул" if normalized(variants[variant]) == normalized(row.article) else "сокращённый запрос подсказок"
+            say(f"Армтек: в поле артикула «{result['input_value']}», товар {row.article} · {row.brand}; {query_type}, ожидалось «{variants[variant]}»")
+            field = result.get("field", {})
+            if field:
+                say(f"Поле поиска: name={field.get('name', '')}, id={field.get('id', '')}, maxlength={field.get('max_length', '?')}")
+            say("Подсказки Армтека: " + ("; ".join(result.get("suggestions", [])) or f"не появились за {result.get('waited_ms', 8000) / 1000:g} с при подтверждённом вводе «{result['input_value']}»"))
             return json.dumps({"article": row.article, "brand": row.brand, "variants": variants, **result}, ensure_ascii=False)
         if not (supplier_kind(f"https://{host}") == "forum"):
             raise BrowserError("Этот инструмент доступен только Форуму")

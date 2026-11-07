@@ -275,7 +275,7 @@ class BrowserManager:
         session.controls_version = getattr(session, "controls_version", 0) + 1
         return await session.page.evaluate("""version => {
             const elements = Array.from(document.querySelectorAll(
-                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion'
+                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion,[data-operdir-suggestion]'
             )).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type)).slice(0,150);
             return elements.map((e,index) => {
                 const previous = e.getAttribute('data-operdir-control');
@@ -343,14 +343,53 @@ class BrowserManager:
             if await candidate.count() != 1 or not await valid(candidate):
                 raise BrowserError("Не найдено единственное доступное поле артикула MATNR. Прочитайте browser_controls заново")
             element = candidate
-        await element.fill("")
-        await element.press_sequentially(value, delay=35)
-        await self._get(key).page.wait_for_timeout(900)
+        page = self._get(key).page
+        # Виджеты могут перерисовать/сократить ввод: не считаем такой запрос выполненным.
+        for delay in (35, 100):
+            await element.fill("")
+            await element.press_sequentially(value, delay=delay)
+            await page.wait_for_timeout(250)
+            actual = await element.input_value()
+            if actual == value:
+                break
+        else:
+            raise BrowserError(f"Артикул введён не полностью: ожидалось «{value}», в поле «{actual}». Поиск не подтверждён")
+        suggestions = []
+        waited = 0
+        for _ in range(32):
+            suggestions = await self._article_suggestions(key, value)
+            if suggestions:
+                break
+            await page.wait_for_timeout(250)
+            waited += 250
         actual = await element.input_value()
+        if actual != value:
+            raise BrowserError(f"Поле изменилось при ожидании подсказок: ожидалось «{value}», получено «{actual}»")
+        field = await element.evaluate("e => ({name:e.name || '', id:e.id || '', max_length:e.maxLength, aria_controls:e.getAttribute('aria-controls') || ''})")
         controls = await self._controls(key)
-        suggestions = await self._get(key).page.evaluate("""() => Array.from(document.querySelectorAll('[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion'))
-            .filter(e => e.getClientRects().length).map(e => e.innerText.trim()).filter(Boolean).slice(0,20)""")
-        return {"input_value": actual, "suggestions": suggestions, "controls": controls}
+        return {"field": field, "requested_value": value, "input_value": actual, "input_verified": True,
+                "suggestions": suggestions, "waited_ms": waited, "controls": controls}
+
+    async def _article_suggestions(self, key: int, value: str) -> list[str]:
+        return await self._get(key).page.evaluate(r"""query => {
+            const field=document.activeElement;
+            const visible=e=>!!e.getClientRects().length && getComputedStyle(e).visibility!=='hidden';
+            const norm=s=>(s || '').toUpperCase().replace(/[\s./-]+/g,'');
+            const candidates=new Set(document.querySelectorAll('[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion,.ac_results li,.easy-autocomplete-container li,.autocomplete-items > div,.list-group-item,.k-list-item,.k-item,.ui-autocomplete li'));
+            for(const id of ((field?.getAttribute('aria-controls') || '')+' '+(field?.getAttribute('aria-owns') || '')).split(/\s+/).filter(Boolean)) {
+                const list=document.getElementById(id);
+                if(list) {
+                    const items=list.querySelectorAll('[role=option],li,tr');
+                    for(const item of items.length ? items : list.children) candidates.add(item);
+                }
+            }
+            const rows=Array.from(candidates).filter(e=>visible(e) && norm(e.innerText).includes(norm(query)));
+            const leaves=rows.filter(e=>!rows.some(other=>other!==e && e.contains(other)));
+            return leaves.slice(0,30).map(e=>{
+                e.setAttribute('data-operdir-suggestion','true');
+                return e.innerText.trim();
+            }).filter(Boolean);
+        }""", value)
 
     def forum_returns(self, key: int) -> dict:
         return self._run(lambda: self._forum_returns(key))

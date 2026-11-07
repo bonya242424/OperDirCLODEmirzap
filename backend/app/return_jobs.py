@@ -235,7 +235,7 @@ def seed_recent_jobs(seed_key=SEED_KEY, armtek_inputs=False):
                 last_job = db.scalar(select(ReturnJob).where(ReturnJob.supplier_id == supplier.id).order_by(ReturnJob.id.desc()).limit(1))
                 if supplier_kind(supplier.portal_url) != "armtek" or (last_job and last_job.status == "stopped"):
                     continue
-                if not any("Выберите поле поиска артикула" in entry for run in cohort for entry in json.loads(run.log or "[]")):
+                if not any(any(marker in entry for marker in ("Выберите поле поиска артикула", "Подсказки Армтека: не появились")) for run in cohort for entry in json.loads(run.log or "[]")):
                     continue
             approved = {}
             workers = 1
