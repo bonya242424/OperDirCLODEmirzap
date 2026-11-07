@@ -238,6 +238,11 @@ class BrowserManager:
         await page.wait_for_load_state("domcontentloaded")
         label = await page.evaluate(
             """([x, y]) => { const el = document.elementFromPoint(x, y); if (!el) return '';
+            const dismiss=el.closest('[data-dismiss=modal],[data-bs-dismiss=modal],.modal .close,[role=dialog] .close,.btn-close');
+            if(dismiss && !dismiss.matches('input[type=submit],button[type=submit]')) {
+                const text=(dismiss.innerText || dismiss.getAttribute('aria-label') || dismiss.title || '').trim();
+                if(/^(?:[×✕x]|закрыть|close)?$/i.test(text)) return 'Закрыть окно';
+            }
             const t = el.closest('button,a,input,[role=button],label,li,td'); const n = t || el;
             return ((n.innerText || n.value || n.title || n.getAttribute('aria-label') || '') + '').slice(0, 120); }""",
             [x, y],
@@ -275,7 +280,7 @@ class BrowserManager:
         session.controls_version = getattr(session, "controls_version", 0) + 1
         return await session.page.evaluate("""version => {
             const elements = Array.from(document.querySelectorAll(
-                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion,[data-operdir-suggestion]'
+                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion,[data-operdir-suggestion],[data-dismiss=modal],[data-bs-dismiss=modal],.modal .close,[role=dialog] .close,.btn-close'
             )).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type)).slice(0,150);
             return elements.map((e,index) => {
                 const previous = e.getAttribute('data-operdir-control');

@@ -94,6 +94,19 @@ def test_real_dom_reads_linked_menu_without_known_css_class():
                 assert await manager._article_suggestions(1, "AR113") == ["AR113 AREOL"]
                 controls = await manager._controls(1)
                 assert any(c["label"] == "AR113 AREOL" for c in controls)
+                # Крестик без button/a раньше наследовал рискованное название всей формы.
+                await page.set_content('''<table><tr><td><div class="modal">
+                    <span class="close" data-dismiss="modal" style="display:block;width:30px;height:30px"
+                        onclick="window.closedByTest=true">×</span>
+                    Оформить возврат по фактуре №9047322883
+                    <button type="submit">Отправить заявку</button>
+                    </div></td></tr></table>''')
+                close = await page.locator('.close').bounding_box()
+                await manager._safe_click(1, close["x"] + 5, close["y"] + 5)
+                assert await page.evaluate('window.closedByTest') is True
+                send = await page.locator('button').bounding_box()
+                with pytest.raises(BrowserError, match="заблокирована"):
+                    await manager._safe_click(1, send["x"] + 5, send["y"] + 5)
             finally:
                 await browser.close()
 
