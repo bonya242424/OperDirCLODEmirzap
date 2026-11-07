@@ -253,7 +253,7 @@ def seed_recent_jobs(seed_key=SEED_KEY, armtek_inputs=False):
                     continue
                 if armtek_inputs and row.status == "failed":
                     evidence = json.loads(row.check_evidence or "{}")
-                    if not evidence.get("technical_skip"):
+                    if not evidence.get("technical_skip") and not (evidence.get("searches") and "подсказк" in row.note.casefold()):
                         continue
                     evidence.update(automation_restarts=0, technical_skip=False, matnr_repaired=True)
                     row.check_evidence = json.dumps(evidence, ensure_ascii=False)

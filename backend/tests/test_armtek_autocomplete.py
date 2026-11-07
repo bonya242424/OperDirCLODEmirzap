@@ -126,13 +126,13 @@ def test_real_dom_reads_linked_menu_without_known_css_class():
                 context = await browser.new_context()
                 page = await context.new_page()
                 await page.set_content('''<input name="MATNR" aria-controls="products">
-                    <div id="products"><div>AR113 AREOL</div><div>AR114 OTHER</div></div>''')
+                    <div id="products"><div>AREOL</div><div>OTHER</div></div>''')
                 await page.locator('input').focus()
                 manager = BrowserManager()
                 manager._sessions[1] = _Session(context, page)
-                assert await manager._article_suggestions(1, "AR113") == ["AR113 AREOL"]
+                assert await manager._article_suggestions(1, "AR113") == ["AREOL", "OTHER"]
                 controls = await manager._controls(1)
-                assert any(c["label"] == "AR113 AREOL" for c in controls)
+                assert any(c["label"] == "AREOL" for c in controls)
                 # Крестик без button/a раньше наследовал рискованное название всей формы.
                 await page.set_content('''<table><tr><td><div class="modal">
                     <span class="close" data-dismiss="modal" style="display:block;width:30px;height:30px"

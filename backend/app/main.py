@@ -76,6 +76,7 @@ async def lifespan(_: FastAPI):
     seed_recent_jobs()
     seed_recent_jobs("return-matnr-recovery-v1", armtek_inputs=True)
     seed_recent_jobs("return-autocomplete-recovery-v1", armtek_inputs=True)
+    seed_recent_jobs("return-lookup-recovery-v1", armtek_inputs=True)
     reset_stale_assembly()
     from .assembly_run import recover_unverified_completions
     recover_unverified_completions()

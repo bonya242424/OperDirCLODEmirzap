@@ -349,31 +349,38 @@ class BrowserManager:
                 raise BrowserError("Не найдено единственное доступное поле артикула MATNR. Прочитайте browser_controls заново")
             element = candidate
         page = self._get(key).page
-        # Виджеты могут перерисовать/сократить ввод: не считаем такой запрос выполненным.
-        for delay in (35, 100):
-            await element.fill("")
-            await element.press_sequentially(value, delay=delay)
-            await page.wait_for_timeout(250)
+        from .return_lookup import LookupTrace
+        trace = LookupTrace(page, value)
+        trace.start()
+        try:
+            # Виджеты могут перерисовать/сократить ввод: не считаем такой запрос выполненным.
+            for delay in (35, 100):
+                await element.fill("")
+                await element.press_sequentially(value, delay=delay)
+                await page.wait_for_timeout(250)
+                actual = await element.input_value()
+                if actual == value:
+                    break
+            else:
+                raise BrowserError(f"Артикул введён не полностью: ожидалось «{value}», в поле «{actual}». Поиск не подтверждён")
+            suggestions = []
+            waited = 0
+            for _ in range(32):
+                suggestions = await self._article_suggestions(key, value)
+                if suggestions:
+                    break
+                await page.wait_for_timeout(250)
+                waited += 250
             actual = await element.input_value()
-            if actual == value:
-                break
-        else:
-            raise BrowserError(f"Артикул введён не полностью: ожидалось «{value}», в поле «{actual}». Поиск не подтверждён")
-        suggestions = []
-        waited = 0
-        for _ in range(32):
-            suggestions = await self._article_suggestions(key, value)
-            if suggestions:
-                break
-            await page.wait_for_timeout(250)
-            waited += 250
-        actual = await element.input_value()
-        if actual != value:
-            raise BrowserError(f"Поле изменилось при ожидании подсказок: ожидалось «{value}», получено «{actual}»")
-        field = await element.evaluate("e => ({name:e.name || '', id:e.id || '', max_length:e.maxLength, aria_controls:e.getAttribute('aria-controls') || ''})")
-        controls = await self._controls(key)
-        return {"field": field, "requested_value": value, "input_value": actual, "input_verified": True,
-                "suggestions": suggestions, "waited_ms": waited, "controls": controls}
+            if actual != value:
+                raise BrowserError(f"Поле изменилось при ожидании подсказок: ожидалось «{value}», получено «{actual}»")
+            field = await element.evaluate("e => ({name:e.name || '', id:e.id || '', max_length:e.maxLength, aria_controls:e.getAttribute('aria-controls') || ''})")
+            network = await trace.snapshot()
+            controls = await self._controls(key)
+            return {"lookup_requests": trace.requests_seen, "lookup_responses": network, "field": field, "requested_value": value, "input_value": actual, "input_verified": True,
+                    "suggestions": suggestions, "waited_ms": waited, "controls": controls}
+        finally:
+            trace.close()
 
     async def _article_suggestions(self, key: int, value: str) -> list[str]:
         return await self._get(key).page.evaluate(r"""query => {
@@ -388,7 +395,8 @@ class BrowserManager:
                     for(const item of items.length ? items : list.children) candidates.add(item);
                 }
             }
-            const rows=Array.from(candidates).filter(e=>visible(e) && norm(e.innerText).includes(norm(query)));
+            // Связанный список может показывать только бренд: не отбрасываем его из-за отсутствия артикула в тексте.
+            const rows=Array.from(candidates).filter(e=>visible(e) && e.innerText.trim());
             const leaves=rows.filter(e=>!rows.some(other=>other!==e && e.contains(other)));
             return leaves.slice(0,30).map(e=>{
                 e.setAttribute('data-operdir-suggestion','true');
@@ -420,7 +428,18 @@ class BrowserManager:
             }));
         }""", {"article": article, "brand": brand, "version": session.controls_version})
         from .return_verification import on_page
-        return {"article": article, "brand": brand, "rows": [row for row in rows if on_page(article, row["text"]) and on_page(brand, row["text"])]}
+        matched = [row for row in rows if on_page(article, row["text"]) and on_page(brand, row["text"])]
+        result = {"article": article, "brand": brand, "rows": matched}
+        if not matched:
+            result["diagnostics"] = await session.page.evaluate(r"""({article,brand}) => {
+                const norm=s=>(s || '').toUpperCase().replace(/[\s./-]+/g,'');
+                const rows=Array.from(document.querySelectorAll('tr')).filter(r=>r.getClientRects().length);
+                const text=r=>r.innerText+' '+Array.from(r.querySelectorAll('[alt],[title],[aria-label]')).map(e=>e.alt || e.title || e.getAttribute('aria-label')).join(' ');
+                const articleRows=rows.filter(r=>norm(text(r)).includes(norm(article)));
+                return {article_rows:articleRows.length,brand_rows:rows.filter(r=>norm(text(r)).includes(norm(brand))).length,
+                    candidates:articleRows.slice(-4).map(r=>({text:text(r).slice(0,600),nested_rows:r.querySelectorAll('tr').length}))};
+            }""", {"article": article, "brand": brand})
+        return result
 
     async def _forum_returns(self, key: int) -> dict:
         await self._controls(key)

@@ -270,6 +270,7 @@ def run_check(run_id: int) -> None:
                 "Если нужного сочетания нет, проверь вариант артикула без разделителей, сохраняя проверку бренда."
                 " Для ввода артикула используй armtek_search_article: он запускает подсказки событиями клавиатуры. "
                 "Поле получает только артикул, бренд выбирается отдельной подсказкой. Сначала variant=0, при отсутствии нужного товара используй остальные варианты из ответа. "
+                "Связанный с полем список может показывать только бренды: при подтверждённом полном вводе выбери нужный бренд, затем обязательно подтверди полный артикул в фактуре. Отсутствие подсказок без ответа поиска — техническая ошибка, а не отсутствие товара. "
                 "Если подсказки не найдены, не нажимай ArrowDown и не кликай наугад по координатам. Прочитай browser_controls; выбирай только видимую подсказку полного артикула и бренда по control. "
                 "Для VAG код 6V08671749B9 может отображаться как 6V0867174 9B9: пробел не меняет товар. "
                 "Укороченный поисковый запрос допустим только для получения подсказок; выбирать можно лишь полный совпадающий артикул и бренд."
@@ -535,6 +536,8 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             guard_armtek_invoice(row, mgr.read_text(key, limit=20000))
             result = mgr.find_product(key, row.article, row.brand)
             say(f"Фактура Армтека: найдено строк {len(result['rows'])} для {row.article} · {row.brand}")
+            if result.get("diagnostics"):
+                say("Диагностика строк фактуры: " + json.dumps(result["diagnostics"], ensure_ascii=False))
             return json.dumps(result, ensure_ascii=False)
         if name == "armtek_search_article":
             if not (supplier_kind(f"https://{host}") == "armtek"):
@@ -544,15 +547,21 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             if type(variant) is not int or not 0 <= variant < len(variants):
                 return json.dumps({"error": "Неверный номер варианта", "variants": variants}, ensure_ascii=False)
             prior = json.loads(row.check_evidence or "{}")
-            if variant and (prior.get("search_revision") != "autocomplete-v2" or prior.get("search_run_id") != (run.id if run else None) or variants[0] not in prior.get("searches", [])):
+            if variant and (prior.get("search_revision") != "autocomplete-v3" or prior.get("search_run_id") != (run.id if run else None) or variants[0] not in prior.get("searches", [])):
                 raise BrowserError("Сначала выполните полный поиск variant=0 и дождитесь подсказок; сокращённый запрос пока запрещён")
+            if normalized(variants[variant]) != normalized(row.article) and not prior.get("lookup_confirmed"):
+                raise BrowserError("Полный артикул введён, но запуск поиска не подтверждён ответом или списком. Сокращённый ввод не исправляет технический сбой виджета")
             result = mgr.search_article(key, str(args.get("control", "")), variants[variant])
             if result["input_value"] != variants[variant]:
                 raise BrowserError(f"В поле введён другой запрос: ожидалось «{variants[variant]}», получено «{result['input_value']}»")
             evidence = json.loads(row.check_evidence or "{}")
-            if evidence.get("search_run_id") != (run.id if run else None) or evidence.get("search_revision") != "autocomplete-v2":
+            if evidence.get("search_run_id") != (run.id if run else None) or evidence.get("search_revision") != "autocomplete-v3":
                 evidence["searches"] = []
-            evidence.update({"search_revision": "autocomplete-v2", "search_run_id": run.id if run else None, "searches": list(dict.fromkeys(evidence.get("searches", []) + [variants[variant]]))})
+                evidence["suggestions_observed"] = False
+                evidence["lookup_confirmed"] = False
+            evidence["lookup_confirmed"] = bool(result.get("suggestions")) or any(item.get("status") == 200 and "shape" in item and not item["shape"].get("has_error") for item in result.get("lookup_responses", []))
+            evidence["suggestions_observed"] = evidence.get("suggestions_observed", False) or bool(result.get("suggestions"))
+            evidence.update({"search_revision": "autocomplete-v3", "search_run_id": run.id if run else None, "searches": list(dict.fromkeys(evidence.get("searches", []) + [variants[variant]]))})
             row.check_evidence = json.dumps(evidence, ensure_ascii=False)
             db.commit()
             query_type = "полный артикул" if normalized(variants[variant]) == normalized(row.article) else "сокращённый запрос подсказок"
@@ -560,6 +569,10 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             field = result.get("field", {})
             if field:
                 say(f"Поле поиска: name={field.get('name', '')}, id={field.get('id', '')}, maxlength={field.get('max_length', '?')}")
+            for response in result.get("lookup_responses", []):
+                say("Ответ поиска Армтека: " + json.dumps(response, ensure_ascii=False))
+            if not result.get("lookup_responses"):
+                say("Запрос подсказок отправлен, но ответ текущего артикула не получен" if result.get("lookup_requests") else "Запрос подсказок текущего артикула не наблюдался: заполнение поля не подтверждает выполнение поиска")
             say("Подсказки Армтека: " + ("; ".join(result.get("suggestions", [])) or f"не появились за {result.get('waited_ms', 8000) / 1000:g} с при подтверждённом вводе «{result['input_value']}»"))
             return json.dumps({"article": row.article, "brand": row.brand, "variants": variants, **result}, ensure_ascii=False)
         if not (supplier_kind(f"https://{host}") == "forum"):
@@ -650,6 +663,8 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             remaining = [value for value in article_variants(row.article, row.brand) if value not in searches]
             if remaining:
                 raise BrowserError("Не все варианты артикула проверены через armtek_search_article: " + ", ".join(remaining))
+            if not evidence.get("suggestions_observed"):
+                raise BrowserError("Отсутствие товара не подтверждено: ни одного списка подсказок не прочитано. Это техническая ошибка поиска, а не «счёт не найден»")
         if status in ("not_found", "already_returned") and (supplier_kind(f"https://{host}") == "forum"):
             snapshot = mgr.forum_returns(key)
             if not snapshot.get("has_creation_section") or normalized(row.article) not in [normalized(v) for v in snapshot.get("search_values", [])]:
