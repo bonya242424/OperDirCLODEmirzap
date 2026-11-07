@@ -36,6 +36,7 @@ class BrowserError(Exception):
 class _Session:
     def __init__(self, context: Any, page: Any) -> None:
         self.context, self.page, self.used = context, page, time.time()
+        self.submission_messages: list[str] = []
 
 
 class BrowserManager:
@@ -209,7 +210,8 @@ class BrowserManager:
         links = await page.evaluate("""() => Array.from(document.querySelectorAll('a[href]'))
             .filter(a => a.getClientRects().length && a.textContent.trim())
             .slice(0, 60).map(a => ({text: a.textContent.trim().slice(0, 120), href: a.href}))""")
-        return f"Адрес страницы: {page.url}\n{text}\nСсылки на странице:\n" + "\n".join(
+        notices = "\n".join(self._get(key).submission_messages)
+        return f"Адрес страницы: {page.url}\n{text}\nСообщения при последней отправке:\n{notices}\nСсылки на странице:\n" + "\n".join(
             f"{link['text']} — {link['href']}" for link in links
         )
 
@@ -371,9 +373,26 @@ class BrowserManager:
     async def _send_return(self, key: int, x: float, y: float, preview: dict) -> None:
         if await self._submission_preview(key, x, y) != preview:
             raise BrowserError("Форма изменилась перед отправкой")
-        page = self._get(key).page
-        await page.mouse.click(x, y)
-        await page.wait_for_timeout(700)
+        session = self._get(key)
+        page = session.page
+        session.submission_messages = []
+
+        async def submission_dialog(dialog):
+            session.submission_messages.append(f"{dialog.type}: {dialog.message[:1000]}")
+            session.submission_messages = session.submission_messages[-10:]
+            # Только окно, вызванное единственным подтверждённым кликом отправки.
+            # В обычной навигации подтверждения по-прежнему не принимаются.
+            if dialog.type in ("confirm", "alert"):
+                await dialog.accept()
+            else:
+                await dialog.dismiss()
+
+        page.on("dialog", submission_dialog)
+        try:
+            await page.mouse.click(x, y)
+            await page.wait_for_timeout(2000)
+        finally:
+            page.remove_listener("dialog", submission_dialog)
 
     def safe_type(self, key: int, text: str, clear: bool = True) -> None:
         self._run(lambda: self._safe_type(key, text, clear))

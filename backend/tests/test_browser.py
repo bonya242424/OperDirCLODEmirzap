@@ -133,3 +133,45 @@ def test_safe_click_follows_same_site_popup_and_keeps_foreign_popup_out():
 
     asyncio.run(check("https://etp.armtek.ru/invoice/view/123"))
     asyncio.run(check("https://outside.example/invoice"))
+
+
+@pytest.mark.parametrize("kind, accepted", [("confirm", True), ("alert", True), ("prompt", False)])
+def test_validated_submission_handles_native_dialog_once(kind, accepted):
+    import asyncio
+    from types import SimpleNamespace
+    from app.browser import BrowserManager, _Session
+
+    async def check():
+        listeners, actions = {}, []
+
+        async def accept():
+            actions.append("accept")
+
+        async def dismiss():
+            actions.append("dismiss")
+
+        async def click(*args):
+            actions.append("click")
+            await listeners["dialog"](SimpleNamespace(type=kind, message="Подтвердить возврат?", accept=accept, dismiss=dismiss))
+
+        async def wait(*args):
+            pass
+
+        page = SimpleNamespace(
+            mouse=SimpleNamespace(click=click), wait_for_timeout=wait,
+            on=lambda name, cb: listeners.update({name: cb}),
+            remove_listener=lambda name, cb: listeners.pop(name),
+        )
+        browser = BrowserManager()
+        browser._sessions[1] = _Session(None, page)
+
+        async def preview(*args):
+            return {"verified": True}
+
+        browser._submission_preview = preview
+        await browser._send_return(1, 10, 10, {"verified": True})
+        assert actions == ["click", "accept" if accepted else "dismiss"]
+        assert not listeners
+        assert browser._sessions[1].submission_messages == [f"{kind}: Подтвердить возврат?"]
+
+    asyncio.run(check())
