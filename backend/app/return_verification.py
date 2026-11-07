@@ -22,6 +22,16 @@ def on_page(value, page):
     return bool(re.search(pattern, page, re.I))
 
 
+def guard_armtek_invoice(row, page):
+    expected = normalized(re.sub(r"/\s*\d+\s*$", "", row.invoice_no))
+    address = re.search(r"Адрес страницы:\s*(\S+)", page)
+    if address and "/invoice/" in address.group(1) and expected:
+        header = re.search(r"УПД\s*[:№]?\s*([A-ZА-ЯЁ]{0,4}\s*\d{4,}(?:\s*/\s*\d+)?)", page, re.I)
+        actual = normalized(re.sub(r"/\s*\d+\s*$", "", header.group(1))) if header else None
+        if (actual and actual != expected) or expected not in normalized(page):
+            raise BrowserError(f"Открыта другая фактура, а текущему товару нужен УПД {row.invoice_no}. Не записывайте ошибку товара: вызовите armtek_search_page и откройте нужную фактуру.")
+
+
 def validate_item(db, mgr, key, batch, args, submit=False, line_ids=None):
     if line_ids == []:
         raise BrowserError("Нет подтверждённых товаров для проверки")

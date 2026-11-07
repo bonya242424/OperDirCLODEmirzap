@@ -17,9 +17,9 @@ from .browser import BrowserError, manager
 from .db import SessionLocal
 from .llm import LLMError, get_provider
 from .return_submission import LOCKED_STATUSES, APPROVAL_PREFIX, read_approval, submission_tool, park_submission
-from .return_submission import normalized
+from .return_submission import normalized, supplier_kind
 from .models import ReturnBatch, ReturnGuide, ReturnLine, ReturnRun, ReturnSupplier, utcnow
-from .return_verification import validate_item
+from .return_verification import guard_armtek_invoice, validate_item
 from .return_search import article_variants, matching_offers
 
 log = logging.getLogger(__name__)
@@ -77,6 +77,7 @@ SYSTEM = (
 )
 
 TOOLS = [
+    {"name": "armtek_search_page", "description": "Вернуться к уже открытой вкладке поиска возвратов Армтека после просмотра фактуры. Если вкладки нет, открыть известную страницу /order_return. Возвращает текст и поля поиска; не отправляет заявок.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "armtek_search_article", "description": "Ввести только артикул текущей строки с реальными событиями клавиатуры и получить подсказки. variant=0 — исходный артикул; ответ содержит все варианты, включая пробелы и короткий запрос. После ввода выберите полный артикул и бренд в подсказках.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}, "control": {"type": "string"}, "variant": {"type": "integer", "minimum": 0}}, "required": ["line_id", "control"]}},
     {"name": "forum_available_returns", "description": "Прочитать только таблицу «Создание возвратов» Форума. Возвращает доступные поставки текущего артикула и бренда с количеством и ссылкой «Отказ от товара», отдельно от истории старых заявок.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}}, "required": ["line_id"]}},
     {"name": "browser_wait", "description": "Подождать 2 секунды ответа сайта, затем перечитать страницу. Не повторяет отправку.", "input_schema": {"type": "object", "properties": {}}},
@@ -223,6 +224,8 @@ def run_check(run_id: int) -> None:
                 "Проверь все повторные строки артикула: возвращённая строка не исключает доступность другой. "
                 "Можно оформить несколько товаров одной фактуры, но результат и количество каждого должны быть учтены отдельно. "
                 "Если следующий товар есть в уже открытой нужной фактуре, используй её состав без повторного поиска и открытия кабинета. "
+                "Если открыта фактура предыдущего товара с другим УПД, вызови armtek_search_page, введи текущий артикул и открой нужную фактуру. "
+                "Отсутствие товара в чужой фактуре НЕ означает, что товар не найден или недоступен. "
                 "Причина оформления — «Отказ клиента (годный товар)». "
                 " Кабинет Армтека: введи артикул товара в поле поиска, дождись выпадающего списка "
                 "и обязательно выбери в нём товар с сочетанием артикула и бренда из сборки. "
@@ -247,6 +250,8 @@ def run_check(run_id: int) -> None:
                 "Номер счёта или УПД в поле артикула не вводи. "
                 "После поиска обязательно вызови forum_available_returns для текущей строки. Его результат относится к нижней таблице доступных поставок. "
                 "Если есть доступная поставка, переходи по её control или href и сразу оформляй товар. Старая заявка в истории не означает, что текущая строка уже возвращена. "
+                "Одна ссылка «Отказ от товара» может охватывать несколько строк поставок. Выбери первую строку с достаточным количеством; "
+                "в открытой форме выбери документ этой строки по document_key, затем сверь количество. Не используй автоматически первую поставку, если в ней количества недостаточно. "
                 "Если порядок поиска на странице неясен, сообщи конкретное препятствие через finish с reason=blocked."
             )
         tools = TOOLS
@@ -398,6 +403,12 @@ def run_check(run_id: int) -> None:
 
 
 def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dict, done: set[str], say, run=None, approval=None) -> object:
+    if name == "armtek_search_page":
+        if not (supplier_kind(f"https://{host}") == "armtek"):
+            raise BrowserError("Этот инструмент доступен только Армтеку")
+        result = mgr.armtek_search_page(key, f"https://{host}/order_return")
+        say("Вернулся к вкладке поиска возвратов Армтека")
+        return json.dumps(result, ensure_ascii=False)
     if name in ("armtek_search_article", "forum_available_returns"):
         line_id = args.get("line_id")
         if type(line_id) is not int:
@@ -408,7 +419,7 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
         row = validate_item(db, mgr, key, batch, {"line_id": line_id, "article": row.article, "brand": row.brand, "status": "error"},
             submit=bool(run and run.mode == "submit"), line_ids=[item["id"] for item in approval["lines"]] if approval else None)
         if name == "armtek_search_article":
-            if not (host == "armtek.ru" or host.endswith(".armtek.ru")):
+            if not (supplier_kind(f"https://{host}") == "armtek"):
                 raise BrowserError("Этот инструмент доступен только Армтеку")
             variants = article_variants(row.article, row.brand)
             variant = args.get("variant", 0)
@@ -424,7 +435,7 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             say(f"Армтек: в поле артикула «{result['input_value']}», товар {row.article} · {row.brand}")
             say("Подсказки Армтека: " + ("; ".join(result.get("suggestions", [])) or "не появились; проверьте страницу или дождитесь ответа"))
             return json.dumps({"article": row.article, "brand": row.brand, "variants": variants, **result}, ensure_ascii=False)
-        if not (host == "forum-auto.ru" or host.endswith(".forum-auto.ru")):
+        if not (supplier_kind(f"https://{host}") == "forum"):
             raise BrowserError("Этот инструмент доступен только Форуму")
         snapshot = mgr.forum_returns(key)
         if not snapshot.get("has_creation_section") or normalized(row.article) not in [normalized(v) for v in snapshot.get("search_values", [])]:
@@ -504,13 +515,15 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             return "Ошибка: неизвестный статус"
         row = validate_item(db, mgr, key, batch, args, submit=bool(run and run.mode == "submit"),
                             line_ids=[item["id"] for item in approval["lines"]] if approval else None)
-        if status == "not_found" and (host == "armtek.ru" or host.endswith(".armtek.ru")):
+        if supplier_kind(f"https://{host}") == "armtek":
+            guard_armtek_invoice(row, mgr.read_text(key, limit=20000))
+        if status == "not_found" and (supplier_kind(f"https://{host}") == "armtek"):
             evidence = json.loads(row.check_evidence or "{}")
             searches = evidence.get("searches", []) if evidence.get("search_run_id") == (run.id if run else None) else []
             remaining = [value for value in article_variants(row.article, row.brand) if value not in searches]
             if remaining:
                 raise BrowserError("Не все варианты артикула проверены через armtek_search_article: " + ", ".join(remaining))
-        if status in ("not_found", "already_returned") and (host == "forum-auto.ru" or host.endswith(".forum-auto.ru")):
+        if status in ("not_found", "already_returned") and (supplier_kind(f"https://{host}") == "forum"):
             snapshot = mgr.forum_returns(key)
             if not snapshot.get("has_creation_section") or normalized(row.article) not in [normalized(v) for v in snapshot.get("search_values", [])]:
                 raise BrowserError("Нельзя делать вывод по старой заявке. Сначала откройте нижнюю таблицу возвратов по текущему артикулу.")

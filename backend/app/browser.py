@@ -292,6 +292,23 @@ class BrowserManager:
     def search_article(self, key: int, control: str, value: str) -> dict:
         return self._run(lambda: self._search_article(key, control, value))
 
+    def armtek_search_page(self, key: int, url: str) -> dict:
+        return self._run(lambda: self._armtek_search_page(key, url))
+
+    async def _armtek_search_page(self, key: int, url: str) -> dict:
+        from urllib.parse import urlsplit
+        session = self._get(key)
+        target = urlsplit(url)
+        for page in session.context.pages:
+            current = urlsplit(page.url)
+            if current.scheme == target.scheme and current.netloc == target.netloc and current.path.rstrip('/') == target.path.rstrip('/'):
+                session.page = page
+                await page.bring_to_front()
+                break
+        else:
+            await session.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        return {"page": await self._read(key, 6000), "controls": await self._controls(key)}
+
     async def _search_article(self, key: int, control: str, value: str) -> dict:
         element = await self._control(key, control)
         info = await element.evaluate("e => ({tag:e.tagName,type:e.type,label:(e.labels?.[0]?.innerText || e.placeholder || e.title || e.closest('tr')?.cells?.[0]?.innerText || '')})")
@@ -312,31 +329,20 @@ class BrowserManager:
 
     async def _forum_returns(self, key: int) -> dict:
         await self._controls(key)
-        return await self._get(key).page.evaluate(r"""() => {
-            const offers = [], seen = new Set();
-            for (const table of document.querySelectorAll('table')) {
-                const header = Array.from(table.querySelectorAll('tr')).find(r => !r.querySelector('tr') && /Кол-во\s+для\s+возврата/i.test(r.innerText) && Array.from(r.cells).some(c => /^Товар$/i.test(c.innerText.trim())));
-                if (!header) continue;
-                const names = Array.from(header.cells).map(c => c.innerText.trim());
-                const product = names.findIndex(n => /^Товар$/i.test(n));
-                const quantity = names.findIndex(n => /Кол-во\s+для\s+возврата/i.test(n));
-                for (const row of table.querySelectorAll('tr')) {
-                    if (row.querySelector('tr') || row === header || !row.getClientRects().length) continue;
-                    const cells = Array.from(row.cells);
-                    if (cells.length <= Math.max(product, quantity)) continue;
-                    const link = Array.from(row.querySelectorAll('a')).find(a => /Отказ\s+от\s+товара/i.test(a.innerText) && !a.hasAttribute('disabled') && a.getAttribute('aria-disabled') !== 'true' && a.href);
-                    if (!link) continue;
-                    const qty = Number(cells[quantity].innerText.trim().replace(',', '.'));
-                    if (!Number.isFinite(qty)) continue;
-                    const signature = link.href + '|' + cells[product].innerText;
-                    if (seen.has(signature)) continue;
-                    seen.add(signature);
-                    offers.push({product:cells[product].innerText.trim(),quantity:qty,href:link.href,control:link.getAttribute('data-operdir-control'),document:cells.map(c=>c.innerText.trim()).slice(1,4).join(' · ')});
-                }
-            }
-            return {offers,has_creation_section:/Создание\s+возвратов/i.test(document.body.innerText),
-                search_values:Array.from(document.querySelectorAll('input')).filter(e=>e.getClientRects().length && ['text','search',''].includes(e.type)).map(e=>e.value).filter(Boolean)};
-        }""")
+        raw = await self._get(key).page.evaluate(r"""() => ({
+            tables:Array.from(document.querySelectorAll('table')).map(table=>Array.from(table.rows).map(row=>({
+                visible:!!row.getClientRects().length,
+                cells:Array.from(row.cells).map(cell=>{
+                    const link=Array.from(cell.querySelectorAll('a')).find(a=>/Отказ\s+от\s+товара/i.test(a.innerText) && !a.hasAttribute('disabled') && a.getAttribute('aria-disabled')!=='true' && a.href);
+                    return {text:cell.innerText.trim(),rowspan:cell.rowSpan,colspan:cell.colSpan,
+                        action:link?{href:link.href,control:link.getAttribute('data-operdir-control')}:null};
+                })
+            }))),
+            has_creation_section:/Создание\s+возвратов/i.test(document.body.innerText),
+            search_values:Array.from(document.querySelectorAll('input')).filter(e=>e.getClientRects().length && ['text','search',''].includes(e.type)).map(e=>e.value).filter(Boolean)
+        })""")
+        from .return_search import forum_offers_from_tables
+        return {"offers": forum_offers_from_tables(raw.pop("tables")), **raw}
 
     async def _fill_control(self, key: int, control: str, value: str) -> None:
         element = await self._control(key, control)

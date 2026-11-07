@@ -121,3 +121,53 @@ def test_article_search_uses_keyboard_events_and_returns_actual_value():
         assert result["input_value"] == "AR113" and result["suggestions"] == ["AR113 AREOL"]
 
     asyncio.run(check())
+
+
+def test_armtek_returns_to_existing_search_tab_without_navigation():
+    import asyncio
+    from types import SimpleNamespace
+    from app.browser import BrowserManager, _Session
+
+    async def check():
+        events = []
+
+        async def foreground():
+            events.append("search")
+
+        search = SimpleNamespace(url="https://etp.armtek.ru/order_return", bring_to_front=foreground)
+        invoice = SimpleNamespace(url="https://etp.armtek.ru/invoice/viewReturnInfo/123")
+        browser = BrowserManager()
+        browser._sessions[1] = _Session(SimpleNamespace(pages=[search, invoice]), invoice)
+
+        async def read(*args):
+            return browser._sessions[1].page.url
+
+        async def controls(*args):
+            return [{"control": "1-1", "label": "Код артикула"}]
+
+        browser._read, browser._controls = read, controls
+        result = await browser._armtek_search_page(1, search.url)
+        assert result["page"] == search.url and events == ["search"]
+        assert browser._sessions[1].page is search
+
+    asyncio.run(check())
+
+
+def test_forum_shared_return_link_keeps_all_supply_rows():
+    from app.return_search import forum_offers_from_tables
+
+    def cell(text, **kwargs):
+        return {"text": text, "rowspan": 1, "colspan": 1, **kwargs}
+
+    header = {"cells": [cell(text) for text in ["Возврат", "Документ", "№", "Дата", "Товар", "Кол-во для возврата", "Претензия"]]}
+    action = {"href": "https://itrade.forum-auto.ru/return/new", "control": "1-1"}
+    rows = [header,
+        {"cells": [cell("Отказ от товара", rowspan=3, action=action), cell("71672138"), cell("041126-1151"), cell("05.11.2026"), cell("225070 EAG Хомут"), cell("1"), cell("Претензия по товару")]},
+        {"cells": [cell("69471717"), cell("210826-1144"), cell("21.08.2026"), cell("225070 EAG Хомут"), cell("2"), cell("Претензия по товару")]},
+        {"cells": [cell("68642088"), cell("230726-1695"), cell("23.07.2026"), cell("225070 EAG Хомут"), cell("2"), cell("Претензия по товару")]},
+    ]
+    offers = forum_offers_from_tables([rows])
+    assert [offer["quantity"] for offer in offers] == [1, 2, 2]
+    assert [offer["document_key"] for offer in offers] == ["71672138", "69471717", "68642088"]
+    assert all(offer["control"] == "1-1" for offer in offers)
+    assert offers[1]["product"] == "225070 EAG Хомут"

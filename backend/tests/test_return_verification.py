@@ -5,6 +5,8 @@ import pytest
 from app.db import SessionLocal
 from app.models import AppSetting, ReturnLine
 from app.return_verification import MIGRATION_KEY, invalidate_legacy, on_page
+from app.return_verification import guard_armtek_invoice
+from app.browser import BrowserError
 from tests.test_agents import Script, call as raw_call
 from tests.test_returns_run import _batch, _last, call, no_browser
 
@@ -85,3 +87,13 @@ def test_legacy_checks_are_invalidated_without_touching_submissions(client, owne
 ])
 def test_product_evidence_uses_complete_article(article, text, matched):
     assert on_page(article, text) is matched
+
+
+def test_previous_armtek_invoice_cannot_be_used_for_current_item():
+    from types import SimpleNamespace
+    row = SimpleNamespace(invoice_no="ЮП0690073 /3")
+    wrong = "Адрес страницы: https://etp.armtek.ru/invoice/viewReturnInfo/123\nУПД ЮП0672243 /3\nСсылка на другой документ ЮП0690073"
+    with pytest.raises(BrowserError, match="другая фактура"):
+        guard_armtek_invoice(row, wrong)
+    guard_armtek_invoice(row, wrong.replace("УПД ЮП0672243 /3", "УПД ЮП0690073 /3"))
+    guard_armtek_invoice(row, "Адрес страницы: https://etp.armtek.ru/order_return\nРезультаты поиска")
