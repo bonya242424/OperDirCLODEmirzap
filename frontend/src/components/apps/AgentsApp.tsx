@@ -66,7 +66,7 @@ function RunShot({ runId }: { runId: number }) {
   );
 }
 
-const INV_STATUS: Record<string, string> = { pending: "не проверен", checked: "можно оформить", failed: "есть проблема", submitted: "отправлен", skipped: "пропущен" };
+const INV_STATUS: Record<string, string> = { pending: "не проверен", checked: "можно оформить", failed: "есть проблема", submitted: "Возврат оформлен", submitting: "Отправляется", uncertain: "Отправка требует сверки", skipped: "пропущен" };
 
 interface Summary {
   id: number;
@@ -101,7 +101,7 @@ interface ReturnItem {
 
 const TEMPLATE: Omit<Step, "state">[] = [
   { title: "Открыть «Оформление возврата»", detail: "Вход уже выполнен вами в браузере; агент пароли не вводит" },
-  { title: "Найти товар по артикулу", detail: "Сверяю номер и дату счёта по найденной фактуре" },
+  { title: "Найти товар по артикулу", detail: "Армтек: выбираю артикул и бренд, сверяю фактуру. Форум: выбираю доступную поставку" },
   { title: "Выставить количество «К возврату»", detail: "Для каждой позиции счёта количество берётся из таблицы" },
   { title: "Заполнить окно возврата", detail: "Причина из таблицы; адрес и контактное лицо сайт подставляет сам; файлы не нужны" },
   { title: "Отправить заявку", detail: "Необратимое действие: заявку нельзя отозвать", needsConfirm: true },
@@ -243,10 +243,11 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   }
 
   async function startQueue() {
+    if (!window.confirm(`Оформить и отправить реальные возвраты по выбранным сборкам (${picked.length})? Уже оформленные позиции будут пропущены.`)) return;
     setError("");
     setInfo("");
     try {
-      setQueue(await api("/returns/check-queue", { method: "POST", body: { batch_ids: picked } }));
+      setQueue(await api("/returns/check-queue", { method: "POST", body: { batch_ids: picked, mode: "submit", confirmed: true } }));
       setMulti(false);
       setPicked([]);
     } catch (err) {
@@ -278,15 +279,15 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
     setError("");
     setRunsError("");
     setInfo("");
-    if (!(current.status.pending ?? 0)) {
-      setRunsError((current.status.failed ?? 0) > 0
-        ? "Непроверенных строк нет. Нажмите «Сбросить ошибки», затем запустите проверку."
-        : "Все строки сборки уже проверены.");
+    const eligible = (current.status.pending ?? 0) + (current.status.checked ?? 0) + (current.status.failed ?? 0);
+    if (!eligible) {
+      setRunsError("Нет доступных к оформлению позиций. Оформленные возвраты сохранены, спорные отправки требуют сверки.");
       return;
     }
+    if (!window.confirm(`Оформить и отправить реальные возвраты поставщику «${supplier?.name}» по сборке «${current.number}»? Позиций: ${eligible}. Количества берутся из сборки. Уже оформленные позиции будут пропущены.`)) return;
     setBusy(true);
     try {
-      const run = await api<Run>(`/returns/batches/${current.id}/check-run`, { method: "POST" });
+      const run = await api<Run>(`/returns/batches/${current.id}/submit-run`, { method: "POST", body: { confirmed: true } });
       setRunsBySupplier((previous) => ({ ...previous, [supSel]: [run, ...(previous[supSel] ?? []).filter((item) => item.id !== run.id)] }));
       loadRuns();
     } catch (err) {
@@ -303,7 +304,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
     setInfo("");
     try {
       const result = await api<{ reset: number }>(`/returns/batches/${current.id}/reset-errors`, { method: "POST" });
-      setInfo(`Сброшено ошибок: ${result.reset}. Запустите проверку сборки заново.`);
+      setInfo(`Сброшено ошибок: ${result.reset}. Можно запустить оформление заново.`);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось сбросить ошибки");
@@ -431,7 +432,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             </div>
             {queue?.active && (
               <div className="ag-hint">
-                Очередь проверки: документ {queue.pos} из {queue.total}{queue.current ? ` (${queue.current.number || queue.current.id})` : ""}.
+                Очередь возвратов: документ {queue.pos} из {queue.total}{queue.current ? ` (${queue.current.number || queue.current.id})` : ""}.
                 {(queue.active_suppliers?.length ?? 0) > 1 && ` Одновременно идут поставщиков: ${queue.active_suppliers?.length}.`}
                 <button className="ghost danger" onClick={cancelQueue}>Отменить очередь</button>
               </div>
@@ -442,8 +443,8 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                 <button className="ghost" onClick={() => { setMulti((m) => !m); setPicked([]); }} disabled={!!queue?.active}>{multi ? "Выход из выбора" : "Выбрать несколько"}</button>
                 {multi && <button className="ghost" onClick={() => setPicked(batches.map((b) => b.id))}>Выбрать все</button>}
                 {multi && (
-                  <button className="primary" onClick={startQueue} disabled={picked.length === 0 || !supplier?.has_session} title={supplier?.has_session ? "Агент проверит выбранные документы по очереди, ничего не отправляя" : "Сначала войдите в кабинет и сохраните вход"}>
-                    Проверить выбранные ({picked.length})
+                  <button className="primary" onClick={startQueue} disabled={picked.length === 0 || !supplier?.has_session} title={supplier?.has_session ? "Агент оформит возвраты по выбранным сборкам после подтверждения запуска" : "Сначала войдите в кабинет и сохраните вход"}>
+                    Оформить выбранные ({picked.length})
                   </button>
                 )}
                 {!multi && <button className="ghost" onClick={dedupe}>Убрать дубли</button>}
@@ -477,7 +478,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                 <p className="muted small">Источник: {current.source}</p>
               </div>
               <div className="ag-actions">
-                <button className="ghost" onClick={() => remove(current)} disabled={running}>Удалить</button>
+                <button className="ghost" onClick={() => remove(current)} disabled={checking || !!queue?.active || !!current.status.submitted || !!current.status.submitting || !!current.status.uncertain}>Удалить</button>
                 {me.role === "owner" && (current.status.failed ?? 0) > 0 && (
                   <button onClick={resetErrors} disabled={busy || !runs || checking || !!queue?.active}>
                     Сбросить ошибки
@@ -486,8 +487,8 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                 {me.role === "owner" && (checking ? (
                   <button className="danger" onClick={stopCheck}>Остановить{activeRun?.batch_id !== current.id ? " проверку другой сборки" : ""}</button>
                 ) : (
-                  <button className="primary" onClick={startCheck} disabled={busy || !runs || !supplier?.has_session} title={supplier?.has_session ? "Агент найдёт счета на сайте и проверит, можно ли вернуть. Ничего не отправляет" : "Сначала войдите в кабинет и сохраните вход"}>
-                    {busy ? "Запускаю проверку…" : "Проверить счета на сайте"}
+                  <button className="primary" onClick={startCheck} disabled={busy || !runs || !supplier?.has_session} title={supplier?.has_session ? "Агент оформит и отправит возвраты по неотправленным позициям после подтверждения запуска" : "Сначала войдите в кабинет и сохраните вход"}>
+                    {busy ? "Запускаю оформление…" : "Оформить возвраты"}
                   </button>
                 ))}
               </div>
@@ -497,8 +498,8 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             <div className="ag-sum">
               <div><b>{current.positions}</b><span>позиций</span></div>
               <div><b>{current.qty}</b><span>штук</span></div>
-              <div><b>{current.invoices.length}</b><span>счетов = заявок</span></div>
-              <div><b>{done}</b><span>отправлено</span></div>
+              <div><b>{current.invoices.length}</b><span>счетов в сборке</span></div>
+              <div><b>{done}</b><span>позиций оформлено</span></div>
             </div>
             {current.problems.map((p) => (
               <p key={p} className="ag-problem">{p}</p>
@@ -508,7 +509,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             {itemResult?.batchId === current.id && itemResult.error && <p className="error">{itemResult.error}</p>}
             {itemResult?.batchId === current.id && itemResult.rows ? (
               <table className="ag-table">
-                <thead><tr><th>Артикул</th><th>Наименование</th><th>Производитель</th><th>К возврату, шт.</th><th>Склад возврата</th><th>Дата счёта</th><th>Номер счёта</th><th>Причина возврата</th><th>Проверка на сайте</th><th>Номер заявки</th></tr></thead>
+                <thead><tr><th>Артикул</th><th>Наименование</th><th>Производитель</th><th>К возврату, шт.</th><th>Склад возврата</th><th>Дата счёта</th><th>Номер счёта</th><th>Причина возврата</th><th>Результат возврата</th><th>Номер заявки</th></tr></thead>
                 <tbody>
                   {itemResult.rows.map((item) => (
                     <tr key={item.id}>
@@ -527,7 +528,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             </p>
 
             <div className="ag-problem" role="status">
-              Пока агент только проверяет счета на сайте: что найден, не возвращён ли ранее, сходится ли количество. Оформление и отправка заявок ещё не включены, кнопки отправки заблокированы.
+              Запуск оформления требует вашего подтверждения и отправляет реальные заявки. Успешные возвраты сохраняются с номером заявки и исключаются из повторных запусков. Если ответ сайта потерян, позиция блокируется до сверки результата в кабинете поставщика.
             </div>
             {lastRun && lastRun.status !== "running" && lastRun.summary && <p className={lastRun.status === "failed" ? "error" : "muted"}>{lastRun.summary}</p>}
             <h4>Что делает агент</h4>
@@ -577,7 +578,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
           <p className="muted small">Запусков ещё не было. Нажмите «Проверить счета на сайте»: здесь появится каждое действие агента.</p>
         ) : (
           <>
-            <p className="muted small">{checking ? "Идёт проверка…" : { done: "Проверка завершена", failed: "Проверка не удалась", stopped: "Остановлена", running: "" }[lastRun.status]}</p>
+            <p className="muted small">{checking ? "Идёт оформление…" : { done: "Запуск завершён", failed: "Запуск завершён с ошибкой", stopped: "Остановлена", running: "" }[lastRun.status]}</p>
             {lastRun.has_shot && !checking && <RunShot runId={lastRun.id} />}
             <ul>
               {[...lastRun.log].reverse().map((l, i) => (
