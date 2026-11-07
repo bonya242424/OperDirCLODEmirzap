@@ -608,8 +608,8 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
           <p className="muted small">Запусков ещё не было. Нажмите «Проверить счета на сайте»: здесь появится каждое действие агента.</p>
         ) : (
           <>
-            <p className="muted small">{checking ? "Идёт оформление…" : { done: "Запуск завершён", failed: "Запуск завершён с ошибкой", stopped: "Остановлена", running: "" }[lastRun.status]}</p>
-            {lastRun.has_shot && !checking && <RunShot runId={lastRun.id} />}
+            <p className="muted small">{lastRun.status === "running" ? "Идёт оформление…" : { done: "Запуск завершён", failed: "Запуск завершён с ошибкой", stopped: "Остановлена", running: "" }[lastRun.status]}</p>
+            {lastRun.has_shot && lastRun.status !== "running" && <RunShot runId={lastRun.id} />}
             <ul>
               {[...lastRun.log].reverse().map((l, i) => (
                 <li key={i}>{l}</li>
