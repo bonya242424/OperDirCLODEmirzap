@@ -230,17 +230,22 @@ def test_queues_of_different_suppliers_run_in_parallel(client, owner, monkeypatc
             ids[sup["id"]] = [_mk(db, s, f"№0000009{len(sups)}1 от 01.10.2026")]
         sups.append(sup["id"])
     both_inside = threading.Barrier(2, timeout=5)
+    release = threading.Event()
 
     def fake(rid):
         both_inside.wait()  # пройдёт только если обе проверки идут одновременно
+        assert release.wait(5), "Ответ о запуске очередей не получен"
         with SessionLocal() as db:
             db.get(ReturnRun, rid).status = "done"
             db.commit()
 
     monkeypatch.setattr("app.routers.returns.run_check", fake)
     r = client.post("/api/returns/check-queue", headers=owner, json={"batch_ids": [ids[sups[0]][0], ids[sups[1]][0]]})
-    assert r.status_code == 202
-    assert sorted(r.json()["active_suppliers"]) == sorted(sups)
+    try:
+        assert r.status_code == 202
+        assert sorted(r.json()["active_suppliers"]) == sorted(sups)
+    finally:
+        release.set()
     # повторный запуск по тому же поставщику, пока идёт, отклоняется, а по другому разрешён отдельно
     for _ in range(100):
         a = client.get(f"/api/returns/check-queue?supplier_id={sups[0]}", headers=owner).json()

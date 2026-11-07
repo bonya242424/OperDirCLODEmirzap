@@ -365,6 +365,9 @@ class BrowserManager:
         # Не повторяем необратимый клик даже при ошибке навигации.
         self._run(lambda: self._send_return(key, x, y, preview), retry=False)
 
+    def wait_response(self, key: int) -> None:
+        self._run(lambda: self._get(key).page.wait_for_timeout(2000))
+
     async def _send_return(self, key: int, x: float, y: float, preview: dict) -> None:
         if await self._submission_preview(key, x, y) != preview:
             raise BrowserError("Форма изменилась перед отправкой")

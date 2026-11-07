@@ -259,3 +259,25 @@ def test_item_result_rejects_foreign_line(client, owner, monkeypatch, no_browser
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
     with SessionLocal() as db:
         assert all(row.status == "pending" for row in db.query(ReturnLine).filter_by(batch_id=bid))
+
+
+def test_time_excuse_cannot_block_batch_and_context_advances(client, owner, monkeypatch, no_browser):
+    bid = _batch(client, owner, "https://etp.armtek.ru")
+    with SessionLocal() as db:
+        ids = [row.id for row in db.query(ReturnLine).filter_by(batch_id=bid).order_by(ReturnLine.id)]
+    script = Script(
+        call("finish", reason="blocked", summary="Время выполнения не позволяет обработать все строки"),
+        call("record_item_result", line_id=ids[0], status="error", note="Нет подсказки"),
+        call("record_item_result", line_id=ids[1], status="error", note="Товар недоступен"),
+        call("finish", reason="blocked", summary="Сессия истекла, нужна авторизация"),
+    )
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    assert not script.steps
+    initial = script.seen[0][0][0]["content"]
+    after_first = script.seen[2][0][0]["content"]
+    assert f"line_id={ids[0]}:" in initial and f"line_id={ids[1]}:" not in initial
+    assert f"line_id={ids[1]}:" in after_first and f"line_id={ids[0]}:" not in after_first
+    assert "До первого поиска установи обе даты" in script.systems[0]
+    with SessionLocal() as db:
+        assert db.get(ReturnLine, ids[1]).status == "failed"
