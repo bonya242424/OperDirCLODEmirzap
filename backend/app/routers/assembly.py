@@ -38,6 +38,8 @@ def _qa(db: Session, run_id: int) -> list[dict]:
 def _out(r: AssemblyRun, full: bool = False, db: Session | None = None) -> dict:
     d = {"id": r.id, "connection_id": r.connection_id, "status": r.status, "summary": r.summary, "date_from": r.date_from, "date_to": r.date_to, "created_at": r.created_at, "finished_at": r.finished_at, "saved": json.loads(r.saved or "[]")}
     d["note"] = r.note
+    inventory = json.loads(r.inventory or "{}")
+    d["inventory"] = {"total": len(inventory.get("numbers", [])), "complete": inventory.get("complete", False), "suppliers": inventory.get("suppliers", [])}
     if db is not None:
         d["qa"] = _qa(db, r.id)
         d["question"] = next((x for x in d["qa"] if x["answer"] is None), None)

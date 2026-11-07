@@ -5,12 +5,15 @@ import FileViewer from "./FileViewer";
 interface Run {
   id: number;
   connection_id?: number;
-  status: "running" | "done" | "failed" | "stopped";
+  status: "running" | "done" | "failed" | "stopped" | "continued" | "partial";
   summary: string;
   saved: { supplier: string; file_id: number; name: string; duplicate?: boolean; batch_id?: number | null }[];
   log?: string[];
   note?: string;
   created_at?: string;
+  date_from?: string;
+  date_to?: string;
+  inventory?: { total: number; complete: boolean; suppliers: string[] };
   qa?: { id: number; question: string; answer: string | null }[];
   question?: { id: number; question: string; answer: string | null } | null;
 }
@@ -18,7 +21,7 @@ interface Targets {
   rdp: { id: number; title: string; host: string }[];
 }
 
-const STATUS = { running: "Идёт…", done: "Готово", failed: "Не получилось", stopped: "Остановлено" } as const;
+const STATUS = { running: "Идёт…", done: "Готово", failed: "Не получилось", stopped: "Остановлено", continued: "Продолжено", partial: "Собрано не всё" } as const;
 
 /** Живой экран терминала во время сборки: видно, куда агент кликает и что открыто. Красная точка — последний клик. */
 function LiveScreen({ conn, running, log }: { conn: number; running: boolean; log: string[] }) {
@@ -166,6 +169,7 @@ export default function AssemblyRunBox({ from, to, onOpenReturn }: { from: strin
       {run && (
         <div>
           <p><strong>{STATUS[run.status]}</strong> {run.summary}</p>
+          <p className="muted small">Период запуска: {run.date_from} — {run.date_to}. В перечне: {run.inventory?.total ?? 0} документов. {run.inventory?.complete ? "Полный перечень зарегистрирован." : "Полнота перечня ещё не подтверждена."}</p>
           {run.question && (
             <div className="assembly-ask">
               <strong>Агент спрашивает:</strong>

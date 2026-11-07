@@ -7,7 +7,20 @@ from app.assembly_run import AGENT_KEYS, to_csv
 from app.db import SessionLocal
 from app.models import AssemblyRun, Folder, StoredFile
 from app.rdp import rdp_manager
-from tests.test_agents import Script, call
+from tests.test_agents import Script as BaseScript, call
+
+
+class Script(BaseScript):
+    """Файловые сценарии задают синтетический полный перечень; полнота отдельно тестируется RawScript."""
+    def __init__(self, *steps):
+        from app.assembly_run import numbers_in
+        nums = []
+        for step in steps:
+            for tool in step.calls:
+                if tool.name in ("save_document", "save_document_text"):
+                    nums.extend(numbers_in(tool.input.get("label", "")))
+        super().__init__(call("check_saved", numbers=nums, all_suppliers=True), *steps)
+
 
 
 @pytest.fixture()
@@ -283,6 +296,7 @@ def test_assembly_continues_itself_when_documents_left(client, owner, term, monk
     first = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-04", "date_to": "2026-11-03"}).json()["id"]
     run = _wait(client, owner, first)
     assert "продолжена новым запуском" in run["summary"]
+    assert run["status"] == "continued"
     for _ in range(100):
         runs = client.get("/api/assembly/runs", headers=owner).json()
         if len(runs) > 1:
@@ -374,7 +388,7 @@ def test_check_saved_and_saved_list(client, owner, term, monkeypatch):
     monkeypatch.setattr("app.assembly_run.time.sleep", lambda s: None)
     r = client.post("/api/assembly/run", headers=owner, json={"connection_id": cid, "date_from": "2026-10-01", "date_to": "2026-10-31"})
     run = _wait(client, owner, r.json()["id"])
-    assert run["status"] == "done"
+    assert run["status"] != "done"
     results = str(script.seen[-1][0])
     assert "Уже сохранены (НЕ открывать): 6846" in results and "Нужно собрать, в порядке списка: 6871, 6891" in results
     assert "строка 2 (15.10.2026 16:10:50): №6871" in results and "строка 3 (16.10.2026 0:20:00): №6891" in results
