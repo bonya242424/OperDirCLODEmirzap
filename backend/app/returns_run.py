@@ -320,9 +320,10 @@ def run_check(run_id: int) -> None:
         incomplete_finishes = 0
         remaining_at_finish = count_for_run()
         item_steps, item_errors, item_started = 0, 0, time.monotonic()
+        item_milestones = set()
 
         def reset_focus(reason, recover=False):
-            nonlocal plan, context, messages, summary, item_steps, item_errors, item_started
+            nonlocal plan, context, messages, summary, item_steps, item_errors, item_started, item_milestones
             current_id = int(re.search(r"line_id=(\d+):", plan).group(1)) if plan else None
             row = db.get(ReturnLine, current_id) if current_id else None
             if approval and approval.get("attempt"):
@@ -366,6 +367,7 @@ def run_check(run_id: int) -> None:
                 "\nТекущий товар новый. Старые заявки уже сохранены и не относятся к этой строке. Прочитайте текущую страницу и обработайте только этот товар."}]
             summary = ""
             item_steps, item_errors, item_started = 0, 0, time.monotonic()
+            item_milestones = set()
             return True
 
         try:
@@ -411,6 +413,12 @@ def run_check(run_id: int) -> None:
                         if (c.name.startswith("armtek_") and kind != "armtek") or (c.name.startswith("forum_") and kind != "forum"):
                             raise BrowserError("Инструмент другого поставщика недоступен. Используйте инструменты текущего поставщика.")
                         out = _tool(db, manager, key, host, batch, c.name, c.input, done, say, run, approval)
+                        if run.mode == "submit" and c.name in ("armtek_find_product", "forum_available_returns") and c.name not in item_milestones:
+                            found = json.loads(out) if isinstance(out, str) else out
+                            if isinstance(found, dict) and (found.get("rows") or found.get("offers")):
+                                item_milestones.add(c.name)
+                                item_steps, item_errors, item_started = 0, 0, time.monotonic()
+                                say("Товар найден: продолжаю оформление текущей позиции, время на заполнение формы выделено отдельно")
                         if c.name == "finish":
                             summary, finished = str(c.input.get("summary", "")), True
                             blocked = c.input.get("reason") == "blocked"

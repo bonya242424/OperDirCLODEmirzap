@@ -6,6 +6,45 @@ import pytest
 from app.browser import BrowserError, BrowserManager, _Session
 
 
+def test_verified_product_gets_budget_to_finish_without_restarting(client, owner, monkeypatch):
+    import json
+    from app import returns_run
+    from app.db import SessionLocal
+    from app.models import ReturnLine, ReturnRun
+    from app.return_submission import approval_log
+    from tests.test_agents import Script
+    from tests.test_returns_run import _batch, call
+
+    bid = _batch(client, owner, "https://etp.armtek.ru")
+    with SessionLocal() as db:
+        row = db.query(ReturnLine).filter_by(batch_id=bid).first()
+        run = ReturnRun(batch_id=bid, mode="submit", log=approval_log([row]))
+        db.add(run)
+        db.commit()
+        rid, lid = run.id, row.id
+
+    def tool(db, mgr, key, host, batch, name, args, done, say, run, approval):
+        if name == "armtek_find_product":
+            return json.dumps({"rows": [{"text": "Совпавший товар"}]})
+        assert name == "record_item_result"
+        db.get(ReturnLine, lid).status = "failed"
+        db.get(ReturnLine, lid).note = "Товар найден, количество недоступно"
+        db.commit()
+        return "Сохранено"
+
+    monkeypatch.setattr(returns_run, "_tool", tool)
+    monkeypatch.setattr(returns_run, "MAX_ITEM_STEPS", 1)
+    monkeypatch.setattr(returns_run, "manager", SimpleNamespace(open=lambda *a: None, close=lambda *a: None, screenshot=lambda *a: b"image"))
+    script = Script(call("armtek_find_product", line_id=lid), call("record_item_result", line_id=lid, status="error"))
+    monkeypatch.setattr(returns_run, "get_provider", lambda: script)
+    returns_run.run_check(rid)
+    with SessionLocal() as db:
+        log = "\n".join(json.loads(db.get(ReturnRun, rid).log))
+        assert "время на заполнение формы выделено отдельно" in log
+        assert "Восстановление текущего товара" not in log
+        assert db.get(ReturnLine, lid).note == "Товар найден, количество недоступно"
+
+
 def browser_stub(values, responses):
     state = {"writes": [], "waits": [], "reads": list(values), "responses": list(responses)}
 
