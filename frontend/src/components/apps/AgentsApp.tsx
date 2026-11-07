@@ -27,8 +27,9 @@ interface Supplier {
   positions: number;
   has_session: boolean;
   session_saved_at: string | null;
+  check_status: "not_started" | "running" | "done" | "error";
 }
-type SupplierForm = Omit<Supplier, "id" | "batches" | "positions" | "has_session" | "session_saved_at"> & { id: number | null };
+type SupplierForm = Omit<Supplier, "id" | "batches" | "positions" | "has_session" | "session_saved_at" | "check_status"> & { id: number | null };
 const EMPTY_SUP: SupplierForm = { id: null, name: "", portal_url: "", contact: "", rules: "", default_reason: "", notes: "" };
 
 interface Run {
@@ -145,6 +146,13 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
       .catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, []);
   useEffect(load, [load]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      api<Supplier[]>("/returns/suppliers").then(setSuppliers).catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     setSelected((cur) => (cur !== null && batches?.some((x) => x.id === cur) ? cur : batches?.[0]?.id ?? null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -361,6 +369,9 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             <li key={x.id}>
               <button className={x.id === supSel ? "on" : ""} onClick={() => { setSupSel(x.id); reset(); }} disabled={running}>
                 <strong>{x.name}</strong>
+                <span className={`small supplier-check-status supplier-check-${x.check_status ?? "not_started"}`}>
+                  {{ not_started: "Не запущен", running: "В процессе", done: "Готово", error: "Ошибка" }[x.check_status ?? "not_started"]}
+                </span>
                 <span className="muted small">{x.batches} док. · в последнем {x.positions} поз.</span>
               </button>
             </li>

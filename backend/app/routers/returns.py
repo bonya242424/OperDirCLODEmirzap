@@ -344,7 +344,23 @@ def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
     ids = list(db.scalars(select(ReturnBatch.id).where(ReturnBatch.supplier_id == sup.id).order_by(ReturnBatch.id.desc())))
     # каждый документ это отдельная неделя возвратов: числа не суммируем, показываем последний
     positions = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == ids[0])) if ids else 0
+    last_run = db.scalar(
+        select(ReturnRun).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id)
+        .where(ReturnBatch.supplier_id == sup.id)
+        .order_by((ReturnRun.status == "running").desc(), ReturnRun.id.desc()).limit(1)
+    )
+    check_status = "not_started"
+    if _QUEUES.get(sup.id, {}).get("active") or (last_run and last_run.status == "running"):
+        check_status = "running"
+    elif last_run and last_run.status == "failed":
+        check_status = "error"
+    elif last_run and last_run.status == "done":
+        has_errors = db.scalar(
+            select(ReturnLine.id).where(ReturnLine.batch_id == last_run.batch_id, ReturnLine.status == "failed").limit(1)
+        )
+        check_status = "error" if has_errors else "done"
     return {
+        "check_status": check_status,
         "id": sup.id, "name": sup.name, "portal_url": sup.portal_url, "contact": sup.contact, "rules": sup.rules,
         "default_reason": sup.default_reason, "notes": sup.notes, "batches": len(ids), "positions": positions or 0,
         "has_session": bool(sup.session_encrypted), "session_saved_at": sup.session_saved_at.isoformat() if sup.session_saved_at else None,
