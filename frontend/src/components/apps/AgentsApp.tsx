@@ -278,6 +278,22 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
     }
   }
 
+  async function resetErrors() {
+    if (!current || busy) return;
+    setBusy(true);
+    setError("");
+    setInfo("");
+    try {
+      const result = await api<{ reset: number }>(`/returns/batches/${current.id}/reset-errors`, { method: "POST" });
+      setInfo(`Сброшено ошибок: ${result.reset}. Запустите проверку сборки заново.`);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось сбросить ошибки");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function stopCheck() {
     if (!activeRun) return;
     try {
@@ -441,6 +457,11 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               </div>
               <div className="ag-actions">
                 <button className="ghost" onClick={() => remove(current)} disabled={running}>Удалить</button>
+                {me.role === "owner" && (current.status.failed ?? 0) > 0 && (
+                  <button onClick={resetErrors} disabled={busy || !runs || checking || !!queue?.active}>
+                    Сбросить ошибки
+                  </button>
+                )}
                 {me.role === "owner" && (checking ? (
                   <button className="danger" onClick={stopCheck}>Остановить{activeRun?.batch_id !== current.id ? " проверку другой сборки" : ""}</button>
                 ) : (
