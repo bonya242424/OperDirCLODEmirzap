@@ -278,12 +278,13 @@ class BrowserManager:
                 'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion'
             )).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type)).slice(0,150);
             return elements.map((e,index) => {
-                const control = version + '-' + index;
+                const previous = e.getAttribute('data-operdir-control');
+                const control = previous && /^[0-9]+-[0-9]+$/.test(previous) && document.querySelectorAll('[data-operdir-control="' + previous + '"]').length === 1 ? previous : version + '-' + index;
                 e.setAttribute('data-operdir-control', control);
                 const label = (e.labels?.[0]?.innerText || e.placeholder || e.title ||
-                    (e.tagName === 'INPUT' ? e.closest('tr')?.cells?.[0]?.innerText : e.innerText) || '').trim().slice(0,180);
+                    (e.tagName === 'INPUT' ? e.closest('tr')?.cells?.[0]?.innerText : e.innerText) || e.getAttribute('aria-label') || e.name || e.id || '').trim().slice(0,180);
                 return {control,label,tag:e.tagName,type:e.type || '',name:e.name || '',
-                    value:e.value || '',disabled:e.disabled || false,
+                    id:e.id || '',value:e.value || '',disabled:e.disabled || false,
                     options:e.tagName === 'SELECT' ? Array.from(e.options).map(o => ({value:o.value,text:o.text})) : undefined};
             });
         }""", session.controls_version)
@@ -321,11 +322,27 @@ class BrowserManager:
         return {"page": await self._read(key, 6000), "controls": await self._controls(key)}
 
     async def _search_article(self, key: int, control: str, value: str) -> dict:
-        element = await self._control(key, control)
-        info = await element.evaluate("e => ({tag:e.tagName,type:e.type,label:(e.labels?.[0]?.innerText || e.placeholder || e.title || e.closest('tr')?.cells?.[0]?.innerText || '')})")
         import re
-        if info["tag"] != "INPUT" or info["type"] not in ("text", "search", "") or not re.search(r"артикул|код.*материал", info["label"], re.I):
-            raise BrowserError("Выберите поле поиска артикула из browser_controls")
+
+        async def valid(element):
+            info = await element.evaluate("e => ({tag:e.tagName,type:e.type,name:e.name || '',id:e.id || '',disabled:e.disabled,label:[...Array.from(e.labels || []).map(l=>l.innerText), e.placeholder, e.title, e.getAttribute('aria-label'), e.closest('tr')?.cells?.[0]?.innerText].filter(Boolean).join(' ')})")
+            return (info["tag"] == "INPUT" and info["type"] in ("text", "search", "")
+                    and not info.get("disabled") and (any(str(info.get(k, "")).upper() == "MATNR" for k in ("name", "id"))
+                    or re.search(r"артикул|код.*материал", info.get("label", ""), re.I)))
+
+        element = None
+        if control:
+            try:
+                candidate = await self._control(key, control)
+                if await valid(candidate):
+                    element = candidate
+            except BrowserError:
+                pass  # старый ID не нужен, когда поле однозначно определяется по MATNR
+        if element is None:
+            candidate = self._get(key).page.locator('input[name="MATNR" i]:visible, input[id="MATNR" i]:visible')
+            if await candidate.count() != 1 or not await valid(candidate):
+                raise BrowserError("Не найдено единственное доступное поле артикула MATNR. Прочитайте browser_controls заново")
+            element = candidate
         await element.fill("")
         await element.press_sequentially(value, delay=35)
         await self._get(key).page.wait_for_timeout(900)
@@ -351,7 +368,8 @@ class BrowserManager:
                 text:row.innerText,
                 headers:Array.from(row.closest('table')?.rows[0]?.cells || []).map(c=>c.innerText.trim()),
                 controls:Array.from(row.querySelectorAll('input,select,button,a')).filter(e=>e.getClientRects().length && !['hidden','password','file'].includes(e.type)).map(e=>{
-                    const control=version+'-'+index++;e.setAttribute('data-operdir-control',control);
+                    const previous=e.getAttribute('data-operdir-control');
+                    const control=previous && /^[0-9]+-[0-9]+$/.test(previous) && document.querySelectorAll('[data-operdir-control="'+previous+'"]').length===1 ? previous : version+'-'+index++;e.setAttribute('data-operdir-control',control);
                     return {control,tag:e.tagName,type:e.type || '',label:(e.labels?.[0]?.innerText || e.placeholder || e.title || e.innerText || e.name || '').trim(),value:e.value || '',href:e.href || '',disabled:!!e.disabled,
                         options:e.tagName==='SELECT'?Array.from(e.options).map(o=>({value:o.value,text:o.text})):undefined};
                 })

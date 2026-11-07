@@ -81,7 +81,8 @@ def test_offers_match_full_article_and_brand():
     assert matching_offers(offers, row) == offers[:1]
 
 
-def test_article_search_uses_keyboard_events_and_returns_actual_value():
+@pytest.mark.parametrize("label,name,field_id", [("Код артикула (точный по номеру)", "", ""), ("", "MATNR", ""), ("Код", "", "MATNR")])
+def test_article_search_uses_keyboard_events_and_returns_actual_value(label, name, field_id):
     import asyncio
     from types import SimpleNamespace
     from app.browser import BrowserManager, _Session
@@ -90,7 +91,7 @@ def test_article_search_uses_keyboard_events_and_returns_actual_value():
         events = []
 
         async def info(*args):
-            return {"tag": "INPUT", "type": "text", "label": "Код артикула (точный по номеру)"}
+            return {"tag": "INPUT", "type": "text", "label": label, "name": name, "id": field_id}
 
         async def fill(value):
             events.append(("clear", value))

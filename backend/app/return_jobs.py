@@ -211,10 +211,10 @@ def recover_jobs():
             threading.Thread(target=run_job, args=(job.id,), daemon=True, name=f"returns-job-{job.id}").start()
 
 
-def seed_recent_jobs():
+def seed_recent_jobs(seed_key=SEED_KEY, armtek_inputs=False):
     """Продолжает только недавно подтверждённые, незавершённые запуски; остановленные не воскрешает."""
     with SessionLocal() as db:
-        if db.get(AppSetting, SEED_KEY):
+        if db.get(AppSetting, seed_key):
             return
         batches = list(db.scalars(select(ReturnBatch)))
         grouped = {}
@@ -231,6 +231,12 @@ def seed_recent_jobs():
             owner = db.get(User, latest.created_by) if latest.created_by else None
             if not supplier or not supplier.is_active or not supplier_kind(supplier.portal_url) or not owner or owner.role != "owner":
                 continue
+            if armtek_inputs:
+                last_job = db.scalar(select(ReturnJob).where(ReturnJob.supplier_id == supplier.id).order_by(ReturnJob.id.desc()).limit(1))
+                if supplier_kind(supplier.portal_url) != "armtek" or (last_job and last_job.status == "stopped"):
+                    continue
+                if not any("Выберите поле поиска артикула" in entry for run in cohort for entry in json.loads(run.log or "[]")):
+                    continue
             approved = {}
             workers = 1
             for run in reversed(cohort):
@@ -245,7 +251,14 @@ def seed_recent_jobs():
             for row in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch.id, ReturnLine.id.in_(approved), ReturnLine.request_no == "")):
                 if approved[row.id] != {k: getattr(row, k) for k in ("id", "article", "brand", "qty", "invoice_no")}:
                     continue
-                if row.status == "failed" and row.note.startswith("не удалось проверить:"):
+                if armtek_inputs and row.status == "failed":
+                    evidence = json.loads(row.check_evidence or "{}")
+                    if not evidence.get("technical_skip"):
+                        continue
+                    evidence.update(automation_restarts=0, technical_skip=False, matnr_repaired=True)
+                    row.check_evidence = json.dumps(evidence, ensure_ascii=False)
+                    row.status, row.note = "pending", "Повтор после исправления поиска MATNR"
+                if not armtek_inputs and row.status == "failed" and row.note.startswith("не удалось проверить:"):
                     row.status = "pending"
                 if row.status in ("pending", "checked"):
                     rows.append(row)
@@ -256,5 +269,5 @@ def seed_recent_jobs():
         for group in grouped.values():
             if not db.scalar(select(ReturnJob.id).where(ReturnJob.supplier_id == group["supplier"].id, ReturnJob.status.in_(ACTIVE_STATUSES))):
                 create_job(db, group["supplier"], group["ids"], group["approvals"], group["workers"], group["owner"])
-        db.add(AppSetting(key=SEED_KEY, value="done"))
+        db.add(AppSetting(key=seed_key, value="done"))
         db.commit()
