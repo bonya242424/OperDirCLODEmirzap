@@ -503,6 +503,7 @@ class AssemblyRun(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     connection_id: Mapped[int] = mapped_column(Integer)
+    inventory: Mapped[str] = mapped_column(Text, default="{}")
     date_from: Mapped[date] = mapped_column(Date)
     date_to: Mapped[date] = mapped_column(Date)
     note: Mapped[str] = mapped_column(Text, default="")
