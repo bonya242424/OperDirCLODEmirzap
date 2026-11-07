@@ -81,3 +81,55 @@ def test_validation_and_permissions(client, owner):
     assert client.post(_b(sid, "open"), headers=h).status_code == 403
     assert client.get(_b(sid, "screen"), headers=h).status_code == 403
     assert client.get(_b(9999, "screen"), headers=owner).status_code == 404
+
+
+def test_safe_click_follows_same_site_popup_and_keeps_foreign_popup_out():
+    import asyncio
+    from types import SimpleNamespace
+    from app.browser import BrowserError, BrowserManager, _Session
+
+    async def check(popup_url):
+        popup = SimpleNamespace(url=popup_url)
+
+        async def loaded(*args, **kwargs):
+            return None
+
+        popup.wait_for_load_state = loaded
+
+        class Popup:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            @property
+            def value(self):
+                async def result():
+                    return popup
+                return result()
+
+        async def label(*args):
+            return "Фактура 9047166247"
+
+        async def click(*args):
+            return None
+
+        page = SimpleNamespace(
+            url="https://etp.armtek.ru/order_return",
+            wait_for_load_state=loaded, evaluate=label,
+            mouse=SimpleNamespace(click=click),
+            expect_popup=lambda **kwargs: Popup(),
+        )
+        browser = BrowserManager()
+        browser._sessions[1] = _Session(None, page)
+        if popup_url.startswith("https://etp.armtek.ru/"):
+            await browser._safe_click(1, 10, 10)
+            assert browser._sessions[1].page is popup
+        else:
+            with pytest.raises(BrowserError, match="другой сайт"):
+                await browser._safe_click(1, 10, 10)
+            assert browser._sessions[1].page is page
+
+    asyncio.run(check("https://etp.armtek.ru/invoice/view/123"))
+    asyncio.run(check("https://outside.example/invoice"))

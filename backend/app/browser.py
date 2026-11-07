@@ -205,7 +205,13 @@ class BrowserManager:
     async def _read(self, key: int, limit: int) -> str:
         page = self._get(key).page
         await page.wait_for_load_state("domcontentloaded")
-        return (await page.evaluate("document.body ? document.body.innerText : ''"))[:limit]
+        text = (await page.evaluate("document.body ? document.body.innerText : ''"))[:limit]
+        links = await page.evaluate("""() => Array.from(document.querySelectorAll('a[href]'))
+            .filter(a => a.getClientRects().length && a.textContent.trim())
+            .slice(0, 60).map(a => ({text: a.textContent.trim().slice(0, 120), href: a.href}))""")
+        return f"Адрес страницы: {page.url}\n{text}\nСсылки на странице:\n" + "\n".join(
+            f"{link['text']} — {link['href']}" for link in links
+        )
 
     def safe_click(self, key: int, x: float, y: float) -> None:
         if not (0 <= x <= VIEW_W and 0 <= y <= VIEW_H):
@@ -225,7 +231,24 @@ class BrowserManager:
         )
         if re.search(self.RISKY, label, re.I):
             raise BrowserError(f"Кнопка «{label.strip()}» заблокирована: в режиме проверки ничего не отправляется")
-        await page.mouse.click(x, y)
+        from playwright.async_api import TimeoutError as PlaywrightTimeout
+        from urllib.parse import urlparse
+
+        popup = None
+        try:
+            async with page.expect_popup(timeout=700) as opened:
+                await page.mouse.click(x, y)
+            popup = await opened.value
+        except PlaywrightTimeout:
+            pass
+        if popup is not None:
+            try:
+                await popup.wait_for_load_state("domcontentloaded", timeout=10000)
+            except PlaywrightTimeout:
+                pass
+            if urlparse(popup.url).netloc != urlparse(page.url).netloc:
+                raise BrowserError("Новая вкладка ведёт на другой сайт; агент остаётся в кабинете поставщика")
+            self._get(key).page = popup
 
     def safe_type(self, key: int, text: str, clear: bool = True) -> None:
         self._run(lambda: self._safe_type(key, text, clear))

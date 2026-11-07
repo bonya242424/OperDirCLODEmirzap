@@ -223,3 +223,39 @@ def test_supplier_search_rules_are_system_instructions(client, owner, monkeypatc
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
     assert expected in script.systems[0]
     assert "Номер счёта или УПД не вводи в поле поиска товара" in script.systems[0]
+
+
+def test_item_result_does_not_change_other_items_of_invoice(client, owner, monkeypatch, no_browser):
+    bid = _batch(client, owner, "https://example.com")
+    with SessionLocal() as db:
+        rows = list(db.query(ReturnLine).filter_by(batch_id=bid, invoice_no=INV).order_by(ReturnLine.id))
+        line_id, article = rows[0].id, rows[0].article
+        other_id = rows[1].id
+    script = Script(
+        call("record_item_result", line_id=line_id, status="ok", note="Найдено 2, к возврату 1"),
+        call("finish", reason="blocked", summary="Нужен вход"),
+    )
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    with SessionLocal() as db:
+        assert db.get(ReturnLine, line_id).status == "checked"
+        assert db.get(ReturnLine, other_id).status == "pending"
+        assert not db.get(ReturnLine, other_id).note
+    run = _last(client, owner, bid)
+    assert run["status"] == "failed"
+    assert article in "\n".join(run["log"])
+    assert "Осталось товарных строк: 37" in run["summary"]
+    assert "record_item_result" in script.seen[0][1]
+    assert "record_result" not in script.seen[0][1]
+
+
+def test_item_result_rejects_foreign_line(client, owner, monkeypatch, no_browser):
+    bid = _batch(client, owner, "https://example.com")
+    script = Script(
+        call("record_item_result", line_id=999999, status="ok", note="Ошибка выбора"),
+        call("finish", reason="blocked", summary="Стоп"),
+    )
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    with SessionLocal() as db:
+        assert all(row.status == "pending" for row in db.query(ReturnLine).filter_by(batch_id=bid))
