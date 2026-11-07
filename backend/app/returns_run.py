@@ -98,7 +98,7 @@ SUBMIT_SYSTEM = (
 TOOLS = [
     {"name": "armtek_find_product", "description": "Найти текущий артикул и бренд во всех загруженных строках открытой фактуры Армтека, включая строки ниже начала страницы. Возвращает полные строки, заголовки и элементы управления без обрезки текста всей фактуры.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}}, "required": ["line_id"]}},
     {"name": "armtek_search_page", "description": "Вернуться к уже открытой вкладке поиска возвратов Армтека после просмотра фактуры. Если вкладки нет, открыть известную страницу /order_return. Возвращает текст и поля поиска; не отправляет заявок.", "input_schema": {"type": "object", "properties": {}}},
-    {"name": "armtek_search_article", "description": "Ввести только артикул текущей строки с реальными событиями клавиатуры и получить подсказки. variant=0 — исходный артикул; ответ содержит все варианты, включая пробелы и короткий запрос. После ввода выберите полный артикул и бренд в подсказках.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}, "control": {"type": "string"}, "variant": {"type": "integer", "minimum": 0}}, "required": ["line_id", "control"]}},
+    {"name": "armtek_search_article", "description": "Ввести только артикул текущей строки с реальными событиями клавиатуры и получить подсказки. variant=0 — исходный артикул; ответ содержит все варианты, включая пробелы и короткий запрос. Поле MATNR определяется автоматически: control можно не указывать. После ввода выберите полный артикул и бренд в подсказках.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}, "control": {"type": "string"}, "variant": {"type": "integer", "minimum": 0}}, "required": ["line_id"]}},
     {"name": "forum_available_returns", "description": "Прочитать только таблицу «Создание возвратов» Форума. Возвращает доступные поставки текущего артикула и бренда с количеством и ссылкой «Отказ от товара», отдельно от истории старых заявок.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}}, "required": ["line_id"]}},
     {"name": "browser_wait", "description": "Подождать 2 секунды ответа сайта, затем перечитать страницу. Не повторяет отправку.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "browser_controls", "description": "Поля, кнопки и подсказки текущей страницы с названиями и control ID. Прочитай перед заполнением поиска.", "input_schema": {"type": "object", "properties": {}}},
@@ -533,7 +533,7 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             variant = args.get("variant", 0)
             if type(variant) is not int or not 0 <= variant < len(variants):
                 return json.dumps({"error": "Неверный номер варианта", "variants": variants}, ensure_ascii=False)
-            result = mgr.search_article(key, str(args["control"]), variants[variant])
+            result = mgr.search_article(key, str(args.get("control", "")), variants[variant])
             evidence = json.loads(row.check_evidence or "{}")
             if evidence.get("search_run_id") != (run.id if run else None):
                 evidence["searches"] = []
