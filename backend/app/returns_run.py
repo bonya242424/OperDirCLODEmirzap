@@ -168,7 +168,7 @@ def run_check(run_id: int) -> None:
         key = 2_000_000 + run.id
         plan, invoices = _plan(db, batch)
         if not invoices:
-            return finish("done", "Все счета уже проверены. Чтобы проверить заново, загрузите документ повторно.")
+            return finish("done", "Непроверенных строк нет. Для повторной проверки ошибочных строк нажмите «Сбросить ошибки».")
         guides = [g.text for g in db.scalars(select(ReturnGuide).where(ReturnGuide.supplier_id == sup.id, ReturnGuide.status == "ok")) if g.text]
         context = (
             f"Поставщик: {sup.name}. Кабинет: {sup.portal_url}\n"
