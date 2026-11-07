@@ -62,7 +62,7 @@ def test_check_run_never_sends(client, owner, site, monkeypatch):
         call("browser_view"),
         call("browser_goto", url="https://evil.example/"),
         call("record_result", invoice_no=INV, status="already_returned", note="на сайте уже возвращено"),
-        call("finish", summary="Проверил один счёт"),
+        call("finish", reason="blocked", summary="Проверил один счёт"),
     )
     monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
     r = client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
@@ -70,7 +70,7 @@ def test_check_run_never_sends(client, owner, site, monkeypatch):
     run = _last(client, owner, bid)
     if run["status"] == "failed" and "браузер" in run["summary"].lower():
         pytest.skip("chromium недоступен")
-    assert run["status"] == "done", run
+    assert run["status"] == "failed", run
     log = "\n".join(run["log"])
     assert "заблокирована" in log and "только сайт поставщика" in log
     assert "Счёт ЮП0655627 /3: уже возвращено" in log
@@ -85,7 +85,7 @@ def test_check_run_never_sends(client, owner, site, monkeypatch):
 
 def test_type_into_password_blocked(client, owner, site, monkeypatch):
     bid = _batch(client, owner, site)
-    script = Script(call("browser_click", x=150, y=320), call("browser_type", text="hunter2"), call("finish", summary="стоп"))
+    script = Script(call("browser_click", x=150, y=320), call("browser_type", text="hunter2"), call("finish", reason="blocked", summary="стоп"))
     monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
     run = _last(client, owner, bid)
@@ -115,13 +115,13 @@ def test_no_model_key_fails_clearly(client, owner, site, monkeypatch):
 
 def test_second_run_checks_only_unchecked_and_clears_field(client, owner, site, monkeypatch):
     bid = _batch(client, owner, site)
-    first = Script(call("record_result", invoice_no=INV, status="ok", note="ок"), call("finish", summary="один"))
+    first = Script(call("record_result", invoice_no=INV, status="ok", note="ок"), call("finish", reason="blocked", summary="один"))
     monkeypatch.setattr("app.returns_run.get_provider", lambda: first)
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
     run = _last(client, owner, bid)
     if run["status"] == "failed" and "браузер" in run["summary"].lower():
         pytest.skip("chromium недоступен")
-    second = Script(call("browser_click", x=150, y=320), call("finish", summary="готово"))
+    second = Script(call("browser_click", x=150, y=320), call("finish", reason="blocked", summary="готово"))
     monkeypatch.setattr("app.returns_run.get_provider", lambda: second)
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
     plan = second.seen[0][0][0]["content"]
@@ -148,3 +148,78 @@ def test_supplier_runs_endpoint(client, owner, site, monkeypatch):
     runs = client.get(f"/api/returns/suppliers/{sid}/runs", headers=owner).json()
     assert len(runs) == 1 and runs[0]["batch_id"] == bid
     assert client.get("/api/returns/suppliers/9999/runs", headers=owner).status_code == 404
+
+
+@pytest.fixture()
+def no_browser(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("app.returns_run.manager", SimpleNamespace(
+        open=lambda *args: None,
+        close=lambda *args: None,
+        screenshot=lambda *args: b"image",
+    ))
+
+
+def test_early_finish_continues_remaining_invoices(client, owner, monkeypatch, no_browser):
+    bid = _batch(client, owner, "https://example.com")
+    with SessionLocal() as db:
+        invoices = list(dict.fromkeys(row.invoice_no for row in db.query(ReturnLine).filter_by(batch_id=bid)))
+    script = Script(
+        call("record_result", invoice_no=invoices[0], status="error", note="Товар не удалось найти"),
+        call("finish", summary="Один счёт проверен"),
+        say("Больше действий нет"),
+        *(call("record_result", invoice_no=inv, status="ok", note="Подтверждено") for inv in invoices[1:]),
+        call("finish", summary="Все счета проверены"),
+    )
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    run = _last(client, owner, bid)
+    assert run["status"] == "done"
+    assert "Продолжаю" in "\n".join(run["log"])
+    assert "Не проверено" not in run["summary"]
+    assert not script.steps
+
+
+def test_blocked_site_leaves_unchecked_items_pending(client, owner, monkeypatch, no_browser):
+    bid = _batch(client, owner, "https://example.com")
+    script = Script(call("finish", reason="blocked", summary="На странице нет списка фактур"))
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    run = _last(client, owner, bid)
+    assert run["status"] == "failed"
+    assert "нет списка фактур" in run["summary"]
+    assert "Не проверено счетов: 10" in run["summary"]
+    with SessionLocal() as db:
+        assert all(row.status == "pending" for row in db.query(ReturnLine).filter_by(batch_id=bid))
+
+
+def test_repeated_finish_and_step_limit_are_incomplete(client, owner, monkeypatch, no_browser):
+    bid = _batch(client, owner, "https://example.com")
+    script = Script(*(call("finish", summary="Готово") for _ in range(3)))
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    run = _last(client, owner, bid)
+    assert run["status"] == "failed"
+    assert "повторно завершает" in run["summary"]
+    monkeypatch.setattr("app.returns_run.MAX_STEPS", 1)
+    script = Script(say("Думаю"))
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    run = _last(client, owner, bid)
+    assert run["status"] == "failed"
+    assert "предел шагов" in run["summary"]
+
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://etp.armtek.ru", "обязательно выбери в нём товар с сочетанием артикула и бренда"),
+    ("https://itrade.forum-auto.ru", "ищи в разделе возвратов по артикулу товара из сборки"),
+])
+def test_supplier_search_rules_are_system_instructions(client, owner, monkeypatch, no_browser, url, expected):
+    bid = _batch(client, owner, url)
+    script = Script(call("finish", reason="blocked", summary="Тест"))
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
+    assert expected in script.systems[0]
+    assert "Номер счёта или УПД не вводи в поле поиска товара" in script.systems[0]

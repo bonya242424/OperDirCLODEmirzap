@@ -249,3 +249,29 @@ def test_queues_of_different_suppliers_run_in_parallel(client, owner, monkeypatc
             break
         time.sleep(0.05)
     assert [d["status"] for d in a["done"]] == ["done"] and [d["status"] for d in b["done"]] == ["done"]
+
+
+def test_reset_errors_preserves_other_results(client, owner):
+    from app.models import ReturnLine, ReturnRun
+
+    batch = _upload(client, owner, SAMPLE.read_bytes()).json()
+    with SessionLocal() as db:
+        rows = list(db.query(ReturnLine).filter_by(batch_id=batch["id"]).order_by(ReturnLine.id))
+        ids = [row.id for row in rows[:5]]
+        for row, status in zip(rows, ["failed", "checked", "submitted", "pending", "failed"]):
+            row.status = status
+            row.note = "original"
+        rows[2].request_no = "sent-1"
+        rows[4].request_no = "sent-2"
+        db.commit()
+    url = f"/api/returns/batches/{batch['id']}/reset-errors"
+    assert client.post(url, headers=owner).json() == {"reset": 1}
+    with SessionLocal() as db:
+        rows = [db.get(ReturnLine, key) for key in ids]
+        assert [row.status for row in rows] == ["pending", "checked", "submitted", "pending", "failed"]
+        assert rows[0].note == ""
+        assert all(row.note == "original" for row in rows[1:])
+        run = ReturnRun(batch_id=batch["id"], mode="check", created_by=1, status="running")
+        db.add(run)
+        db.commit()
+    assert client.post(url, headers=owner).status_code == 409

@@ -237,6 +237,29 @@ def batches(
     return [_summary(db, b) for b in rows]
 
 
+@router.post("/batches/{batch_id}/reset-errors")
+def reset_errors(batch_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    """Сбросить неудачные проверки выбранной сборки для повторного запуска."""
+    _owner(me)
+    batch = db.get(ReturnBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Сборка не найдена")
+    if _QUEUES.get(batch.supplier_id, {}).get("active") or db.scalar(
+        select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id)
+        .where(ReturnBatch.supplier_id == batch.supplier_id, ReturnRun.status == "running")
+    ):
+        raise HTTPException(status_code=409, detail="Сначала остановите проверку и очередь этого поставщика")
+    rows = list(db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch_id, ReturnLine.status == "failed")))
+    reset = 0
+    for row in rows:
+        if not row.request_no:
+            row.status = "pending"
+            row.note = ""
+            reset += 1
+    db.commit()
+    return {"reset": reset}
+
+
 @router.post("/dedupe")
 def dedupe_batches(db: Session = Depends(get_db), me: User = Depends(current_user)):
     """Убрать дубли документов (один и тот же номер у поставщика). Остаётся тот, где больше результатов проверки."""

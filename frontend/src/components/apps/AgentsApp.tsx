@@ -208,7 +208,6 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
     api<Run[]>(`/returns/suppliers/${supSel}/runs`)
       .then((r) => {
         setRunsBySupplier((previous) => ({ ...previous, [supSel]: r }));
-        setRunsError("");
       })
       .catch((e) => setRunsError(e instanceof Error ? e.message : "Не удалось загрузить журнал"));
   }, [supSel]);
@@ -267,14 +266,41 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   }
 
   async function startCheck() {
-    if (!current || !runs || activeRun) return;
+    if (!current || !runs || activeRun || busy || supSel === null) return;
     setError("");
     setRunsError("");
+    setInfo("");
+    if (!(current.status.pending ?? 0)) {
+      setRunsError((current.status.failed ?? 0) > 0
+        ? "Непроверенных строк нет. Нажмите «Сбросить ошибки», затем запустите проверку."
+        : "Все строки сборки уже проверены.");
+      return;
+    }
+    setBusy(true);
     try {
-      await api(`/returns/batches/${current.id}/check-run`, { method: "POST" });
+      const run = await api<Run>(`/returns/batches/${current.id}/check-run`, { method: "POST" });
+      setRunsBySupplier((previous) => ({ ...previous, [supSel]: [run, ...(previous[supSel] ?? []).filter((item) => item.id !== run.id)] }));
       loadRuns();
     } catch (err) {
       setRunsError(err instanceof Error ? err.message : "Ошибка");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetErrors() {
+    if (!current || busy) return;
+    setBusy(true);
+    setError("");
+    setInfo("");
+    try {
+      const result = await api<{ reset: number }>(`/returns/batches/${current.id}/reset-errors`, { method: "POST" });
+      setInfo(`Сброшено ошибок: ${result.reset}. Запустите проверку сборки заново.`);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось сбросить ошибки");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -441,16 +467,22 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               </div>
               <div className="ag-actions">
                 <button className="ghost" onClick={() => remove(current)} disabled={running}>Удалить</button>
+                {me.role === "owner" && (current.status.failed ?? 0) > 0 && (
+                  <button onClick={resetErrors} disabled={busy || !runs || checking || !!queue?.active}>
+                    Сбросить ошибки
+                  </button>
+                )}
                 {me.role === "owner" && (checking ? (
                   <button className="danger" onClick={stopCheck}>Остановить{activeRun?.batch_id !== current.id ? " проверку другой сборки" : ""}</button>
                 ) : (
-                  <button className="primary" onClick={startCheck} disabled={!runs || !supplier?.has_session} title={supplier?.has_session ? "Агент найдёт счета на сайте и проверит, можно ли вернуть. Ничего не отправляет" : "Сначала войдите в кабинет и сохраните вход"}>
-                    Проверить счета на сайте
+                  <button className="primary" onClick={startCheck} disabled={busy || !runs || !supplier?.has_session} title={supplier?.has_session ? "Агент найдёт счета на сайте и проверит, можно ли вернуть. Ничего не отправляет" : "Сначала войдите в кабинет и сохраните вход"}>
+                    {busy ? "Запускаю проверку…" : "Проверить счета на сайте"}
                   </button>
                 ))}
               </div>
             </header>
 
+            {runsError && <p className="error" role="alert">{runsError}</p>}
             <div className="ag-sum">
               <div><b>{current.positions}</b><span>позиций</span></div>
               <div><b>{current.qty}</b><span>штук</span></div>
@@ -529,7 +561,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
 
       <aside className="ag-log">
         <h3>Журнал запуска</h3>
-        {runsError && <p className="error">{runsError}</p>}
+
         {!lastRun ? (
           <p className="muted small">Запусков ещё не было. Нажмите «Проверить счета на сайте»: здесь появится каждое действие агента.</p>
         ) : (
