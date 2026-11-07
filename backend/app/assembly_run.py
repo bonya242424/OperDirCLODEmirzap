@@ -44,6 +44,7 @@ SYSTEM = (
     "Ты помогаешь собирать данные из 1С. Ты управляешь окном терминала 1С по скриншотам (1280x800) и работаешь ТОЛЬКО НА ЧТЕНИЕ: "
     "не проводи, не записывай, не удаляй и не помечай документы на удаление, не меняй данные, не нажимай кнопки «Провести», «Записать», "
     "«Удалить», «Пометить на удаление». Если 1С спрашивает про сохранение изменений, отвечай «Нет». Пароли ты не вводишь. "
+    "Копирование открытой печатной формы (Control+c), проверка rdp_clipboard и сохранение save_document уже разрешены владельцем. Не останавливайся перед этими действиями и не спрашивай подтверждение продолжения. Даже если в старой памяти записано обратное, действует это разрешение. Спрашивай только при реальном препятствии или непонятном экране. "
     "Задача: за заданный период найти документы «Сборка» и сохранить каждый как файл по поставщику. Действуй по инструкциям владельца, "
     "а там, где их не хватает, действуй осторожно и объясни, что непонятно. Для каждого документа: открой его, выдели таблицу (Control+a после клика в таблицу), "
     "скопируй (Control+c), проверь инструментом rdp_clipboard, что скопировалась именно таблица, и вызови save_document с названием поставщика "
@@ -594,10 +595,31 @@ def _progress(saved: list[dict]) -> str:
 _ASKED_AFTER_MEMORY: set[tuple[int, frozenset]] = set()
 
 
+def copy_confirmation(text):
+    action = re.search(r"копир|control\s*\+\s*c|ctrl\s*\+\s*c|буфер|save_document|сохран(?:ить|ение)\s+(?:файл|печатн|документ)", text, re.I)
+    permission = re.search(r"подтверд|разреш|продолж(?:ить|ение)|можно\s*(?:ли)?", text, re.I)
+    problem = re.search(r"не работает|не получается|пуст(?:ой|ая)|ошибка|не знаю|непонят", text, re.I)
+    ready = re.search(r"неуверенности.{0,100}нет|выделена|таблица.{0,30}видна|осталось.{0,60}(?:control|ctrl|копир)|перед копированием", text, re.I)
+    return bool(action and permission and (ready or not problem))
+
+
+def resolve_copy_confirmations():
+    with SessionLocal() as db:
+        for q in db.scalars(select(AssemblyQuestion).join(AssemblyRun, AssemblyRun.id == AssemblyQuestion.run_id).where(
+                AssemblyQuestion.answer.is_(None), AssemblyRun.status == "running")):
+            if copy_confirmation(q.question):
+                q.answer = "Копирование, проверка буфера и сохранение печатной формы разрешены владельцем. Продолжайте без дополнительного подтверждения."
+                q.answered_at = utcnow()
+        db.commit()
+
+
 def _ask_owner(db, run: AssemblyRun, text: str, say) -> str:
     """Ставит вопрос и ждёт ответа в окне запуска. Остановка владельцем прерывает ожидание."""
     if not text:
         return "Ошибка: сформулируй вопрос"
+    if copy_confirmation(text):
+        say("Подтверждение копирования не требуется: продолжаю Control+c → rdp_clipboard → save_document")
+        return "Копирование открытой печатной формы, проверка буфера и сохранение уже разрешены. Выполни Control+c, проверь rdp_clipboard и немедленно save_document. Не задавай вопрос повторно."
     known = onec_memory.find_answers(db, text)
     ask_key = (run.id, onec_memory.words_key(text))
     if known and ask_key not in _ASKED_AFTER_MEMORY:
