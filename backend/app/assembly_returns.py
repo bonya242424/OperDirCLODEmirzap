@@ -11,6 +11,7 @@ from datetime import date
 
 from sqlalchemy import select
 
+from .return_submission import LOCKED_STATUSES, RUN_LOCK, supplier_busy
 from .models import ReturnBatch, ReturnLine, ReturnRun, ReturnSupplier, StoredFile, utcnow
 
 MAX_LINES = 2000
@@ -135,31 +136,34 @@ class Locked(Exception):
 
 
 def store_batch(db, sup: ReturnSupplier, number: str, lines: list[dict], source: str, user_id: int | None) -> ReturnBatch:
-    """Документ возврата у поставщика. Тот же номер загружен повторно: старый заменяется, если по нему ничего не отправлено."""
-    number = number.strip()[:200]
-    if number:
-        key = batch_key(number)
-        for old in db.scalars(select(ReturnBatch).where(ReturnBatch.supplier_id == sup.id)).all():
-            if batch_key(old.number) != key:
-                continue
-            if db.scalar(select(ReturnLine.id).where(ReturnLine.batch_id == old.id, ReturnLine.status == "submitted").limit(1)):
-                raise Locked(f"Документ {number} уже загружен, и по нему есть отправленные заявки: заменить его нельзя")
-            for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == old.id)):
-                db.delete(r)
-            for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == old.id)):
-                db.delete(r)
-            db.delete(old)
+    with RUN_LOCK:
+        """Документ возврата у поставщика. Тот же номер загружен повторно: старый заменяется, если по нему ничего не отправлено."""
+        if supplier_busy(db, sup.id):
+            raise Locked("У поставщика идёт запуск или очередь. Дождитесь завершения перед повторной загрузкой.")
+        number = number.strip()[:200]
+        if number:
+            key = batch_key(number)
+            for old in db.scalars(select(ReturnBatch).where(ReturnBatch.supplier_id == sup.id)).all():
+                if batch_key(old.number) != key:
+                    continue
+                if db.scalar(select(ReturnLine.id).where(ReturnLine.batch_id == old.id, (ReturnLine.status.in_(LOCKED_STATUSES)) | (ReturnLine.request_no != "")).limit(1)):
+                    raise Locked(f"Документ {number} уже загружен, и по нему есть отправленные заявки: заменить его нельзя")
+                for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == old.id)):
+                    db.delete(r)
+                for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == old.id)):
+                    db.delete(r)
+                db.delete(old)
+            db.flush()
+        batch = ReturnBatch(supplier=sup.name, supplier_id=sup.id, number=number, source=source[:500], created_by=user_id, doc_date=doc_date_of(number) or utcnow().date())
+        db.add(batch)
         db.flush()
-    batch = ReturnBatch(supplier=sup.name, supplier_id=sup.id, number=number, source=source[:500], created_by=user_id, doc_date=doc_date_of(number) or utcnow().date())
-    db.add(batch)
-    db.flush()
-    for ln in lines:
-        row = {k: (v[:500] if isinstance(v, str) else v) for k, v in ln.items()}
-        if not row.get("reason") and sup.default_reason:
-            row["reason"] = sup.default_reason
-        db.add(ReturnLine(batch_id=batch.id, **row))
-    db.commit()
-    return batch
+        for ln in lines:
+            row = {k: (v[:500] if isinstance(v, str) else v) for k, v in ln.items()}
+            if not row.get("reason") and sup.default_reason:
+                row["reason"] = sup.default_reason
+            db.add(ReturnLine(batch_id=batch.id, **row))
+        db.commit()
+        return batch
 
 
 def label_of(file_name: str) -> str:
@@ -185,34 +189,35 @@ def batch_for_file(db, file_id: int) -> ReturnBatch | None:
 
 
 def dedupe(db) -> dict:
-    """Убирает дубли документов возврата (один поставщик и один документ). Остаётся тот, где больше результатов проверки и отправлено больше всего,
-    при равенстве тот, что создан из файла сборки 1С, затем самый новый. Удаляются только дубли без проверенных и отправленных строк."""
-    from collections import defaultdict
+    with RUN_LOCK:
+        """Убирает дубли документов возврата (один поставщик и один документ). Остаётся тот, где больше результатов проверки и отправлено больше всего,
+        при равенстве тот, что создан из файла сборки 1С, затем самый новый. Удаляются только дубли без проверенных и отправленных строк."""
+        from collections import defaultdict
 
-    groups: dict[tuple, list[ReturnBatch]] = defaultdict(list)
-    for b in db.scalars(select(ReturnBatch).where(ReturnBatch.number != "")):
-        groups[(b.supplier_id or b.supplier, batch_key(b.number))].append(b)
-    removed, skipped = 0, 0
-    for batches in groups.values():
-        if len(batches) < 2:
-            continue
-
-        def progress(b: ReturnBatch) -> tuple:
-            sts = [x for x in db.scalars(select(ReturnLine.status).where(ReturnLine.batch_id == b.id))]
-            return (sum(1 for x in sts if x == "submitted"), sum(1 for x in sts if x != "pending"), b.source.startswith("Сборка 1С, файл #"), b.id)
-
-        best = max(batches, key=progress)
-        for b in batches:
-            if b.id == best.id:
+        groups: dict[tuple, list[ReturnBatch]] = defaultdict(list)
+        for b in db.scalars(select(ReturnBatch).where(ReturnBatch.number != "")):
+            groups[(b.supplier_id or b.supplier, batch_key(b.number))].append(b)
+        removed, skipped = 0, 0
+        for batches in groups.values():
+            if len(batches) < 2:
                 continue
-            if progress(b)[1] > 0:  # по нему уже есть результаты: сами не удаляем
-                skipped += 1
-                continue
-            for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == b.id)):
-                db.delete(r)
-            for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == b.id)):
-                db.delete(r)
-            db.delete(b)
-            removed += 1
-    db.commit()
-    return {"removed": removed, "skipped": skipped}
+
+            def progress(b: ReturnBatch) -> tuple:
+                sts = [x for x in db.scalars(select(ReturnLine.status).where(ReturnLine.batch_id == b.id))]
+                return (sum(1 for x in sts if x == "submitted"), sum(1 for x in sts if x != "pending"), b.source.startswith("Сборка 1С, файл #"), b.id)
+
+            best = max(batches, key=progress)
+            for b in batches:
+                if b.id == best.id:
+                    continue
+                if supplier_busy(db, b.supplier_id) or db.scalar(select(ReturnLine.id).where(ReturnLine.batch_id == b.id, ReturnLine.request_no != "").limit(1)) or progress(b)[1] > 0:  # по нему уже есть результаты: сами не удаляем
+                    skipped += 1
+                    continue
+                for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == b.id)):
+                    db.delete(r)
+                for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == b.id)):
+                    db.delete(r)
+                db.delete(b)
+                removed += 1
+        db.commit()
+        return {"removed": removed, "skipped": skipped}

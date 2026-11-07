@@ -55,6 +55,7 @@ class Settings(BaseSettings):
 
     # Хранилище файлов (в Docker это отдельный том)
     files_dir: str = "./data/files"
+    seed_return_suppliers: bool = True
     seed_project_context: bool = True  # класть в «Файлы» документы о системе (папка «Контекст проекта»)
     max_upload_mb: int = 100
 

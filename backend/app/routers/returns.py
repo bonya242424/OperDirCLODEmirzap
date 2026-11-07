@@ -28,6 +28,7 @@ from ..config import settings
 from ..guide_calc import analyze_guide, guides_dir
 from ..models import ReturnBatch, ReturnGuide, ReturnLine, ReturnRun, ReturnSupplier, User, utcnow
 from ..returns_run import run_check
+from ..return_submission import LOCKED_STATUSES, RUN_LOCK, ACTIVE_QUEUES, APPROVAL_PREFIX, eligible_rows, approval_log, supplier_busy, supplier_kind
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
@@ -239,25 +240,26 @@ def batches(
 
 @router.post("/batches/{batch_id}/reset-errors")
 def reset_errors(batch_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
-    """Сбросить неудачные проверки выбранной сборки для повторного запуска."""
-    _owner(me)
-    batch = db.get(ReturnBatch, batch_id)
-    if batch is None:
-        raise HTTPException(status_code=404, detail="Сборка не найдена")
-    if _QUEUES.get(batch.supplier_id, {}).get("active") or db.scalar(
-        select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id)
-        .where(ReturnBatch.supplier_id == batch.supplier_id, ReturnRun.status == "running")
-    ):
-        raise HTTPException(status_code=409, detail="Сначала остановите проверку и очередь этого поставщика")
-    rows = list(db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch_id, ReturnLine.status == "failed")))
-    reset = 0
-    for row in rows:
-        if not row.request_no:
-            row.status = "pending"
-            row.note = ""
-            reset += 1
-    db.commit()
-    return {"reset": reset}
+    with RUN_LOCK:
+        """Сбросить неудачные проверки выбранной сборки для повторного запуска."""
+        _owner(me)
+        batch = db.get(ReturnBatch, batch_id)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Сборка не найдена")
+        if _QUEUES.get(batch.supplier_id, {}).get("active") or db.scalar(
+            select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id)
+            .where(ReturnBatch.supplier_id == batch.supplier_id, ReturnRun.status == "running")
+        ):
+            raise HTTPException(status_code=409, detail="Сначала остановите проверку и очередь этого поставщика")
+        rows = list(db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch_id, ReturnLine.status == "failed")))
+        reset = 0
+        for row in rows:
+            if not row.request_no:
+                row.status = "pending"
+                row.note = ""
+                reset += 1
+        db.commit()
+        return {"reset": reset}
 
 
 @router.post("/dedupe")
@@ -280,13 +282,23 @@ def lines(batch_id: int, db: Session = Depends(get_db), _: User = Depends(curren
 
 @router.delete("/batches/{batch_id}", status_code=204)
 def delete_batch(batch_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
-    b = db.get(ReturnBatch, batch_id)
-    if b is None:
-        raise HTTPException(status_code=404, detail="Сборка не найдена")
-    for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch_id)):
-        db.delete(r)
-    db.delete(b)
-    db.commit()
+    with RUN_LOCK:
+        b = db.get(ReturnBatch, batch_id)
+        if b is None:
+            raise HTTPException(status_code=404, detail="Сборка не найдена")
+        if supplier_busy(db, b.supplier_id):
+            raise HTTPException(status_code=409, detail="Сначала остановите запуск и очередь поставщика")
+        if db.scalar(select(ReturnLine.id).where(
+            ReturnLine.batch_id == batch_id,
+            (ReturnLine.status.in_(LOCKED_STATUSES)) | (ReturnLine.request_no != ""),
+        ).limit(1)):
+            raise HTTPException(status_code=409, detail="Сборка содержит отправленные заявки или незавершённую отправку. Удаление запрещено.")
+        for r in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch_id)):
+            db.delete(r)
+        for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == batch_id)):
+            db.delete(r)
+        db.delete(b)
+        db.commit()
 
 
 class SupplierIn(BaseModel):
@@ -356,7 +368,7 @@ def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
         check_status = "error"
     elif last_run and last_run.status == "done":
         has_errors = db.scalar(
-            select(ReturnLine.id).where(ReturnLine.batch_id == last_run.batch_id, ReturnLine.status == "failed").limit(1)
+            select(ReturnLine.id).where(ReturnLine.batch_id == last_run.batch_id, ReturnLine.status.in_(("failed", "uncertain", "submitting"))).limit(1)
         )
         check_status = "error" if has_errors else "done"
     return {
@@ -385,28 +397,38 @@ def create_supplier(body: SupplierIn, db: Session = Depends(get_db), me: User = 
 
 @router.patch("/suppliers/{supplier_id}")
 def update_supplier(supplier_id: int, body: SupplierPatch, db: Session = Depends(get_db), _: User = Depends(current_user)):
-    sup = _get_supplier(db, supplier_id)
-    data = body.model_dump(exclude_unset=True)
-    try:
-        merged = SupplierIn(**{**{k: getattr(sup, k) for k in SupplierIn.model_fields}, **{k: v for k, v in data.items() if v is not None}})
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()[0]["msg"].removeprefix("Value error, ")) from None
-    if merged.name != sup.name and db.scalar(select(ReturnSupplier).where(ReturnSupplier.name == merged.name)):
-        raise HTTPException(status_code=409, detail="Поставщик с таким названием уже есть")
-    for k, v in merged.model_dump().items():
-        setattr(sup, k, v)
-    db.commit()
-    return _supplier_out(db, sup)
+    with RUN_LOCK:
+        sup = _get_supplier(db, supplier_id)
+        if supplier_busy(db, supplier_id):
+            raise HTTPException(status_code=409, detail="Дождитесь завершения запуска перед изменением поставщика")
+        data = body.model_dump(exclude_unset=True)
+        try:
+            merged = SupplierIn(**{**{k: getattr(sup, k) for k in SupplierIn.model_fields}, **{k: v for k, v in data.items() if v is not None}})
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()[0]["msg"].removeprefix("Value error, ")) from None
+        if merged.name != sup.name and db.scalar(select(ReturnSupplier).where(ReturnSupplier.name == merged.name)):
+            raise HTTPException(status_code=409, detail="Поставщик с таким названием уже есть")
+        for k, v in merged.model_dump().items():
+            setattr(sup, k, v)
+        db.commit()
+        return _supplier_out(db, sup)
 
 
 @router.delete("/suppliers/{supplier_id}", status_code=204)
 def archive_supplier(supplier_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
-    """Поставщик скрывается, загруженные документы остаются."""
-    _get_supplier(db, supplier_id).is_active = False
-    db.commit()
+    with RUN_LOCK:
+        """Поставщик скрывается, загруженные документы остаются."""
+        sup = _get_supplier(db, supplier_id)
+        if supplier_busy(db, supplier_id) or db.scalar(
+            select(ReturnLine.id).join(ReturnBatch, ReturnBatch.id == ReturnLine.batch_id)
+            .where(ReturnBatch.supplier_id == supplier_id, (ReturnLine.status.in_(LOCKED_STATUSES)) | (ReturnLine.request_no != "")).limit(1)
+        ):
+            raise HTTPException(status_code=409, detail="У поставщика есть оформленные возвраты или активный запуск. Скрытие запрещено.")
+        sup.is_active = False
+        db.commit()
 
 
-VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
+    VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
 
 
 def _guide_out(g: ReturnGuide) -> dict:
@@ -626,7 +648,7 @@ def browser_forget(supplier_id: int, db: Session = Depends(get_db), me: User = D
 
 
 # Очереди проверки: у каждого поставщика своя и идёт в своём потоке, так что Армтек, Форум и другие работают параллельно.
-_QUEUES: dict[int, dict] = {}
+_QUEUES: dict[int, dict] = ACTIVE_QUEUES
 
 
 def _fresh() -> dict:
@@ -651,7 +673,7 @@ def _queue_out(db: Session, supplier_id: int | None = None) -> dict:
 
 
 def _run_queue(supplier_id: int, ids: list[int], user_id: int) -> None:
-    """Проверяет документы одного поставщика по очереди. Остановка текущей проверки или «Отменить» прекращает эту очередь."""
+    """Обрабатывает документы одного поставщика по очереди. Остановка текущей проверки или «Отменить» прекращает эту очередь."""
     from ..db import SessionLocal
 
     q = _QUEUES[supplier_id]
@@ -661,10 +683,17 @@ def _run_queue(supplier_id: int, ids: list[int], user_id: int) -> None:
                 break
             q["pos"] = i
             with SessionLocal() as db:
-                run = ReturnRun(batch_id=bid, mode="check", created_by=user_id)
+                if q["cancel"]:
+                    break
+                mode = q.get("mode", "check")
+                log = q.get("approvals", {}).get(bid, "[]")
+                run = ReturnRun(batch_id=bid, mode=mode, created_by=user_id, log=log)
                 db.add(run)
                 db.commit()
                 rid = run.id
+                if q["cancel"]:
+                    run.status = "stopped"
+                    db.commit()
             try:
                 run_check(rid)
             except Exception:  # noqa: BLE001
@@ -680,39 +709,58 @@ def _run_queue(supplier_id: int, ids: list[int], user_id: int) -> None:
 
 class QueueIn(BaseModel):
     batch_ids: list[int]
+    mode: str = "check"
+    confirmed: bool = False
 
 
 @router.post("/check-queue", status_code=202)
 def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
-    """Проверка нескольких документов подряд. Ничего не отправляет, как и одиночная проверка.
+    with RUN_LOCK:
+        """Проверка нескольких документов подряд. Ничего не отправляет, как и одиночная проверка.
 
-    Документы раскладываются по поставщикам: у каждого своя очередь в своём потоке, разные поставщики идут одновременно.
-    """
-    import threading
+        Документы раскладываются по поставщикам: у каждого своя очередь в своём потоке, разные поставщики идут одновременно.
+        """
+        import threading
 
-    _owner(me)
-    ids = list(dict.fromkeys(body.batch_ids))[:50]
-    if not ids:
-        raise HTTPException(status_code=422, detail="Выберите хотя бы один документ")
-    groups: dict[int, list[int]] = {}
-    for bid in ids:
-        batch = db.get(ReturnBatch, bid)
-        if batch is None:
-            raise HTTPException(status_code=404, detail=f"Документ {bid} не найден")
-        sup = db.get(ReturnSupplier, batch.supplier_id) if batch.supplier_id else None
-        if sup is None or not sup.portal_url:
-            raise HTTPException(status_code=422, detail=f"У поставщика документа {batch.number or bid} не указан адрес кабинета")
-        if not sup.session_encrypted:
-            raise HTTPException(status_code=422, detail=f"Для документа {batch.number or bid} сначала войдите в кабинет и сохраните вход")
-        if _QUEUES.get(sup.id, {}).get("active"):
-            raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» очередь уже идёт: дождитесь окончания или отмените её")
-        if db.scalar(select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)):
-            raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» проверка уже идёт")
-        groups.setdefault(sup.id, []).append(bid)
-    for sid, part in groups.items():
-        _QUEUES[sid] = {**_fresh(), "active": True, "ids": part}
-        threading.Thread(target=_run_queue, args=(sid, part, me.id), daemon=True, name=f"returns-queue-{sid}").start()
-    return _queue_out(db, next(iter(groups)))
+        _owner(me)
+        if body.mode not in ("check", "submit"):
+            raise HTTPException(status_code=422, detail="Неизвестный режим запуска")
+        if body.mode == "submit" and not body.confirmed:
+            raise HTTPException(status_code=422, detail="Подтвердите оформление возвратов")
+        ids = list(dict.fromkeys(body.batch_ids))
+        if len(ids) > 50:
+            raise HTTPException(status_code=422, detail="Можно запустить до 50 сборок за один раз")
+        approvals = {}
+        if not ids:
+            raise HTTPException(status_code=422, detail="Выберите хотя бы один документ")
+        groups: dict[int, list[int]] = {}
+        for bid in ids:
+            batch = db.get(ReturnBatch, bid)
+            if batch is None:
+                raise HTTPException(status_code=404, detail=f"Документ {bid} не найден")
+            sup = db.get(ReturnSupplier, batch.supplier_id) if batch.supplier_id else None
+            if sup is None or not sup.portal_url:
+                raise HTTPException(status_code=422, detail=f"У поставщика документа {batch.number or bid} не указан адрес кабинета")
+            if not sup.session_encrypted:
+                raise HTTPException(status_code=422, detail=f"Для документа {batch.number or bid} сначала войдите в кабинет и сохраните вход")
+            if _QUEUES.get(sup.id, {}).get("active"):
+                raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» очередь уже идёт: дождитесь окончания или отмените её")
+            if db.scalar(select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)):
+                raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» проверка уже идёт")
+            if body.mode == "submit":
+                if not supplier_kind(sup.portal_url):
+                    raise HTTPException(status_code=422, detail="Оформление поддерживается для Армтека и Форума")
+                rows = eligible_rows(db, bid)
+                approvals[bid] = approval_log(rows)
+                for row in rows:
+                    if row.status == "failed":
+                        row.status, row.note = "pending", ""
+            groups.setdefault(sup.id, []).append(bid)
+        db.commit()
+        for sid, part in groups.items():
+            _QUEUES[sid] = {**_fresh(), "active": True, "ids": part, "mode": body.mode, "approvals": approvals}
+            threading.Thread(target=_run_queue, args=(sid, part, me.id), daemon=True, name=f"returns-queue-{sid}").start()
+        return _queue_out(db, next(iter(groups)))
 
 
 @router.get("/check-queue")
@@ -723,50 +771,86 @@ def queue_state(supplier_id: int | None = None, db: Session = Depends(get_db), m
 
 @router.post("/check-queue/cancel")
 def cancel_queue(supplier_id: int | None = None, db: Session = Depends(get_db), me: User = Depends(current_user)):
-    _owner(me)
-    targets = [supplier_id] if supplier_id is not None else [k for k, q in _QUEUES.items() if q["active"]]
-    for sid in targets:
-        q = _QUEUES.get(sid)
-        if not q:
-            continue
-        q["cancel"] = True
-        if q["active"] and 0 < q["pos"] <= len(q["ids"]):
-            for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == q["ids"][q["pos"] - 1], ReturnRun.status == "running")):
-                r.status = "stopped"
-    db.commit()
-    return _queue_out(db, supplier_id)
+    with RUN_LOCK:
+        _owner(me)
+        targets = [supplier_id] if supplier_id is not None else [k for k, q in _QUEUES.items() if q["active"]]
+        for sid in targets:
+            q = _QUEUES.get(sid)
+            if not q:
+                continue
+            q["cancel"] = True
+            if q["active"] and 0 < q["pos"] <= len(q["ids"]):
+                for r in db.scalars(select(ReturnRun).where(ReturnRun.batch_id == q["ids"][q["pos"] - 1], ReturnRun.status == "running")):
+                    r.status = "stopped"
+        db.commit()
+        return _queue_out(db, supplier_id)
 
 
 def _run_out(r: ReturnRun) -> dict:
     return {
         "id": r.id, "batch_id": r.batch_id, "mode": r.mode, "status": r.status, "summary": r.summary,
-        "has_shot": bool(r.last_shot), "log": json.loads(r.log or "[]"), "created_at": r.created_at.isoformat(),
+        "has_shot": bool(r.last_shot), "log": [entry for entry in json.loads(r.log or "[]") if not entry.startswith(APPROVAL_PREFIX)], "created_at": r.created_at.isoformat(),
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
     }
 
 
 @router.post("/batches/{batch_id}/check-run", status_code=202)
 def start_check(batch_id: int, tasks: BackgroundTasks, db: Session = Depends(get_db), me: User = Depends(current_user)):
-    """Проверка счетов на сайте поставщика под сохранённым входом. Ничего не отправляет."""
-    _owner(me)
-    batch = db.get(ReturnBatch, batch_id)
-    if batch is None:
-        raise HTTPException(status_code=404, detail="Документ не найден")
-    sup = db.get(ReturnSupplier, batch.supplier_id) if batch.supplier_id else None
-    if sup is None or not sup.portal_url:
-        raise HTTPException(status_code=422, detail="У поставщика не указан адрес кабинета")
-    if not sup.session_encrypted:
-        raise HTTPException(status_code=422, detail="Сначала войдите в кабинет и сохраните вход")
-    busy = db.scalar(
-        select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)
-    )
-    if busy:
-        raise HTTPException(status_code=409, detail="У этого поставщика проверка уже идёт")
-    run = ReturnRun(batch_id=batch.id, mode="check", created_by=me.id)
-    db.add(run)
-    db.commit()
-    tasks.add_task(run_check, run.id)
-    return _run_out(run)
+    with RUN_LOCK:
+        """Проверка счетов на сайте поставщика под сохранённым входом. Ничего не отправляет."""
+        _owner(me)
+        batch = db.get(ReturnBatch, batch_id)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        sup = db.get(ReturnSupplier, batch.supplier_id) if batch.supplier_id else None
+        if sup is None or not sup.portal_url:
+            raise HTTPException(status_code=422, detail="У поставщика не указан адрес кабинета")
+        if not sup.session_encrypted:
+            raise HTTPException(status_code=422, detail="Сначала войдите в кабинет и сохраните вход")
+        busy = db.scalar(
+            select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)
+        )
+        if busy:
+            raise HTTPException(status_code=409, detail="У этого поставщика проверка уже идёт")
+        run = ReturnRun(batch_id=batch.id, mode="check", created_by=me.id)
+        db.add(run)
+        db.commit()
+        tasks.add_task(run_check, run.id)
+        return _run_out(run)
+
+
+class SubmitIn(BaseModel):
+    confirmed: bool
+
+
+@router.post("/batches/{batch_id}/submit-run", status_code=202)
+def start_submit(batch_id: int, body: SubmitIn, tasks: BackgroundTasks, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    with RUN_LOCK:
+        _owner(me)
+        if not body.confirmed:
+            raise HTTPException(status_code=422, detail="Подтвердите оформление возвратов")
+        batch = db.get(ReturnBatch, batch_id)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Сборка не найдена")
+        sup = _get_supplier(db, batch.supplier_id)
+        if not sup.portal_url or not sup.session_encrypted:
+            raise HTTPException(status_code=422, detail="Укажите кабинет поставщика и сохраните вход")
+        if not supplier_kind(sup.portal_url):
+            raise HTTPException(status_code=422, detail="Оформление поддерживается для Армтека и Форума")
+        if supplier_busy(db, sup.id):
+            raise HTTPException(status_code=409, detail="У поставщика уже идёт запуск или очередь")
+        rows = eligible_rows(db, batch.id)
+        if not rows:
+            raise HTTPException(status_code=409, detail="Нет доступных к оформлению строк. Отправленные и спорные отправки защищены.")
+        log = approval_log(rows)
+        for row in rows:
+            if row.status == "failed":
+                row.status, row.note = "pending", ""
+        run = ReturnRun(batch_id=batch.id, mode="submit", created_by=me.id, log=log)
+        db.add(run)
+        db.commit()
+        tasks.add_task(run_check, run.id)
+        return _run_out(run)
 
 
 @router.get("/suppliers/{supplier_id}/runs")
@@ -801,14 +885,15 @@ def run_shot(run_id: int, db: Session = Depends(get_db), me: User = Depends(curr
 
 @router.post("/runs/{run_id}/stop")
 def stop_run(run_id: int, db: Session = Depends(get_db), me: User = Depends(current_user)):
-    _owner(me)
-    r = db.get(ReturnRun, run_id)
-    if r is None:
-        raise HTTPException(status_code=404, detail="Запуск не найден")
-    if r.status == "running":
-        r.status = "stopped"
-        db.commit()
-    return _run_out(r)
+    with RUN_LOCK:
+        _owner(me)
+        r = db.get(ReturnRun, run_id)
+        if r is None:
+            raise HTTPException(status_code=404, detail="Запуск не найден")
+        if r.status == "running":
+            r.status = "stopped"
+            db.commit()
+        return _run_out(r)
 
 
 def _assembly_file(db: Session, file_id: int):

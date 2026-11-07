@@ -258,7 +258,7 @@ class ReturnSupplier(Base):
 
 
 class ReturnRun(Base):
-    """Запуск агента по документу с возвратами. mode=check: только проверка счетов на сайте, ничего не отправляется."""
+    """Запуск агента по документу с возвратами. mode=check: проверка, mode=submit: подтверждённое владельцем оформление."""
 
     __tablename__ = "return_runs"
 
@@ -319,7 +319,7 @@ class ReturnLine(Base):
     invoice_date: Mapped[str] = mapped_column(String(32), default="")
     invoice_no: Mapped[str] = mapped_column(String(100), default="", index=True)
     reason: Mapped[str] = mapped_column(String(300), default="")
-    # pending | submitted | skipped | failed
+    # pending | checked | submitting | submitted | uncertain | skipped | failed
     status: Mapped[str] = mapped_column(String(16), default="pending")
     request_no: Mapped[str] = mapped_column(String(100), default="")
     note: Mapped[str] = mapped_column(Text, default="")

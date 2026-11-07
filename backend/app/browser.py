@@ -57,9 +57,9 @@ class BrowserManager:
                 self._loop, self._thread = loop, t
             return self._loop
 
-    def _run(self, make, timeout: float = 45.0):
+    def _run(self, make, timeout: float = 45.0, retry: bool = True):
         """make: функция без аргументов, возвращающая корутину. При гонке со сменой страницы повторяем один раз."""
-        for attempt in (1, 2):
+        for attempt in ((1, 2) if retry else (1,)):
             fut: Future = asyncio.run_coroutine_threadsafe(make(), self._ensure_loop())
             try:
                 return fut.result(timeout=timeout)
@@ -71,7 +71,7 @@ class BrowserManager:
             except Exception as exc:  # noqa: BLE001 - наружу только понятный текст
                 msg = (str(exc).strip().splitlines() or [""])[0][:200]
                 transient = "context was destroyed" in msg or "navigat" in msg.lower()
-                if transient and attempt == 1:
+                if transient and attempt == 1 and retry:
                     time.sleep(1.0)
                     continue
                 log.warning("Ошибка браузера: %s: %s", type(exc).__name__, msg)
@@ -184,7 +184,7 @@ class BrowserManager:
             pass
 
     # --- режим проверки для агента: опасные действия блокируются кодом, а не просьбой к модели ---
-    RISKY = r"отправ|подтверд|создать заяв|удал|submit|send|confirm|delete"
+    RISKY = r"отправ|подтверд|оформить возврат|создать заяв|удал|submit|send|confirm|delete"
 
     def goto(self, key: int, url: str) -> None:
         self._run(lambda: self._goto(key, url), timeout=60.0)
@@ -205,14 +205,20 @@ class BrowserManager:
     async def _read(self, key: int, limit: int) -> str:
         page = self._get(key).page
         await page.wait_for_load_state("domcontentloaded")
-        return (await page.evaluate("document.body ? document.body.innerText : ''"))[:limit]
+        text = (await page.evaluate("document.body ? document.body.innerText : ''"))[:limit]
+        links = await page.evaluate("""() => Array.from(document.querySelectorAll('a[href]'))
+            .filter(a => a.getClientRects().length && a.textContent.trim())
+            .slice(0, 60).map(a => ({text: a.textContent.trim().slice(0, 120), href: a.href}))""")
+        return f"Адрес страницы: {page.url}\n{text}\nСсылки на странице:\n" + "\n".join(
+            f"{link['text']} — {link['href']}" for link in links
+        )
 
-    def safe_click(self, key: int, x: float, y: float) -> None:
+    def safe_click(self, key: int, x: float, y: float, allow_return_preview: bool = False) -> None:
         if not (0 <= x <= VIEW_W and 0 <= y <= VIEW_H):
             raise BrowserError("Клик за пределами окна")
-        self._run(lambda: self._safe_click(key, x, y))
+        self._run(lambda: self._safe_click(key, x, y, allow_return_preview))
 
-    async def _safe_click(self, key: int, x: float, y: float) -> None:
+    async def _safe_click(self, key: int, x: float, y: float, allow_return_preview: bool = False) -> None:
         import re
 
         page = self._get(key).page
@@ -224,8 +230,147 @@ class BrowserManager:
             [x, y],
         )
         if re.search(self.RISKY, label, re.I):
-            raise BrowserError(f"Кнопка «{label.strip()}» заблокирована: в режиме проверки ничего не отправляется")
+            is_preview = allow_return_preview and label.strip() == "Оформить возврат" and await page.evaluate(
+                "() => location.hostname.endsWith('.armtek.ru') && !/Оформить возврат по фактуре/i.test(document.body.innerText)"
+            )
+            if not is_preview:
+                raise BrowserError(f"Кнопка «{label.strip()}» заблокирована: в режиме проверки ничего не отправляется")
+        from playwright.async_api import TimeoutError as PlaywrightTimeout
+        from urllib.parse import urlparse
+
+        popup = None
+        try:
+            async with page.expect_popup(timeout=700) as opened:
+                await page.mouse.click(x, y)
+            popup = await opened.value
+        except PlaywrightTimeout:
+            pass
+        if popup is not None:
+            try:
+                await popup.wait_for_load_state("domcontentloaded", timeout=10000)
+            except PlaywrightTimeout:
+                pass
+            if urlparse(popup.url).netloc != urlparse(page.url).netloc:
+                raise BrowserError("Новая вкладка ведёт на другой сайт; агент остаётся в кабинете поставщика")
+            self._get(key).page = popup
+
+    def controls(self, key: int) -> list[dict]:
+        return self._run(lambda: self._controls(key))
+
+    async def _controls(self, key: int) -> list[dict]:
+        session = self._get(key)
+        session.controls_version = getattr(session, "controls_version", 0) + 1
+        return await session.page.evaluate("""version => {
+            const elements = Array.from(document.querySelectorAll(
+                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion'
+            )).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type)).slice(0,150);
+            return elements.map((e,index) => {
+                const control = version + '-' + index;
+                e.setAttribute('data-operdir-control', control);
+                const label = (e.labels?.[0]?.innerText || e.placeholder || e.title ||
+                    (e.tagName === 'INPUT' ? e.closest('tr')?.cells?.[0]?.innerText : e.innerText) || '').trim().slice(0,180);
+                return {control,label,tag:e.tagName,type:e.type || '',name:e.name || '',
+                    value:e.value || '',disabled:e.disabled || false,
+                    options:e.tagName === 'SELECT' ? Array.from(e.options).map(o => ({value:o.value,text:o.text})) : undefined};
+            });
+        }""", session.controls_version)
+
+    async def _control(self, key: int, control: str):
+        import re
+        if not re.fullmatch(r"[0-9]+-[0-9]+", control):
+            raise BrowserError("Неверный идентификатор элемента")
+        locator = self._get(key).page.locator(f'[data-operdir-control="{control}"]')
+        if await locator.count() != 1:
+            raise BrowserError("Элемент изменился. Прочитайте browser_controls заново")
+        return locator
+
+    def fill_control(self, key: int, control: str, value: str) -> None:
+        self._run(lambda: self._fill_control(key, control, value))
+
+    async def _fill_control(self, key: int, control: str, value: str) -> None:
+        element = await self._control(key, control)
+        info = await element.evaluate("(e) => ({tag:e.tagName,type:e.type,disabled:e.disabled,readonly:e.readOnly})")
+        if info["disabled"] or info["readonly"] or info["tag"] not in ("INPUT", "TEXTAREA", "SELECT") or info["type"] in ("password","file","hidden","submit","button","reset","checkbox","radio"):
+            raise BrowserError("Это поле нельзя заполнять агенту")
+        if info["tag"] == "SELECT":
+            await element.select_option(value=value)
+        else:
+            await element.fill(value)
+            await element.press("End")
+
+    def control_point(self, key: int, control: str) -> tuple[float, float]:
+        return self._run(lambda: self._control_point(key, control))
+
+    async def _control_point(self, key: int, control: str) -> tuple[float, float]:
+        element = await self._control(key, control)
+        await element.scroll_into_view_if_needed()
+        box = await element.bounding_box()
+        if not box:
+            raise BrowserError("Элемент не виден")
+        return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+    def click_control(self, key: int, control: str, allow_return_preview: bool = False) -> None:
+        self._run(lambda: self._click_control(key, control, allow_return_preview))
+
+    async def _click_control(self, key: int, control: str, allow_return_preview: bool) -> None:
+        x, y = await self._control_point(key, control)
+        await self._safe_click(key, x, y, allow_return_preview)
+
+    def submission_preview(self, key: int, x: float, y: float) -> dict:
+        if not (0 <= x <= VIEW_W and 0 <= y <= VIEW_H):
+            raise BrowserError("Клик за пределами окна")
+        return self._run(lambda: self._submission_preview(key, x, y))
+
+    async def _submission_preview(self, key: int, x: float, y: float) -> dict:
+        page = self._get(key).page
+        data = await page.evaluate(r"""([x,y]) => {
+            const el = document.elementFromPoint(x,y);
+            const button = el && el.closest('button,input[type=submit],a,[role=button]');
+            if (!button) return {label: '', text: '', items: [], quantities: [], values: ''};
+            const root = location.hostname.endsWith('.forum-auto.ru') ? document.body : (button.closest('.modal-content,[role=dialog],.modal') || button.closest('form') || document.body);
+            const visible = e => e.getClientRects().length > 0;
+            const label = (button.innerText || button.value || '').trim();
+            const items = [];
+            for (const table of root.querySelectorAll('table')) {
+                const headings = Array.from(table.querySelectorAll('tr')).find(r => /Количество\s+к\s+возврату/i.test(r.innerText));
+                if (!headings) continue;
+                const cells = Array.from(headings.children).map(e => e.innerText.trim());
+                const a = cells.findIndex(t => /^(Код|Артикул)$/i.test(t));
+                const b = cells.findIndex(t => /^Бренд$/i.test(t));
+                const q = cells.findIndex(t => /Количество\s+к\s+возврату/i.test(t));
+                if (a < 0 || b < 0 || q < 0) continue;
+                for (const row of table.querySelectorAll('tr')) {
+                    const c = Array.from(row.children);
+                    if (row === headings || !visible(row) || c.length <= Math.max(a,b,q)) continue;
+                    const qty = Number(c[q].innerText.trim().replace(',', '.'));
+                    if (Number.isFinite(qty)) items.push({article:c[a].innerText.trim(),brand:c[b].innerText.trim(),qty});
+                }
+            }
+            const quantities = [];
+            for (const row of root.querySelectorAll('tr')) {
+                if (row.querySelector('tr') || !/Кол-во\s+для\s+возврата/i.test(row.innerText)) continue;
+                for (const input of row.querySelectorAll('input:not([type=hidden])')) {
+                    if (visible(input)) quantities.push(Number(input.value.replace(',', '.')));
+                }
+            }
+            const values = Array.from(root.querySelectorAll('input,textarea,select'))
+                .filter(visible).map(e => e.tagName === 'SELECT' ? (e.selectedOptions[0]?.text || '') : e.value).join(' ');
+            const text = root.innerText;
+            const documentMatch = text.match(/(?:Документ\s*:|фактуре\s*№)\s*([0-9]+)/i);
+            return {label,text,items,quantities,values,supplier_document:documentMatch ? documentMatch[1] : ''};
+        }""", [x, y])
+        return {"url": page.url, "page_text": await page.evaluate("document.body.innerText"), **data}
+
+    def send_return(self, key: int, x: float, y: float, preview: dict) -> None:
+        # Не повторяем необратимый клик даже при ошибке навигации.
+        self._run(lambda: self._send_return(key, x, y, preview), retry=False)
+
+    async def _send_return(self, key: int, x: float, y: float, preview: dict) -> None:
+        if await self._submission_preview(key, x, y) != preview:
+            raise BrowserError("Форма изменилась перед отправкой")
+        page = self._get(key).page
         await page.mouse.click(x, y)
+        await page.wait_for_timeout(700)
 
     def safe_type(self, key: int, text: str, clear: bool = True) -> None:
         self._run(lambda: self._safe_type(key, text, clear))
@@ -248,9 +393,9 @@ class BrowserManager:
         import re
 
         page = self._get(key).page
-        if name == "Enter":
+        if name in ("Enter", "Space"):
             texts = await page.evaluate(
-                """() => { const f = document.activeElement && document.activeElement.form; if (!f) return [];
+                """() => { const f = document.activeElement && document.activeElement.form; if (!f) { const el = document.activeElement; return el ? [(el.innerText || el.value || '') + ''] : []; }
                 return [...f.querySelectorAll('button,input[type=submit]')].map(b => (b.innerText || b.value || '') + ''); }"""
             )
             if any(re.search(self.RISKY, t, re.I) for t in texts):
