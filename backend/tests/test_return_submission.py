@@ -7,7 +7,8 @@ from app.browser import BrowserError
 from app.db import SessionLocal
 from app.models import ReturnLine, ReturnRun
 from app.return_submission import APPROVAL_PREFIX, validate_preview
-from tests.test_agents import Script, call
+from tests.test_agents import Script
+from tests.test_returns_run import call
 from tests.test_returns import SAMPLE
 from tests.test_returns_run import _batch, _last, no_browser
 
@@ -307,3 +308,26 @@ def test_reconciliation_records_found_receipt_and_rejects_active_or_staff(client
     assert client.delete(f"/api/returns/batches/{bid}", headers=owner).status_code == 409
     with SessionLocal() as db:
         assert db.get(ReturnLine, line_id).request_no == "R-123"
+
+
+def test_submit_mode_sends_current_item_before_advancing_to_next(client, owner, monkeypatch):
+    bid, line_id, browser, _ = setup_submission(client, owner, monkeypatch)
+    with SessionLocal() as db:
+        next_id = db.query(ReturnLine).filter(ReturnLine.batch_id == bid, ReturnLine.id != line_id).order_by(ReturnLine.id).first().id
+    script = Script(
+        call("record_item_result", line_id=line_id, status="ok", note="Можно оформить"),
+        call("submit_return", line_ids=[next_id], x=10, y=10),  # следующий товар ещё нельзя отправлять
+        call("submit_return", line_ids=[line_id], x=10, y=10),
+        call("record_submission", request_no="987654321"),
+        call("finish", reason="blocked", summary="Тест остановлен"),
+    )
+    monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
+    client.post(f"/api/returns/batches/{bid}/submit-run", headers=owner, json={"confirmed": True})
+    assert browser.clicks == 1
+    assert f"line_id={line_id}:" in script.seen[3][0][0]["content"]
+    assert f"line_id={next_id}:" not in script.seen[3][0][0]["content"]
+    assert f"line_id={next_id}:" in script.seen[4][0][0]["content"]
+    with SessionLocal() as db:
+        assert db.get(ReturnLine, line_id).status == "submitted"
+        assert db.get(ReturnLine, next_id).status == "pending"
+    assert "Сначала завершите оформление текущего товара" in "\n".join(_last(client, owner, bid)["log"])

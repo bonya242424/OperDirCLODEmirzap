@@ -15,6 +15,7 @@ from .assembly_run import reset_stale as reset_stale_assembly
 from .routers import bitrix as bitrix_router
 from . import assembly_returns
 from . import project_context_seed, return_suppliers_seed
+from .return_verification import invalidate_legacy
 from .routers.returns import backfill_doc_dates
 from .metric_calc import reset_stale
 from .routers import search as search_router
@@ -67,6 +68,7 @@ async def lifespan(_: FastAPI):
             return_suppliers_seed.sync(db)
         if settings.seed_project_context:
             project_context_seed.sync(db)
+        invalidate_legacy(db)
     reset_stale()
     reset_stale_guides()
     reset_stale_runs()

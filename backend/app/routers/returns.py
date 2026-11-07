@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from ..config import settings
 from ..guide_calc import analyze_guide, guides_dir
 from ..models import ReturnBatch, ReturnGuide, ReturnLine, ReturnRun, ReturnSupplier, User, utcnow
 from ..returns_run import run_check
+from ..return_workers import execute_runs, split_approval
 from ..return_submission import LOCKED_STATUSES, RUN_LOCK, ACTIVE_QUEUES, APPROVAL_PREFIX, eligible_rows, approval_log, supplier_busy, supplier_kind
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
@@ -429,8 +430,9 @@ def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
     elif last_run and last_run.status == "failed":
         check_status = "error"
     elif last_run and last_run.status == "done":
+        unresolved_statuses = ("failed", "uncertain", "submitting", "pending", "checked") if last_run.mode == "submit" else ("failed", "uncertain", "submitting")
         has_errors = db.scalar(
-            select(ReturnLine.id).where(ReturnLine.batch_id == last_run.batch_id, ReturnLine.status.in_(("failed", "uncertain", "submitting"))).limit(1)
+            select(ReturnLine.id).where(ReturnLine.batch_id == last_run.batch_id, ReturnLine.status.in_(unresolved_statuses)).limit(1)
         )
         check_status = "error" if has_errors else "done"
     return {
@@ -495,7 +497,7 @@ def archive_supplier(supplier_id: int, db: Session = Depends(get_db), _: User = 
 def _guide_out(g: ReturnGuide) -> dict:
     return {
         "id": g.id, "supplier_id": g.supplier_id, "filename": g.filename, "size": g.size, "status": g.status,
-        "text": g.text, "message": g.message, "created_at": g.created_at.isoformat(),
+        "text": g.text, "message": g.message, "created_at": g.created_at.isoformat(), "has_video": bool(g.disk_name and g.size),
     }
 
 
@@ -568,6 +570,8 @@ def edit_guide(guide_id: int, body: GuideText, db: Session = Depends(get_db), _:
 @router.post("/guides/{guide_id}/reanalyze", status_code=202)
 def reanalyze_guide(guide_id: int, tasks: BackgroundTasks, db: Session = Depends(get_db), _: User = Depends(current_user)):
     g = _get_guide(db, guide_id)
+    if not g.disk_name or not g.size:
+        raise HTTPException(status_code=409, detail="Это текстовая инструкция. Для нового разбора загрузите видео.")
     if g.status == "running":
         raise HTTPException(status_code=409, detail="Разбор уже идёт")
     g.status, g.message = "running", ""
@@ -579,7 +583,8 @@ def reanalyze_guide(guide_id: int, tasks: BackgroundTasks, db: Session = Depends
 @router.delete("/guides/{guide_id}", status_code=204)
 def delete_guide(guide_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
     g = _get_guide(db, guide_id)
-    (guides_dir() / g.disk_name).unlink(missing_ok=True)
+    if g.disk_name:
+        (guides_dir() / g.disk_name).unlink(missing_ok=True)
     db.delete(g)
     db.commit()
 
@@ -748,21 +753,24 @@ def _run_queue(supplier_id: int, ids: list[int], user_id: int) -> None:
                     break
                 mode = q.get("mode", "check")
                 log = q.get("approvals", {}).get(bid, "[]")
-                run = ReturnRun(batch_id=bid, mode=mode, created_by=user_id, log=log)
-                db.add(run)
+                parts = split_approval(log, q.get("workers", 1)) if mode == "submit" else [log]
+                runs = [ReturnRun(batch_id=bid, mode=mode, created_by=user_id, log=part) for part in parts]
+                db.add_all(runs)
                 db.commit()
-                rid = run.id
+                run_ids = [run.id for run in runs]
                 if q["cancel"]:
-                    run.status = "stopped"
+                    for run in runs:
+                        run.status = "stopped"
                     db.commit()
             try:
-                run_check(rid)
+                execute_runs(run_ids, run_check)
             except Exception:  # noqa: BLE001
                 pass
             with SessionLocal() as db:
-                r = db.get(ReturnRun, rid)
-                q["done"].append({"batch_id": bid, "status": r.status if r else "failed"})
-                if r is not None and r.status == "stopped":
+                statuses = [db.get(ReturnRun, rid).status for rid in run_ids]
+                status = "stopped" if "stopped" in statuses else "done" if all(s == "done" for s in statuses) else "failed"
+                q["done"].append({"batch_id": bid, "status": status})
+                if status == "stopped":
                     q["cancel"] = True
     finally:
         q["active"] = False
@@ -772,6 +780,7 @@ class QueueIn(BaseModel):
     batch_ids: list[int]
     mode: str = "check"
     confirmed: bool = False
+    workers: int = Field(default=1, ge=1, le=5)
 
 
 @router.post("/check-queue", status_code=202)
@@ -819,7 +828,8 @@ def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends
             groups.setdefault(sup.id, []).append(bid)
         db.commit()
         for sid, part in groups.items():
-            _QUEUES[sid] = {**_fresh(), "active": True, "ids": part, "mode": body.mode, "approvals": approvals}
+            workers = body.workers if supplier_kind(db.get(ReturnSupplier, sid).portal_url) == "armtek" else 1
+            _QUEUES[sid] = {**_fresh(), "active": True, "ids": part, "mode": body.mode, "approvals": approvals, "workers": workers}
             threading.Thread(target=_run_queue, args=(sid, part, me.id), daemon=True, name=f"returns-queue-{sid}").start()
         return _queue_out(db, next(iter(groups)))
 
@@ -848,10 +858,13 @@ def cancel_queue(supplier_id: int | None = None, db: Session = Depends(get_db), 
 
 
 def _run_out(r: ReturnRun) -> dict:
+    entries = json.loads(r.log or "[]")
+    worker = json.loads(entries[0][len(APPROVAL_PREFIX):]).get("worker", {}) if entries and entries[0].startswith(APPROVAL_PREFIX) else {}
     return {
         "id": r.id, "batch_id": r.batch_id, "mode": r.mode, "status": r.status, "summary": r.summary,
         "has_shot": bool(r.last_shot), "log": [entry for entry in json.loads(r.log or "[]") if not entry.startswith(APPROVAL_PREFIX)], "created_at": r.created_at.isoformat(),
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+        "worker_index": worker.get("index", 1), "worker_total": worker.get("total", 1),
     }
 
 
@@ -882,6 +895,7 @@ def start_check(batch_id: int, tasks: BackgroundTasks, db: Session = Depends(get
 
 class SubmitIn(BaseModel):
     confirmed: bool
+    workers: int = Field(default=1, ge=1, le=5)
 
 
 @router.post("/batches/{batch_id}/submit-run", status_code=202)
@@ -907,11 +921,12 @@ def start_submit(batch_id: int, body: SubmitIn, tasks: BackgroundTasks, db: Sess
         for row in rows:
             if row.status == "failed":
                 row.status, row.note = "pending", ""
-        run = ReturnRun(batch_id=batch.id, mode="submit", created_by=me.id, log=log)
-        db.add(run)
+        workers = body.workers if supplier_kind(sup.portal_url) == "armtek" else 1
+        runs = [ReturnRun(batch_id=batch.id, mode="submit", created_by=me.id, log=part) for part in split_approval(log, workers)]
+        db.add_all(runs)
         db.commit()
-        tasks.add_task(run_check, run.id)
-        return _run_out(run)
+        tasks.add_task(execute_runs, [run.id for run in runs], run_check)
+        return _run_out(runs[0])
 
 
 @router.get("/suppliers/{supplier_id}/runs")

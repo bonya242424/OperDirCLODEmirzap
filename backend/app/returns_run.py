@@ -10,7 +10,7 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from . import connections as conn_lib
 from .browser import BrowserError, manager
@@ -18,6 +18,7 @@ from .db import SessionLocal
 from .llm import LLMError, get_provider
 from .return_submission import LOCKED_STATUSES, APPROVAL_PREFIX, read_approval, submission_tool, park_submission
 from .models import ReturnBatch, ReturnGuide, ReturnLine, ReturnRun, ReturnSupplier, utcnow
+from .return_verification import validate_item
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ SYSTEM = (
     "Проверяй товары по одному: найди артикул, сверь бренд, фактуру и доступное количество, "
     "затем сразу вызови record_item_result для этой строки по её line_id и переходи к следующему товару. "
     "Записывай результат найденного товара сразу, даже если остальные товары того же счёта ещё не проверены. "
+    "Для record_item_result обязательно передай артикул и бренд именно текущей строки. Для ok или mismatch укажи available_qty — доступное количество на сайте. "
     "Непроверенные соседние позиции не делают подтверждённый товар ошибочным. "
     "Для каждого артикула сравни «вернуть N шт.» из сборки с количеством этой позиции, доступным к возврату в подтверждённой фактуре. "
     "Используй mismatch только если видишь, что доступно меньше, чем нужно вернуть. В причине укажи артикул и оба числа: нужно вернуть N, доступно M. "
@@ -89,8 +91,8 @@ TOOLS = [
         "description": "Записать результат проверки одной товарной строки сборки сразу после её исследования.",
         "input_schema": {
             "type": "object",
-            "properties": {"line_id": {"type": "integer"}, "status": {"type": "string", "enum": list(RESULTS)}, "note": {"type": "string"}},
-            "required": ["line_id", "status", "note"],
+            "properties": {"line_id": {"type": "integer"}, "article": {"type": "string"}, "brand": {"type": "string"}, "available_qty": {"type": "integer", "minimum": 0}, "status": {"type": "string", "enum": list(RESULTS)}, "note": {"type": "string"}},
+            "required": ["line_id", "article", "brand", "status", "note"],
         },
     },
     {"name": "finish", "description": "Закончить работу с итогом.", "input_schema": {"type": "object", "properties": {"summary": {"type": "string"}, "reason": {"type": "string", "enum": ["complete", "blocked"]}}, "required": ["summary"]}},
@@ -134,8 +136,12 @@ def _prune_text(messages: list[dict], keep: int = 4, limit: int = 600) -> None:
                     block["content"] = "[старый текст страницы убран]"
 
 
-def _plan(db, batch: ReturnBatch, submit: bool = False, limit=None) -> tuple[str, list[str]]:
+def _plan(db, batch: ReturnBatch, submit: bool = False, limit=None, line_ids=None) -> tuple[str, list[str]]:
+    if line_ids == []:
+        return "", []
     query = select(ReturnLine).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("pending", "checked") if submit else ("pending",)), ReturnLine.request_no == "").order_by(ReturnLine.id)
+    if line_ids is not None:
+        query = query.where(ReturnLine.id.in_(line_ids)).order_by(None).order_by(case({lid: index for index, lid in enumerate(line_ids)}, value=ReturnLine.id))
     lines = list(db.scalars(query.limit(limit) if limit else query))
     by: dict[str, list[ReturnLine]] = {}
     for ln in lines:
@@ -164,8 +170,8 @@ def run_check(run_id: int) -> None:
             db.commit()
 
         def finish(status: str, summary: str) -> None:
-            if run.mode == "submit":
-                for row in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == run.batch_id, ReturnLine.status == "submitting")):
+            if run.mode == "submit" and approval is not None:
+                for row in db.scalars(select(ReturnLine).where(ReturnLine.batch_id == run.batch_id, ReturnLine.id.in_([item["id"] for item in approval["lines"]]), ReturnLine.status == "submitting")):
                     row.status = "uncertain"
                     row.note = "Результат отправки неизвестен. Проверьте кабинет поставщика; повторная отправка заблокирована."
                     status = "failed"
@@ -186,6 +192,18 @@ def run_check(run_id: int) -> None:
         provider = get_provider()
         if provider is None:
             return finish("failed", "ИИ не подключён: не задан ключ модели")
+        line_ids = [item["id"] for item in approval["lines"]] if approval else None
+
+        def plan_for_run(limit=None):
+            return _plan(db, batch, run.mode == "submit", limit=limit, line_ids=line_ids)
+
+        def count_for_run(statuses=None):
+            statuses = statuses or (("pending", "checked") if run.mode == "submit" else ("pending",))
+            query = select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(statuses))
+            if line_ids is not None:
+                query = query.where(ReturnLine.id.in_(line_ids))
+            return db.scalar(query) or 0
+
         host = urlparse(sup.portal_url).netloc
         hostname = (urlparse(sup.portal_url).hostname or "").lower()
         system = SYSTEM
@@ -200,6 +218,7 @@ def run_check(run_id: int) -> None:
                 "«Количество» — исходное количество в строке, «Возвращено» — уже возвращённое, «Доступно к возврату до» — дата окончания срока. "
                 "Проверь все повторные строки артикула: возвращённая строка не исключает доступность другой. "
                 "Можно оформить несколько товаров одной фактуры, но результат и количество каждого должны быть учтены отдельно. "
+                "Если следующий товар есть в уже открытой нужной фактуре, используй её состав без повторного поиска и открытия кабинета. "
                 "Причина оформления — «Отказ клиента (годный товар)». "
                 " Кабинет Армтека: введи артикул товара в поле поиска, дождись выпадающего списка "
                 "и обязательно выбери в нём товар с сочетанием артикула и бренда из сборки. "
@@ -233,6 +252,8 @@ def run_check(run_id: int) -> None:
                 "Если номер не появился, прочитай историю возвратов через безопасные ссылки сайта и найди новую заявку по товару, бренду и количеству. "
                 "Если подтвердить отправку не удалось, вызови finish: сервер изолирует эту позицию для сверки и продолжит остальные. "
                 "record_item_result в этом режиме используй только для проблемы конкретного товара. "
+                "Обрабатывай строго по одному товару от начала до конца: поиск → сверка доступности → заполнение формы → submit_return → record_submission. "
+                "Не проверяй всю сборку заранее и не собирай список «можно оформить». Не переходи к поиску следующего артикула до результата отправки текущего. "
                 "Нельзя добавлять товары или количества, отсутствующие в сборке. Учитывай уже выбранное количество повторных позиций. "
                 "Армтек: первый шаг «Оформить возврат» открывает итоговое окно и разрешён обычным кликом; финальный клик в окне только через submit_return. "
                 "Форум: нажми «Отказ от товара», укажи нужное количество и примечание «Отказ клиента», затем submit_return. "
@@ -240,7 +261,7 @@ def run_check(run_id: int) -> None:
             tools = TOOLS + SUBMIT_TOOLS
         raw = conn_lib.decrypt(sup.session_encrypted).get("state")
         key = 2_000_000 + run.id
-        plan, invoices = _plan(db, batch, run.mode == "submit", limit=1)
+        plan, invoices = plan_for_run(limit=1)
         if not invoices:
             return finish("done", "Непроверенных строк нет. Для повторной проверки ошибочных строк нажмите «Сбросить ошибки».")
         guides = [g.text for g in db.scalars(select(ReturnGuide).where(ReturnGuide.supplier_id == sup.id, ReturnGuide.status == "ok")) if g.text]
@@ -256,23 +277,19 @@ def run_check(run_id: int) -> None:
         done: set[str] = set()
         summary = ""
         incomplete_finishes = 0
-        remaining_at_finish = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("pending", "checked") if run.mode == "submit" else ("pending",)))) or 0
+        remaining_at_finish = count_for_run()
         try:
             manager.open(key, sup.portal_url, json.loads(raw) if raw else None)
             say("Открыл кабинет по сохранённому входу")
             checkpoint_remaining = remaining_at_finish
             for step_number in range(MAX_STEPS * max(1, remaining_at_finish)):
                 if step_number and step_number % MAX_STEPS == 0:
-                    count = db.scalar(select(func.count(ReturnLine.id)).where(
-                        ReturnLine.batch_id == batch.id,
-                        ReturnLine.status.in_(("pending", "checked") if run.mode == "submit" else ("pending",)),
-                        ReturnLine.request_no == "",
-                    )) or 0
+                    count = count_for_run()
                     if count >= checkpoint_remaining or (approval and approval.get("attempt")):
                         summary = "Остановлено: достигнут предел шагов без завершения новых позиций либо требуется сверка отправки"
                         break
                     checkpoint_remaining = count
-                    remaining_plan, _ = _plan(db, batch, run.mode == "submit", limit=1)
+                    remaining_plan, _ = plan_for_run(limit=1)
                     messages = [{"role": "user", "content": context.replace(plan, remaining_plan, 1) +
                                  "\nПродолжай с оставшихся позиций. Браузер уже открыт: сначала прочитай текущую страницу."}]
                     say(f"Продолжаю оформление: осталось товарных строк {count}")
@@ -304,7 +321,7 @@ def run_check(run_id: int) -> None:
                     messages.append({"role": "user", "content": results})
                 _prune_images(messages)
                 _prune_text(messages)
-                if run.mode == "submit" and not approval.get("attempt") and not _plan(db, batch, True)[1]:
+                if run.mode == "submit" and not approval.get("attempt") and not plan_for_run()[1]:
                     summary = "Обработка позиций завершена."
                     break
                 if finished:
@@ -316,10 +333,10 @@ def run_check(run_id: int) -> None:
                         blocked = False
                     if re.search(r"время выполнения|доступного времени|нехватк[аи] времени|лимит[а-я]* времени", summary, re.I):
                         blocked = False
-                    remaining_plan, remaining = _plan(db, batch, run.mode == "submit", limit=1)
+                    remaining_plan, remaining = plan_for_run(limit=1)
                     if not remaining or blocked:
                         break
-                    remaining_count = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("pending", "checked") if run.mode == "submit" else ("pending",)))) or 0
+                    remaining_count = count_for_run()
                     if remaining_count < remaining_at_finish:
                         incomplete_finishes = 0
                     remaining_at_finish = remaining_count
@@ -334,7 +351,7 @@ def run_check(run_id: int) -> None:
                         "Не отмечай неисследованные счета ошибочными. Оставшиеся позиции:\n" + remaining_plan
                     )})
                 elif not (approval and approval.get("attempt")):
-                    next_plan, _ = _plan(db, batch, run.mode == "submit", limit=1)
+                    next_plan, _ = plan_for_run(limit=1)
                     if next_plan and next_plan != plan:
                         context = context.replace(plan, next_plan, 1)
                         plan = next_plan
@@ -356,16 +373,16 @@ def run_check(run_id: int) -> None:
                 pass
             manager.close(key)
         db.refresh(run)
-        _, left = _plan(db, batch, run.mode == "submit")
-        remaining_count = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("pending", "checked") if run.mode == "submit" else ("pending",)))) or 0
+        _, left = plan_for_run()
+        remaining_count = count_for_run()
         note = f" Не проверено счетов: {len(left)} ({', '.join(left[:10])}). Осталось товарных строк: {remaining_count}." if left else ""
-        unresolved = db.scalar(select(ReturnLine.id).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("submitting", "uncertain"))).limit(1))
+        unresolved = count_for_run(("submitting", "uncertain"))
         status = "stopped" if run.status == "stopped" else "failed" if left or unresolved else "done"
         if run.mode == "submit":
-            sent = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status == "submitted")) or 0
-            failed = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status == "failed")) or 0
+            sent = count_for_run(("submitted",))
+            failed = count_for_run(("failed",))
             note += f" Оформлено позиций: {sent}. С ошибкой: {failed}."
-            uncertain = db.scalar(select(func.count(ReturnLine.id)).where(ReturnLine.batch_id == batch.id, ReturnLine.status.in_(("submitting", "uncertain")))) or 0
+            uncertain = count_for_run(("submitting", "uncertain"))
             note += f" Требуют сверки отправки: {uncertain}."
         finish(status, (summary or "Запуск завершён.") + note)
 
@@ -375,6 +392,19 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
         mgr.wait_response(key)
         return mgr.read_text(key) or "Страница пуста"
     if name in ("submit_return", "record_submission"):
+        if name == "submit_return":
+            query = select(ReturnLine.id).where(ReturnLine.batch_id == batch.id,
+                ReturnLine.status.in_(("pending", "checked")), ReturnLine.request_no == "")
+            if approval is not None:
+                ids = [item["id"] for item in approval["lines"]]
+                if not ids:
+                    raise BrowserError("Нет подтверждённых товаров для отправки")
+                query = query.where(ReturnLine.id.in_(ids)).order_by(case({lid: index for index, lid in enumerate(ids)}, value=ReturnLine.id))
+            else:
+                query = query.order_by(ReturnLine.id)
+            current_id = db.scalar(query.limit(1))
+            if args.get("line_ids") != [current_id]:
+                raise BrowserError("Сначала завершите оформление текущего товара. Отправка следующего артикула заранее запрещена.")
         result = submission_tool(db, mgr, key, host, batch, run, approval, name, args)
         say(result)
         return result
@@ -419,28 +449,25 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
     if name == "browser_scroll":
         mgr.scroll(key, float(args.get("dy", 0)))
         return "Готово"
-    if name in ("record_item_result", "record_result"):
-        inv, status, note = str(args.get("invoice_no", "")).strip(), str(args.get("status", "")), str(args.get("note", ""))[:500]
+    if name == "record_result":
+        raise BrowserError("Запись результата на весь счёт запрещена. Используйте record_item_result для одного артикула и бренда.")
+    if name == "record_item_result":
+        status, note = str(args.get("status", "")), str(args.get("note", ""))[:500]
         if run and run.mode == "submit" and status == "ok":
-            return "Успешное оформление записывается только через record_submission после отправки."
+            say("Товар найден, но заявка ещё не отправлена. Продолжаю оформление.")
+            return "Проверка доступности НЕ является оформлением. Не записывай «можно оформить». Заполни форму текущего товара, вызови submit_return, затем record_submission с подтверждённым номером заявки."
         if status not in RESULTS:
             return "Ошибка: неизвестный статус"
-        if name == "record_item_result":
-            line_id = args.get("line_id")
-            if not isinstance(line_id, int) or isinstance(line_id, bool):
-                return "Ошибка: укажи числовой line_id из сборки"
-            rows = list(db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch.id, ReturnLine.id == line_id)))
-        else:
-            rows = list(db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch.id, ReturnLine.invoice_no == inv)))
-        if not rows:
-            return "Ошибка: строки нет в выбранной сборке, проверь line_id или номер счёта"
-        for ln in rows:
-            if ln.status in LOCKED_STATUSES or ln.request_no:
-                continue
-            ln.status, ln.note = RESULTS[status], f"{LABEL[status]}: {note}"
+        row = validate_item(db, mgr, key, batch, args, submit=bool(run and run.mode == "submit"),
+                            line_ids=[item["id"] for item in approval["lines"]] if approval else None)
+        if status in ("ok", "mismatch"):
+            note = f"{row.article} · {row.brand}: нужно {row.qty} шт., доступно {args['available_qty']} шт."
+        row.status, row.note = RESULTS[status], f"{LABEL[status]}: {note}"
+        row.check_evidence = json.dumps({"version": 1, "article": row.article, "brand": row.brand, "qty": row.qty,
+            "available_qty": args.get("available_qty"), "run_id": run.id if run else None, "at": utcnow().isoformat()}, ensure_ascii=False)
         db.commit()
-        done.add(inv or rows[0].invoice_no)
-        label = f"Товар {rows[0].article} · {rows[0].brand} · {rows[0].qty} шт." if name == "record_item_result" else f"Счёт {inv}"
+        done.add(row.invoice_no)
+        label = f"Товар {row.article} · {row.brand} · {row.qty} шт."
         say(f"{label}: {LABEL[status]}" + (f" · {note}" if note else ""))
         return "Записано"
     if name == "finish":

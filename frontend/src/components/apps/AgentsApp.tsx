@@ -6,6 +6,7 @@ import AgentStructure from "./AgentStructure";
 import AssemblyPanel from "./AssemblyPanel";
 import BrowserLogin from "./BrowserLogin";
 import GuidesBox from "./GuidesBox";
+import ReturnItems, { type ReturnItem } from "./ReturnItems";
 
 type StepState = "wait" | "run" | "confirm" | "done" | "skip";
 interface Step {
@@ -40,6 +41,9 @@ interface Run {
   has_shot: boolean;
   log: string[];
   created_at: string;
+  mode: "check" | "submit";
+  worker_index?: number;
+  worker_total?: number;
 }
 function RunShot({ runId }: { runId: number }) {
   const [url, setUrl] = useState("");
@@ -66,7 +70,6 @@ function RunShot({ runId }: { runId: number }) {
   );
 }
 
-const INV_STATUS: Record<string, string> = { pending: "не проверен", checked: "можно оформить", failed: "есть проблема", submitted: "Возврат оформлен", submitting: "Отправляется", uncertain: "Отправка требует сверки", skipped: "пропущен" };
 
 interface Summary {
   id: number;
@@ -84,32 +87,19 @@ interface Summary {
   problems: string[];
 }
 
-interface ReturnItem {
-  id: number;
-  article: string;
-  name: string;
-  brand: string;
-  qty: number;
-  warehouse: string;
-  invoice_date: string;
-  invoice_no: string;
-  reason: string;
-  status: string;
-  request_no: string;
-  note: string;
-}
+
 
 const TEMPLATE: Omit<Step, "state">[] = [
   { title: "Открыть «Оформление возврата»", detail: "Вход уже выполнен вами в браузере; агент пароли не вводит" },
   { title: "Найти товар по артикулу", detail: "Армтек: выбираю артикул и бренд, сверяю фактуру. Форум: выбираю доступную поставку" },
-  { title: "Выставить количество «К возврату»", detail: "Для каждой позиции счёта количество берётся из таблицы" },
-  { title: "Заполнить окно возврата", detail: "Причина из таблицы; адрес и контактное лицо сайт подставляет сам; файлы не нужны" },
-  { title: "Отправить заявку", detail: "Необратимое действие: заявку нельзя отозвать", needsConfirm: true },
-  { title: "Записать номер заявки в таблицу", detail: "Номер заявки и статус вносятся в строки счёта" },
+  { title: "Выставить количество «К возврату»", detail: "Количество берётся из текущей товарной строки сборки" },
+  { title: "Заполнить окно возврата", detail: "Сверяю артикул, бренд, количество и причину возврата текущего товара" },
+  { title: "Сразу отправить заявку", detail: "После подтверждения запуска отправляю доступный товар до перехода к следующему" },
+  { title: "Сохранить номер заявки", detail: "Подтверждённая отправка записывается только текущему товару, затем начинается следующий" },
 ];
 
 
-/** Агент по возвратам. Таблица и саммари настоящие; шаги работы на сайте пока показаны для примера: запуск на сайте подключим после первой проверки. */
+/** Оформление возвратов с результатом и историей по каждому товару. */
 function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number | null }) {
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const supplierKey = `operdir_returns_supplier_${me.id}`;
@@ -129,8 +119,13 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   const [picked, setPicked] = useState<number[]>([]);
   const [queue, setQueue] = useState<{ active: boolean; active_suppliers?: number[]; total: number; pos: number; current: { id: number; number: string } | null; done: { batch_id: number; status: string }[] } | null>(null);
   const [info, setInfo] = useState("");
+  const [logOpen, setLogOpen] = useState(false);
+  const [logRunId, setLogRunId] = useState<number | null>(null);
+  const [workers, setWorkers] = useState(1);
   const [reconcile, setReconcile] = useState<{ item: ReturnItem; outcome: "not_sent" | "submitted"; request: string; note: string; verified: boolean } | null>(null);
   const supplier = suppliers?.find((x) => x.id === supSel) ?? null;
+  const parallelArmtek = /^https:\/\/([a-z0-9-]+\.)*armtek\.ru(?=[:/]|$)/i.test(supplier?.portal_url ?? "");
+  const requestedWorkers = parallelArmtek ? workers : 1;
   const [dFrom, setDFrom] = useState("");
   const [dTo, setDTo] = useState("");
   const batches =
@@ -194,8 +189,9 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   const reset = () => undefined;
   const [runsBySupplier, setRunsBySupplier] = useState<Partial<Record<number, Run[]>>>({});
   const runs = supSel === null ? undefined : runsBySupplier[supSel];
-  const activeRun = runs?.find((run) => run.status === "running");
-  const lastRun = activeRun ?? runs?.[0] ?? null;
+  const activeRuns = runs?.filter((run) => run.status === "running") ?? [];
+  const activeRun = activeRuns[0];
+  const lastRun = runs?.find((run) => run.id === logRunId) ?? activeRun ?? runs?.[0] ?? null;
   const checking = !!activeRun;
 
   const batchId = current?.id;
@@ -248,7 +244,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
     setError("");
     setInfo("");
     try {
-      setQueue(await api("/returns/check-queue", { method: "POST", body: { batch_ids: picked, mode: "submit", confirmed: true } }));
+      setQueue(await api("/returns/check-queue", { method: "POST", body: { batch_ids: picked, mode: "submit", confirmed: true, workers: requestedWorkers } }));
       setMulti(false);
       setPicked([]);
     } catch (err) {
@@ -288,7 +284,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
     if (!window.confirm(`Оформить и отправить реальные возвраты поставщику «${supplier?.name}» по сборке «${current.number}»? Позиций: ${eligible}. Количества берутся из сборки. Уже оформленные позиции будут пропущены.`)) return;
     setBusy(true);
     try {
-      const run = await api<Run>(`/returns/batches/${current.id}/submit-run`, { method: "POST", body: { confirmed: true } });
+      const run = await api<Run>(`/returns/batches/${current.id}/submit-run`, { method: "POST", body: { confirmed: true, workers: requestedWorkers } });
       setRunsBySupplier((previous) => ({ ...previous, [supSel]: [run, ...(previous[supSel] ?? []).filter((item) => item.id !== run.id)] }));
       loadRuns();
     } catch (err) {
@@ -338,7 +334,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   async function stopCheck() {
     if (!activeRun) return;
     try {
-      await api(`/returns/runs/${activeRun.id}/stop`, { method: "POST" });
+      await Promise.all(activeRuns.map((run) => api(`/returns/runs/${run.id}/stop`, { method: "POST" })));
       loadRuns();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка");
@@ -383,7 +379,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   const done = current?.status.submitted ?? 0;
 
   return (
-    <div className="agents">
+    <div className={`agents returns-workspace${logOpen ? " with-log" : ""}`}>
       <aside className="ag-left">
         <h3>Поставщики</h3>
         <p className="muted small">Создайте поставщика, загрузите в него документ с возвратами и запустите работу.</p>
@@ -419,6 +415,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                 </p>
               </div>
               <div className="ag-actions">
+                <button aria-expanded={logOpen} aria-controls="returns-run-log" onClick={() => setLogOpen((v) => !v)}>{logOpen ? "Скрыть журнал" : "Журнал запуска"}{checking ? " · в работе" : ""}</button>
                 <button className="ghost" onClick={() => removeSupplier(supplier)} disabled={running}>Убрать</button>
                 <button onClick={() => setSupForm({ ...supplier })} disabled={running}>Данные поставщика</button>
               </div>
@@ -445,7 +442,8 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               </form>
             </div>
             {error && <p className="error">{error}</p>}
-            <GuidesBox listUrl={`/returns/suppliers/${supplier.id}/guides`} itemUrl="/returns/guides" />
+            <details className="returns-guides" key={supplier.id}><summary>Инструкции по возврату и видео</summary><GuidesBox listUrl={`/returns/suppliers/${supplier.id}/guides`} itemUrl="/returns/guides" title="Как оформлять возвраты" /></details>
+            {parallelArmtek && <div className="returns-workers"><label>Потоки Армтека <select aria-label="Количество потоков Армтека" value={workers} disabled={checking || !!queue?.active || busy} onChange={(e) => setWorkers(Number(e.target.value))}>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}</select></label><span className="muted small">Разные фактуры — параллельно. Товары одной фактуры — по очереди.</span></div>}
             <div className="row small muted">
               Период сборки:
               <input type="date" value={dFrom} max={dTo || undefined} onChange={(e) => setDFrom(e.target.value)} aria-label="Сборка с" />
@@ -473,6 +471,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               </div>
             )}
             {batches && batches.length > 0 && (
+              <details className="returns-batches" key={`${supSel}-${multi}`} open={multi || undefined}><summary>Сборки ({batches.length}) · {current?.number || "Выбрать сборку"}</summary>
               <div className="chips">
                 {batches.map((b) => (
                   multi ? (
@@ -480,12 +479,12 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                       <input type="checkbox" checked={picked.includes(b.id)} onChange={() => togglePick(b.id)} /> {b.number || `Документ ${b.id}`} · {b.positions} поз.
                     </label>
                   ) : (
-                    <button key={b.id} className={`chip${b.id === selected ? " on" : ""}`} onClick={() => { setSelected(b.id); reset(); }} disabled={running}>
+                    <button key={b.id} className={`chip${b.id === selected ? " on" : ""}`} onClick={(e) => { setSelected(b.id); reset(); e.currentTarget.closest("details")?.removeAttribute("open"); }} disabled={running}>
                       {b.number || `Документ ${b.id}`} · {b.positions} поз.
                     </button>
                   )
                 ))}
-              </div>
+              </div></details>
             )}
             {batches && batches.length === 0 && (
               <p className="ag-hint">Документов пока нет. Загрузите CSV или вставьте ссылку на Google Таблицу. Нужны колонки: Товар, Кол. по документу, Номер счета, причина возврата.</p>
@@ -494,10 +493,10 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
         )}
         {supplier && current && (
           <>
-            <header>
+            <header className="return-batch-head">
               <div>
                 <h3>Документ {current.number || current.id}</h3>
-                <p className="muted small">Источник: {current.source}</p>
+                <p className="muted small return-source" title={current.source}>Источник: {current.source}</p>
               </div>
               <div className="ag-actions">
                 <button className="ghost" onClick={() => remove(current)} disabled={checking || !!queue?.active || !!current.status.submitted || !!current.status.submitting || !!current.status.uncertain}>Удалить</button>
@@ -507,7 +506,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                   </button>
                 )}
                 {me.role === "owner" && (checking ? (
-                  <button className="danger" onClick={stopCheck}>Остановить{activeRun?.batch_id !== current.id ? " проверку другой сборки" : ""}</button>
+                  <button className="danger" onClick={stopCheck}>Остановить{activeRuns.length > 1 ? ` все потоки (${activeRuns.length})` : ""}{activeRun?.batch_id !== current.id ? " проверку другой сборки" : ""}</button>
                 ) : (
                   <button className="primary" onClick={startCheck} disabled={busy || !runs || !supplier?.has_session} title={supplier?.has_session ? "Агент оформит и отправит возвраты по неотправленным позициям после подтверждения запуска" : "Сначала войдите в кабинет и сохраните вход"}>
                     {busy ? "Запускаю оформление…" : "Оформить возвраты"}
@@ -527,23 +526,10 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               <p key={p} className="ag-problem">{p}</p>
             ))}
 
-            <h4>Товары в сборке</h4>
             {itemResult?.batchId === current.id && itemResult.error && <p className="error">{itemResult.error}</p>}
             {itemResult?.batchId === current.id && itemResult.rows ? (
-              <table className="ag-table">
-                <thead><tr><th>Артикул</th><th>Наименование</th><th>Производитель</th><th>К возврату, шт.</th><th>Склад возврата</th><th>Дата счёта</th><th>Номер счёта</th><th>Причина возврата</th><th>Результат возврата</th><th>Номер заявки</th></tr></thead>
-                <tbody>
-                  {itemResult.rows.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.article}</td><td>{item.name}</td><td>{item.brand}</td>
-                      <td>{item.qty}</td><td>{item.warehouse}</td>
-                      <td>{item.invoice_date}</td><td>{item.invoice_no}</td><td>{item.reason}</td>
-                      <td className={`inv-${item.status}`}>{INV_STATUS[item.status] ?? item.status}{item.note && <span className="muted small"> · {item.note}</span>}</td>
-                      <td>{item.request_no}{me.role === "owner" && item.status === "uncertain" && <button className="ghost" disabled={checking || !!queue?.active || busy} onClick={() => { setError(""); setReconcile({ item, outcome: "not_sent", request: "", note: "", verified: false }); }}>Сверить отправку</button>}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <ReturnItems key={current.id} rows={itemResult.rows} canReconcile={me.role === "owner"} disabled={checking || !!queue?.active || busy}
+                onReconcile={(item) => { setError(""); setReconcile({ item, outcome: "not_sent", request: "", note: "", verified: false }); }} />
             ) : itemResult?.batchId !== current.id && <p className="muted small">Загружаю товары…</p>}
             <p className="muted small">
               Причина: {current.reasons.map((r) => `${r.reason} (${r.qty} шт.)`).join(", ")}. Склады: {current.warehouses.map((w) => `${w.warehouse} ${w.qty}`).join(", ")}.
@@ -553,7 +539,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               Запуск оформления требует вашего подтверждения и отправляет реальные заявки. Успешные возвраты сохраняются с номером заявки и исключаются из повторных запусков. Если ответ сайта потерян, позиция блокируется до сверки результата в кабинете поставщика.
             </div>
             {lastRun && lastRun.status !== "running" && lastRun.summary && <p className={lastRun.status === "failed" ? "error" : "muted"}>{lastRun.summary}</p>}
-            <h4>Что делает агент</h4>
+            <details className="returns-help"><summary>Как работает оформление</summary>
             <ol className="ag-steps">
               {TEMPLATE.map((s, i) => (
                 <li key={i} className="st-wait">
@@ -564,7 +550,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                   </div>
                 </li>
               ))}
-            </ol>
+            </ol></details>
           </>
         )}
       </section>
@@ -611,8 +597,10 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
         </div>
       )}
 
-      <aside className="ag-log">
-        <h3>Журнал запуска</h3>
+      {logOpen && <aside className="ag-log" id="returns-run-log">
+        <div className="returns-log-heading"><h3>Журнал запуска</h3><button className="ghost" aria-label="Закрыть журнал" onClick={() => setLogOpen(false)}>✕</button></div>
+        {runs && runs.length > 1 && <select aria-label="Выбрать журнал потока" value={lastRun?.id ?? ""} onChange={(e) => setLogRunId(Number(e.target.value))}>{runs.map((run) => <option key={run.id} value={run.id}>{(run.worker_total ?? 1) > 1 ? `Поток ${run.worker_index} из ${run.worker_total}` : `Запуск ${run.id}`} · {{ running: "В работе", done: "Готово", failed: "Ошибка", stopped: "Остановлен" }[run.status]}</option>)}</select>}
+        {lastRun && <p className="muted small">{lastRun.mode === "submit" ? "Режим: оформление и отправка" : "Режим: проверка без отправки"}</p>}
 
         {!lastRun ? (
           <p className="muted small">Запусков ещё не было. Нажмите «Проверить счета на сайте»: здесь появится каждое действие агента.</p>
@@ -627,7 +615,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             </ul>
           </>
         )}
-      </aside>
+      </aside>}
     </div>
   );
 }
