@@ -487,6 +487,13 @@ def _tool(db, key: int, run: AssemblyRun, period: str, name: str, a: dict, saved
         supplier, label = str(a.get("supplier", "")).strip(), str(a.get("label", "")).strip()
         if not supplier or not label:
             return "Ошибка: нужны supplier и label"
+        targets = assembly_scope.scope(db, run)["suppliers"]
+        norm = lambda value: re.sub(r"[^\w]", "", value.casefold())
+        if targets and norm(supplier) not in {norm(target) for target in targets}:
+            raise BrowserError("Поставщик не входит в сохранённый список задания. Используйте точное название из списка или исключите документ как outside_scope")
+        label_date = assembly_returns.doc_date_of(label)
+        if label_date and not run.date_from <= label_date <= run.date_to:
+            raise BrowserError("Дата документа вне периода задания; сохранение запрещено")
         text = m.clipboard(key) if name == "save_document" else str(a.get("text", ""))
         if len(text.strip()) < 5:
             return "Ошибка: текст пустой, сначала скопируйте таблицу (Control+a, Control+c)"

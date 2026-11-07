@@ -1,5 +1,6 @@
 import json
 from datetime import date
+import pytest
 
 from app import assembly_scope
 from app.assembly_run import continue_run
@@ -58,6 +59,23 @@ def test_one_supplier_cannot_confirm_entire_scope(client, owner, term):
         assert not assembly_scope.progress(db, run)[0]
         assembly_scope.register(db, run, [], supplier="Армтек")  # явно проверен пустой отбор
         assert assembly_scope.progress(db, run)[0]
+
+
+def test_save_rejects_supplier_and_date_outside_task(client, owner, term):
+    from app.assembly_run import _tool
+    from app.browser import BrowserError
+    from app.models import ReturnSupplier
+    cid, _ = term
+    with SessionLocal() as db:
+        db.add(ReturnSupplier(name="Шате"))
+        db.commit()
+        run = AssemblyRun(connection_id=cid, date_from=date(2026, 11, 6), date_to=date(2026, 11, 6))
+        db.add(run)
+        db.commit()
+        with pytest.raises(BrowserError, match="Поставщик не входит"):
+            _tool(db, 1, run, "06.11.2026", "save_document", {"supplier": "Шкопарт", "label": "№7141 от 06.11.2026"}, [], lambda _: None)
+        with pytest.raises(BrowserError, match="Дата документа"):
+            _tool(db, 1, run, "06.11.2026", "save_document", {"supplier": "Шате", "label": "№7141 от 05.11.2026"}, [], lambda _: None)
 
 
 def test_plain_text_after_saved_file_is_not_success(client, owner, term, monkeypatch):
