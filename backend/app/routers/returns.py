@@ -13,6 +13,7 @@ import json
 import uuid
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel, ValidationError, field_validator
@@ -268,6 +269,66 @@ def dedupe_batches(db: Session = Depends(get_db), me: User = Depends(current_use
     """Убрать дубли документов (один и тот же номер у поставщика). Остаётся тот, где больше результатов проверки."""
     _owner(me)
     return ar.dedupe(db)
+
+
+class ReconcileIn(BaseModel):
+    outcome: Literal["not_sent", "submitted"]
+    verified: bool = False
+    request_no: str = ""
+    note: str
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, value: str) -> str:
+        if not 5 <= len(value.strip()) <= 1000:
+            raise ValueError("Опишите результат сверки истории: от 5 до 1000 символов")
+        return value.strip()
+
+    @field_validator("request_no")
+    @classmethod
+    def _request(cls, value: str) -> str:
+        if len(value.strip()) > 100:
+            raise ValueError("Номер заявки слишком длинный")
+        return value.strip()
+
+
+@router.post("/lines/{line_id}/reconcile")
+def reconcile_line(line_id: int, data: ReconcileIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    if not data.verified:
+        raise HTTPException(status_code=422, detail="Сначала сверьте историю возвратов в кабинете поставщика")
+    if data.outcome == "submitted" and not data.request_no:
+        raise HTTPException(status_code=422, detail="Укажите номер найденной заявки")
+    if data.outcome == "not_sent" and data.request_no:
+        raise HTTPException(status_code=422, detail="Для найденной заявки выберите «Возврат оформлен»")
+    with RUN_LOCK:
+        row = db.get(ReturnLine, line_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Товарная строка не найдена")
+        batch = db.get(ReturnBatch, row.batch_id)
+        if supplier_busy(db, batch.supplier_id):
+            raise HTTPException(status_code=409, detail="Сначала остановите запуск и очередь этого поставщика")
+        if row.status != "uncertain" or row.request_no:
+            raise HTTPException(status_code=409, detail="Сверка доступна только для неподтверждённой отправки")
+        run = db.scalar(select(ReturnRun).where(ReturnRun.batch_id == row.batch_id).order_by(ReturnRun.id.desc()).limit(1))
+        if run is None:
+            raise HTTPException(status_code=409, detail="Нет журнала попытки отправки для сохранения сверки")
+        audit = {
+            "line_id": row.id, "article": row.article, "brand": row.brand, "qty": row.qty,
+            "outcome": data.outcome, "request_no": data.request_no, "note": data.note,
+            "previous_note": row.note, "owner_id": me.id, "at": utcnow().isoformat(),
+        }
+        entries = json.loads(run.log or "[]")
+        entries.append("Сверка отправки владельцем: " + json.dumps(audit, ensure_ascii=False))
+        run.log = json.dumps(entries, ensure_ascii=False)
+        row.status = "submitted" if data.outcome == "submitted" else "pending"
+        row.request_no = data.request_no
+        row.note = f"Сверено владельцем {audit['at']}: {data.note}. " + (
+            f"Возврат оформлен, заявка {data.request_no}. Повторная отправка запрещена."
+            if data.outcome == "submitted" else "Заявка в истории отсутствует; разрешён новый запуск оформления."
+        )
+        db.commit()
+        return {"line_id": row.id, "status": row.status, "request_no": row.request_no}
 
 
 @router.get("/batches/{batch_id}/lines")
