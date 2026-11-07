@@ -245,6 +245,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
     setInfo("");
     try {
       setQueue(await api("/returns/check-queue", { method: "POST", body: { batch_ids: picked, mode: "submit", confirmed: true, workers: requestedWorkers } }));
+      setLogRunId(null);
       setMulti(false);
       setPicked([]);
     } catch (err) {
@@ -285,6 +286,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
     setBusy(true);
     try {
       const run = await api<Run>(`/returns/batches/${current.id}/submit-run`, { method: "POST", body: { confirmed: true, workers: requestedWorkers } });
+      setLogRunId(run.id);
       setRunsBySupplier((previous) => ({ ...previous, [supSel]: [run, ...(previous[supSel] ?? []).filter((item) => item.id !== run.id)] }));
       loadRuns();
     } catch (err) {
@@ -443,7 +445,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             </div>
             {error && <p className="error">{error}</p>}
             <details className="returns-guides" key={supplier.id}><summary>Инструкции по возврату и видео</summary><GuidesBox listUrl={`/returns/suppliers/${supplier.id}/guides`} itemUrl="/returns/guides" title="Как оформлять возвраты" /></details>
-            {parallelArmtek && <div className="returns-workers"><label>Потоки Армтека <select aria-label="Количество потоков Армтека" value={workers} disabled={checking || !!queue?.active || busy} onChange={(e) => setWorkers(Number(e.target.value))}>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}</select></label><span className="muted small">Разные фактуры — параллельно. Товары одной фактуры — по очереди.</span></div>}
+            {parallelArmtek && <div className="returns-workers"><label>Потоки Армтека <select aria-label="Количество потоков Армтека" value={checking ? (activeRun?.worker_total ?? activeRuns.length) : workers} disabled={checking || !!queue?.active || busy} onChange={(e) => setWorkers(Number(e.target.value))}>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}</select></label><span className="muted small">Разные фактуры — параллельно. Товары одной фактуры — по очереди.</span></div>}
             <div className="row small muted">
               Период сборки:
               <input type="date" value={dFrom} max={dTo || undefined} onChange={(e) => setDFrom(e.target.value)} aria-label="Сборка с" />
