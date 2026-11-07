@@ -179,6 +179,7 @@ def no_browser(monkeypatch):
 
     monkeypatch.setattr("app.returns_run.manager", SimpleNamespace(
         read_text=page_text,
+        auth_required=lambda *args: True,
         open=lambda *args: None,
         close=lambda *args: None,
         screenshot=lambda *args: b"image",

@@ -30,6 +30,8 @@ from ..guide_calc import analyze_guide, guides_dir
 from ..models import ReturnBatch, ReturnGuide, ReturnLine, ReturnRun, ReturnSupplier, User, utcnow
 from ..returns_run import run_check
 from ..return_workers import execute_runs, split_approval
+from ..return_jobs import create_job, run_job, load_queue, stop_jobs
+from ..models import ReturnJob
 from ..return_submission import LOCKED_STATUSES, RUN_LOCK, ACTIVE_QUEUES, APPROVAL_PREFIX, eligible_rows, approval_log, supplier_busy, supplier_kind
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
@@ -424,6 +426,7 @@ def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
         .where(ReturnBatch.supplier_id == sup.id)
         .order_by((ReturnRun.status == "running").desc(), ReturnRun.id.desc()).limit(1)
     )
+    load_queue(db, sup.id)
     check_status = "not_started"
     if _QUEUES.get(sup.id, {}).get("active") or (last_run and last_run.status == "running"):
         check_status = "running"
@@ -722,9 +725,13 @@ def _fresh() -> dict:
 
 
 def _queue_out(db: Session, supplier_id: int | None = None) -> dict:
+    for sid in db.scalars(select(ReturnJob.supplier_id).distinct()):
+        load_queue(db, sid)
     if supplier_id is None:  # без указания поставщика: любая идущая очередь, иначе последняя
         pick = [k for k, q in _QUEUES.items() if q["active"]] or list(_QUEUES)
         supplier_id = pick[0] if pick else None
+    if supplier_id is not None:
+        load_queue(db, supplier_id)
     q = _QUEUES.get(supplier_id) if supplier_id is not None else None
     q = q or _fresh()
     cur = None
@@ -743,6 +750,8 @@ def _run_queue(supplier_id: int, ids: list[int], user_id: int) -> None:
     from ..db import SessionLocal
 
     q = _QUEUES[supplier_id]
+    if q.get("job_id"):
+        return run_job(q["job_id"], run_check)
     try:
         for i, bid in enumerate(ids, 1):
             if q["cancel"]:
@@ -813,7 +822,7 @@ def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends
                 raise HTTPException(status_code=422, detail=f"У поставщика документа {batch.number or bid} не указан адрес кабинета")
             if not sup.session_encrypted:
                 raise HTTPException(status_code=422, detail=f"Для документа {batch.number or bid} сначала войдите в кабинет и сохраните вход")
-            if _QUEUES.get(sup.id, {}).get("active"):
+            if supplier_busy(db, sup.id):
                 raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» очередь уже идёт: дождитесь окончания или отмените её")
             if db.scalar(select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)):
                 raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» проверка уже идёт")
@@ -821,7 +830,7 @@ def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends
                 if not supplier_kind(sup.portal_url):
                     raise HTTPException(status_code=422, detail="Оформление поддерживается для Армтека и Форума")
                 rows = eligible_rows(db, bid)
-                approvals[bid] = approval_log(rows)
+                approvals[bid] = approval_log(rows, sup.portal_url)
                 for row in rows:
                     if row.status == "failed":
                         row.status, row.note = "pending", ""
@@ -830,6 +839,11 @@ def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends
         for sid, part in groups.items():
             workers = body.workers if supplier_kind(db.get(ReturnSupplier, sid).portal_url) == "armtek" else 1
             _QUEUES[sid] = {**_fresh(), "active": True, "ids": part, "mode": body.mode, "approvals": approvals, "workers": workers}
+            if body.mode == "submit":
+                job = create_job(db, db.get(ReturnSupplier, sid), part, {bid: approvals[bid] for bid in part}, workers, me.id)
+                _QUEUES[sid]["job_id"] = job.id
+        db.commit()
+        for sid, part in groups.items():
             threading.Thread(target=_run_queue, args=(sid, part, me.id), daemon=True, name=f"returns-queue-{sid}").start()
         return _queue_out(db, next(iter(groups)))
 
@@ -844,8 +858,10 @@ def queue_state(supplier_id: int | None = None, db: Session = Depends(get_db), m
 def cancel_queue(supplier_id: int | None = None, db: Session = Depends(get_db), me: User = Depends(current_user)):
     with RUN_LOCK:
         _owner(me)
+        _queue_out(db, supplier_id)
         targets = [supplier_id] if supplier_id is not None else [k for k, q in _QUEUES.items() if q["active"]]
         for sid in targets:
+            stop_jobs(db, sid)
             q = _QUEUES.get(sid)
             if not q:
                 continue
@@ -884,7 +900,7 @@ def start_check(batch_id: int, tasks: BackgroundTasks, db: Session = Depends(get
         busy = db.scalar(
             select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)
         )
-        if busy:
+        if busy or supplier_busy(db, sup.id):
             raise HTTPException(status_code=409, detail="У этого поставщика проверка уже идёт")
         run = ReturnRun(batch_id=batch.id, mode="check", created_by=me.id)
         db.add(run)
@@ -917,15 +933,17 @@ def start_submit(batch_id: int, body: SubmitIn, tasks: BackgroundTasks, db: Sess
         rows = eligible_rows(db, batch.id)
         if not rows:
             raise HTTPException(status_code=409, detail="Нет доступных к оформлению строк. Отправленные и спорные отправки защищены.")
-        log = approval_log(rows)
+        log = approval_log(rows, sup.portal_url)
         for row in rows:
             if row.status == "failed":
                 row.status, row.note = "pending", ""
         workers = body.workers if supplier_kind(sup.portal_url) == "armtek" else 1
         runs = [ReturnRun(batch_id=batch.id, mode="submit", created_by=me.id, log=part) for part in split_approval(log, workers)]
         db.add_all(runs)
+        db.flush()
+        job = create_job(db, sup, [batch.id], {batch.id: log}, workers, me.id, [run.id for run in runs])
         db.commit()
-        tasks.add_task(execute_runs, [run.id for run in runs], run_check)
+        tasks.add_task(run_job, job.id, run_check)
         return _run_out(runs[0])
 
 
@@ -966,9 +984,12 @@ def stop_run(run_id: int, db: Session = Depends(get_db), me: User = Depends(curr
         r = db.get(ReturnRun, run_id)
         if r is None:
             raise HTTPException(status_code=404, detail="Запуск не найден")
+        batch = db.get(ReturnBatch, r.batch_id)
+        if batch and r.status == "running":
+            stop_jobs(db, batch.supplier_id)
         if r.status == "running":
             r.status = "stopped"
-            db.commit()
+        db.commit()
         return _run_out(r)
 
 

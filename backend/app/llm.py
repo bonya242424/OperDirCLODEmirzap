@@ -181,12 +181,18 @@ class OpenAIProvider:
         self._base = (base_url or settings.openai_base_url).rstrip("/")
         self._proxy = proxy_url
         self._effort = effort
+        self._timeout, self._step_tokens = 90.0, 8000
+
+    def interactive_limits(self):
+        self._timeout, self._step_tokens = 30.0, 1600
+        if self._effort:
+            self._effort = "low"
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         import httpx
 
         try:
-            with httpx.Client(timeout=90.0, proxy=self._proxy or None) as client:
+            with httpx.Client(timeout=self._timeout, proxy=self._proxy or None) as client:
                 resp = client.post(f"{self._base}/chat/completions", json=body, headers={"Authorization": f"Bearer {self._key}"})
         except httpx.TransportError as exc:
             raise LLMConnectionError("Нет соединения с API модели") from exc
@@ -209,7 +215,7 @@ class OpenAIProvider:
     def _call(self, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> Step:
         import json
 
-        body: dict[str, Any] = {"model": self._model, "max_completion_tokens": 8000, "messages": _to_openai_messages(system, messages)}
+        body: dict[str, Any] = {"model": self._model, "max_completion_tokens": self._step_tokens if tools else 8000, "messages": _to_openai_messages(system, messages)}
         if self._effort and (self._base, self._model) not in OpenAIProvider._NO_EFFORT:
             body["reasoning_effort"] = self._effort
         if tools:
@@ -252,6 +258,11 @@ class AnthropicProvider:
         http_client = DefaultHttpxClient(proxy=proxy_url, timeout=60.0) if proxy_url else None
         self._client = Anthropic(api_key=api_key, base_url=base_url or None, timeout=60.0, http_client=http_client)
         self._model = model
+        self._step_tokens = 8000
+
+    def interactive_limits(self):
+        self._client = self._client.with_options(timeout=30.0, max_retries=0)
+        self._step_tokens = 1600
 
     def complete(self, system: str, messages: list[dict[str, str]]) -> str:
         from anthropic import APIConnectionError, APIStatusError
@@ -277,7 +288,7 @@ class AnthropicProvider:
         from anthropic import APIConnectionError, APIStatusError
 
         try:
-            kwargs: dict[str, Any] = {"model": self._model, "max_tokens": 8000, "system": system, "messages": messages}
+            kwargs: dict[str, Any] = {"model": self._model, "max_tokens": self._step_tokens, "system": system, "messages": messages}
             if tools:
                 kwargs["tools"] = tools
             response = self._client.messages.create(**kwargs)
@@ -300,23 +311,50 @@ class AnthropicProvider:
 class FailoverProvider:
     """Пробует прокси по очереди: при ошибке соединения берёт следующий, ошибки самой модели не повторяет."""
 
+    _interactive_next = {}
+    _interactive_good = {}
+
     def __init__(self, proxies: list[tuple[int, str]], on_result, api_key: str, make=None) -> None:
         self._key = api_key
         self._make = make or (lambda url: AnthropicProvider(api_key, active_model("anthropic"), llm_base_url("anthropic"), url))
         self._proxies = proxies  # [(id, url)]
         self._on_result = on_result  # (proxy_id, ok) -> None, чтобы запомнить состояние
+        self._interactive = False
+        self._preferred = None
+
+    def interactive_limits(self):
+        self._interactive = True
 
     def _run(self, fn):
         last: LLMConnectionError | None = None
-        for pid, url in self._proxies:
+        proxies = list(self._proxies)
+        proxy_set = tuple(self._proxies)
+        if self._interactive:
+            cursor = self._interactive_next.get(proxy_set, 0) % len(proxies)
+            proxies = proxies[cursor:] + proxies[:cursor]
+            preferred = self._preferred or self._interactive_good.get(proxy_set)
+            proxies.sort(key=lambda pair: pair[0] != preferred)
+            proxies = proxies[:2]
+        for pid, url in proxies:
             provider = self._make(url)
+            if self._interactive and hasattr(provider, "interactive_limits"):
+                provider.interactive_limits()
             try:
                 result = fn(provider)
             except LLMConnectionError as exc:
                 self._on_result(pid, False)
+                if self._interactive:
+                    self._interactive_next[proxy_set] = next(i for i, pair in enumerate(self._proxies) if pair[0] == pid) + 1
+                    if self._interactive_good.get(proxy_set) == pid:
+                        self._interactive_good.pop(proxy_set, None)
+                    if self._preferred == pid:
+                        self._preferred = None
                 last = exc
                 continue
             self._on_result(pid, True)
+            self._preferred = pid
+            if self._interactive:
+                self._interactive_good[proxy_set] = pid
             return result
         raise LLMConnectionError("Ни один прокси не отвечает: проверьте список в «Мой кабинет → Прокси»") from last
 

@@ -72,6 +72,8 @@ async def lifespan(_: FastAPI):
     reset_stale()
     reset_stale_guides()
     reset_stale_runs()
+    from .return_jobs import seed_recent_jobs
+    seed_recent_jobs()
     reset_stale_assembly()
     backfill_doc_dates()
     try:  # дубли документов возврата (одна и та же сборка под разной записью номера)
