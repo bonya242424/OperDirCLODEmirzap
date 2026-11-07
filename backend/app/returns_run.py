@@ -312,7 +312,7 @@ def run_check(run_id: int) -> None:
                     if parked:
                         say("Отправка требует сверки: позиция заблокирована, продолжаю остальные товары")
                         # Покидаем старую форму до следующей позиции, чтобы её нельзя было отправить повторно.
-                        manager.goto(key, sup.portal_url)
+                        manager.navigate(key, sup.portal_url)
                         blocked = False
                     if re.search(r"время выполнения|доступного времени|нехватк[аи] времени|лимит[а-я]* времени", summary, re.I):
                         blocked = False

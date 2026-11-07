@@ -226,7 +226,7 @@ def test_unknown_submission_is_parked_and_next_item_continues(client, owner, mon
         if browser.clicks == 2:
             browser.text = "Заявка 987654322 отправлена"
 
-    browser.goto, browser.send_return = goto, send
+    browser.navigate, browser.send_return = goto, send
     script = Script(
         call("submit_return", line_ids=[line_id], x=10, y=10),
         call("browser_wait"),
