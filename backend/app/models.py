@@ -323,6 +323,7 @@ class ReturnLine(Base):
     status: Mapped[str] = mapped_column(String(16), default="pending")
     request_no: Mapped[str] = mapped_column(String(100), default="")
     note: Mapped[str] = mapped_column(Text, default="")
+    check_evidence: Mapped[str] = mapped_column(Text, default="")  # JSON: товар, бренд, количество и запуск проверки
 
 
 class Agent(Base):

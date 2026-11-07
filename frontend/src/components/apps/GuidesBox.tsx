@@ -9,6 +9,7 @@ interface Guide {
   text: string;
   message: string;
   created_at: string;
+  has_video?: boolean;
 }
 
 const STATUS: Record<Guide["status"], string> = { running: "Разбираю кадры…", ok: "Инструкция готова", error: "Не получилось разобрать" };
@@ -96,10 +97,10 @@ export default function GuidesBox({ listUrl, itemUrl, title = "Видео «ка
           <div key={g.id} className={`guide ${g.status}`}>
             <div className="guide-top">
               <b>{g.filename}</b>
-              <span className="muted small">{mb(g.size)} · {formatAgo(g.created_at)} · {STATUS[g.status]}</span>
+              <span className="muted small">{g.has_video === false ? "Текстовая инструкция" : mb(g.size)} · {formatAgo(g.created_at)} · {STATUS[g.status]}</span>
               <span className="grow" />
-              {canEdit && <button className="ghost" disabled={g.status === "running"} onClick={() => act(() => api(`${itemUrl}/${g.id}/reanalyze`, { method: "POST" }))}>Разобрать снова</button>}
-              {canEdit && <button className="ghost danger" onClick={() => window.confirm(`Удалить видео «${g.filename}»?`) && act(() => api(`${itemUrl}/${g.id}`, { method: "DELETE" }))}>Удалить</button>}
+              {canEdit && g.has_video !== false && <button className="ghost" disabled={g.status === "running"} onClick={() => act(() => api(`${itemUrl}/${g.id}/reanalyze`, { method: "POST" }))}>Разобрать снова</button>}
+              {canEdit && <button className="ghost danger" onClick={() => window.confirm(`Удалить ${g.has_video === false ? "инструкцию" : "видео"} «${g.filename}»?`) && act(() => api(`${itemUrl}/${g.id}`, { method: "DELETE" }))}>Удалить</button>}
             </div>
             {g.message && g.status !== "running" && <p className={g.status === "error" ? "error" : "muted small"}>{g.message}</p>}
             {g.status === "ok" && (

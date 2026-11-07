@@ -8,8 +8,25 @@ from app import connections as conn_lib
 from app.db import SessionLocal
 from app.models import ReturnLine, ReturnSupplier, utcnow
 from tests.conftest import login
-from tests.test_agents import Script, call, say
+from tests.test_agents import Script, call as raw_call, say
 from tests.test_returns import SAMPLE, _supplier
+
+def call(name, **args):
+    if name == "record_item_result" and args.get("line_id"):
+        with SessionLocal() as db:
+            row = db.get(ReturnLine, args["line_id"])
+            if row:
+                args.setdefault("article", row.article)
+                args.setdefault("brand", row.brand)
+                if args.get("status") == "ok":
+                    args.setdefault("available_qty", row.qty + 1)
+    return raw_call(name, **args)
+
+
+def first_item(bid):
+    with SessionLocal() as db:
+        return db.query(ReturnLine).filter_by(batch_id=bid).order_by(ReturnLine.id).first().id
+
 
 INV = "ЮП0655627 /3"
 PAGE = """<!doctype html><title>t</title><body style="margin:0">
@@ -61,7 +78,7 @@ def test_check_run_never_sends(client, owner, site, monkeypatch):
         call("browser_click", x=150, y=120),  # кнопка «Отправить заявку»: должна быть заблокирована
         call("browser_view"),
         call("browser_goto", url="https://evil.example/"),
-        call("record_result", invoice_no=INV, status="already_returned", note="на сайте уже возвращено"),
+        call("record_item_result", line_id=first_item(bid), status="error", note="Доступность не подтверждена"),
         call("finish", reason="blocked", summary="Проверил один счёт"),
     )
     monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
@@ -73,12 +90,13 @@ def test_check_run_never_sends(client, owner, site, monkeypatch):
     assert run["status"] == "failed", run
     log = "\n".join(run["log"])
     assert "заблокирована" in log and "только сайт поставщика" in log
-    assert "Счёт ЮП0655627 /3: уже возвращено" in log
-    assert "Не проверено счетов: 9" in run["summary"]
+    assert "Товар " in log and "Доступность не подтверждена" in log
+    assert "Не проверено счетов: 10" in run["summary"]
     # скриншот ушёл в модель картинкой
     assert any(isinstance(b.get("content"), list) and b["content"][0].get("type") == "image" for m in script.seen[3:4] for b in m[0][-1]["content"])
     inv = {i["invoice_no"]: i for i in client.get(f"/api/returns/batches?supplier_id=1", headers=owner).json()[0]["invoices"]}[INV]
-    assert inv["status"] == "failed" and "уже возвращено" in inv["note"]
+    with SessionLocal() as db:
+        assert db.get(ReturnLine, first_item(bid)).status == "failed"
     with SessionLocal() as db:
         assert db.query(ReturnLine).filter(ReturnLine.status == "submitted").count() == 0
 
@@ -115,7 +133,8 @@ def test_no_model_key_fails_clearly(client, owner, site, monkeypatch):
 
 def test_second_run_checks_only_unchecked_and_clears_field(client, owner, site, monkeypatch):
     bid = _batch(client, owner, site)
-    first = Script(call("record_result", invoice_no=INV, status="ok", note="ок"), call("finish", reason="blocked", summary="один"))
+    first_id = first_item(bid)
+    first = Script(call("record_item_result", line_id=first_id, status="error", note="Нет доступности"), call("finish", reason="blocked", summary="один"))
     monkeypatch.setattr("app.returns_run.get_provider", lambda: first)
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
     run = _last(client, owner, bid)
@@ -125,7 +144,7 @@ def test_second_run_checks_only_unchecked_and_clears_field(client, owner, site, 
     monkeypatch.setattr("app.returns_run.get_provider", lambda: second)
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)
     plan = second.seen[0][0][0]["content"]
-    assert INV not in plan and "ЮП0656162" in plan  # проверенный счёт не повторяется
+    assert f"line_id={first_id}:" not in plan  # обработанная строка не повторяется
 
 
 def test_prune_helpers():
@@ -154,7 +173,12 @@ def test_supplier_runs_endpoint(client, owner, site, monkeypatch):
 def no_browser(monkeypatch):
     from types import SimpleNamespace
 
+    def page_text(*args, **kwargs):
+        with SessionLocal() as db:
+            return "\n".join(f"{row.article} {row.brand}" for row in db.query(ReturnLine))
+
     monkeypatch.setattr("app.returns_run.manager", SimpleNamespace(
+        read_text=page_text,
         open=lambda *args: None,
         close=lambda *args: None,
         screenshot=lambda *args: b"image",
@@ -164,13 +188,13 @@ def no_browser(monkeypatch):
 def test_early_finish_continues_remaining_invoices(client, owner, monkeypatch, no_browser):
     bid = _batch(client, owner, "https://example.com")
     with SessionLocal() as db:
-        invoices = list(dict.fromkeys(row.invoice_no for row in db.query(ReturnLine).filter_by(batch_id=bid)))
+        ids = [row.id for row in db.query(ReturnLine).filter_by(batch_id=bid).order_by(ReturnLine.id)]
     script = Script(
-        call("record_result", invoice_no=invoices[0], status="error", note="Товар не удалось найти"),
-        call("finish", summary="Один счёт проверен"),
+        call("record_item_result", line_id=ids[0], status="error", note="Товар не удалось найти"),
+        call("finish", summary="Один товар проверен"),
         say("Больше действий нет"),
-        *(call("record_result", invoice_no=inv, status="ok", note="Подтверждено") for inv in invoices[1:]),
-        call("finish", summary="Все счета проверены"),
+        *(call("record_item_result", line_id=lid, status="error", note="Нет доступности") for lid in ids[1:]),
+        call("finish", summary="Все товары проверены"),
     )
     monkeypatch.setattr("app.returns_run.get_provider", lambda: script)
     client.post(f"/api/returns/batches/{bid}/check-run", headers=owner)

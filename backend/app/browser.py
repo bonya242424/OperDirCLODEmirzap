@@ -289,6 +289,83 @@ class BrowserManager:
     def fill_control(self, key: int, control: str, value: str) -> None:
         self._run(lambda: self._fill_control(key, control, value))
 
+    def search_article(self, key: int, control: str, value: str) -> dict:
+        return self._run(lambda: self._search_article(key, control, value))
+
+    def armtek_search_page(self, key: int, url: str) -> dict:
+        return self._run(lambda: self._armtek_search_page(key, url))
+
+    async def _armtek_search_page(self, key: int, url: str) -> dict:
+        from urllib.parse import urlsplit
+        session = self._get(key)
+        target = urlsplit(url)
+        for page in session.context.pages:
+            current = urlsplit(page.url)
+            if current.scheme == target.scheme and current.netloc == target.netloc and current.path.rstrip('/') == target.path.rstrip('/'):
+                session.page = page
+                await page.bring_to_front()
+                break
+        else:
+            await session.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        return {"page": await self._read(key, 6000), "controls": await self._controls(key)}
+
+    async def _search_article(self, key: int, control: str, value: str) -> dict:
+        element = await self._control(key, control)
+        info = await element.evaluate("e => ({tag:e.tagName,type:e.type,label:(e.labels?.[0]?.innerText || e.placeholder || e.title || e.closest('tr')?.cells?.[0]?.innerText || '')})")
+        import re
+        if info["tag"] != "INPUT" or info["type"] not in ("text", "search", "") or not re.search(r"артикул|код.*материал", info["label"], re.I):
+            raise BrowserError("Выберите поле поиска артикула из browser_controls")
+        await element.fill("")
+        await element.press_sequentially(value, delay=35)
+        await self._get(key).page.wait_for_timeout(900)
+        actual = await element.input_value()
+        controls = await self._controls(key)
+        suggestions = await self._get(key).page.evaluate("""() => Array.from(document.querySelectorAll('[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion'))
+            .filter(e => e.getClientRects().length).map(e => e.innerText.trim()).filter(Boolean).slice(0,20)""")
+        return {"input_value": actual, "suggestions": suggestions, "controls": controls}
+
+    def forum_returns(self, key: int) -> dict:
+        return self._run(lambda: self._forum_returns(key))
+
+    def find_product(self, key: int, article: str, brand: str) -> dict:
+        return self._run(lambda: self._find_product(key, article, brand))
+
+    async def _find_product(self, key: int, article: str, brand: str) -> dict:
+        session = self._get(key)
+        session.controls_version = getattr(session, "controls_version", 0) + 1
+        rows = await session.page.evaluate(r"""({article,brand,version}) => {
+            const norm=s=>s.toUpperCase().replace(/[\s./-]+/g,'');
+            let index=0;
+            return Array.from(document.querySelectorAll('tr')).filter(row=>!row.querySelector('tr') && row.getClientRects().length && norm(row.innerText).includes(norm(article)) && norm(row.innerText).includes(norm(brand))).map(row=>({
+                text:row.innerText,
+                headers:Array.from(row.closest('table')?.rows[0]?.cells || []).map(c=>c.innerText.trim()),
+                controls:Array.from(row.querySelectorAll('input,select,button,a')).filter(e=>e.getClientRects().length && !['hidden','password','file'].includes(e.type)).map(e=>{
+                    const control=version+'-'+index++;e.setAttribute('data-operdir-control',control);
+                    return {control,tag:e.tagName,type:e.type || '',label:(e.labels?.[0]?.innerText || e.placeholder || e.title || e.innerText || e.name || '').trim(),value:e.value || '',href:e.href || '',disabled:!!e.disabled,
+                        options:e.tagName==='SELECT'?Array.from(e.options).map(o=>({value:o.value,text:o.text})):undefined};
+                })
+            }));
+        }""", {"article": article, "brand": brand, "version": session.controls_version})
+        from .return_verification import on_page
+        return {"article": article, "brand": brand, "rows": [row for row in rows if on_page(article, row["text"]) and on_page(brand, row["text"])]}
+
+    async def _forum_returns(self, key: int) -> dict:
+        await self._controls(key)
+        raw = await self._get(key).page.evaluate(r"""() => ({
+            tables:Array.from(document.querySelectorAll('table')).map(table=>Array.from(table.rows).map(row=>({
+                visible:!!row.getClientRects().length,
+                cells:Array.from(row.cells).map(cell=>{
+                    const link=Array.from(cell.querySelectorAll('a')).find(a=>/Отказ\s+от\s+товара/i.test(a.innerText) && !a.hasAttribute('disabled') && a.getAttribute('aria-disabled')!=='true' && a.href);
+                    return {text:cell.innerText.trim(),rowspan:cell.rowSpan,colspan:cell.colSpan,
+                        action:link?{href:link.href,control:link.getAttribute('data-operdir-control')}:null};
+                })
+            }))),
+            has_creation_section:/Создание\s+возвратов/i.test(document.body.innerText),
+            search_values:Array.from(document.querySelectorAll('input')).filter(e=>e.getClientRects().length && ['text','search',''].includes(e.type)).map(e=>e.value).filter(Boolean)
+        })""")
+        from .return_search import forum_offers_from_tables
+        return {"offers": forum_offers_from_tables(raw.pop("tables")), **raw}
+
     async def _fill_control(self, key: int, control: str, value: str) -> None:
         element = await self._control(key, control)
         info = await element.evaluate("(e) => ({tag:e.tagName,type:e.type,disabled:e.disabled,readonly:e.readOnly})")
