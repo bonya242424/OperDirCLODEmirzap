@@ -274,6 +274,24 @@ class ReturnRun(Base):
     last_shot: Mapped[str] = mapped_column(Text, default="")  # последний скриншот окна (base64 jpeg) для разбора, что увидел агент
 
 
+class ReturnJob(Base):
+    """Сохранённая очередь подтверждённых сборок с автоматическим восстановлением."""
+
+    __tablename__ = "return_jobs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("return_suppliers.id"), index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="waiting", index=True)
+    payload: Mapped[str] = mapped_column(Text, default="{}")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    run_ids: Mapped[str] = mapped_column(Text, default="[]")
+    retries: Mapped[int] = mapped_column(Integer, default=0)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ReturnGuide(Base):
     """Видео «как оформлять возврат» у поставщика и инструкция, которую ИИ составил по кадрам."""
 

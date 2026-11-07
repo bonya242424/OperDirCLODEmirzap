@@ -30,7 +30,7 @@ def split_approval(log, workers):
     buckets = [[] for _ in range(min(workers, len(groups)))]
     for group in sorted(groups.values(), key=len, reverse=True):
         min(buckets, key=len).extend(group)
-    return [json.dumps([APPROVAL_PREFIX + json.dumps({"lines": bucket,
+    return [json.dumps([APPROVAL_PREFIX + json.dumps({**({"portal_url": approval["portal_url"]} if approval.get("portal_url") else {}), "lines": bucket,
         "worker": {"index": index + 1, "total": len(buckets)}}, ensure_ascii=False)], ensure_ascii=False)
         for index, bucket in enumerate(buckets)]
 

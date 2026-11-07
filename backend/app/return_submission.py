@@ -29,9 +29,9 @@ def supplier_kind(url):
 
 
 def supplier_busy(db, supplier_id):
-    from .models import ReturnBatch
+    from .models import ReturnBatch, ReturnJob
 
-    return ACTIVE_QUEUES.get(supplier_id, {}).get("active") or db.scalar(
+    return ACTIVE_QUEUES.get(supplier_id, {}).get("active") or db.scalar(select(ReturnJob.id).where(ReturnJob.supplier_id == supplier_id, ReturnJob.status.in_(("waiting", "running", "paused"))).limit(1)) or db.scalar(
         select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id)
         .where(ReturnBatch.supplier_id == supplier_id, ReturnRun.status == "running").limit(1)
     )
@@ -45,11 +45,13 @@ def eligible_rows(db, batch_id):
     ).order_by(ReturnLine.id)))
 
 
-def approval_log(rows):
+def approval_log(rows, portal_url=None):
     payload = {"lines": [
         {key: getattr(row, key) for key in ("id", "article", "brand", "qty", "invoice_no")}
         for row in rows
     ]}
+    if portal_url:
+        payload["portal_url"] = portal_url
     return json.dumps([APPROVAL_PREFIX + json.dumps(payload, ensure_ascii=False)], ensure_ascii=False)
 
 
@@ -176,6 +178,9 @@ def submission_tool(db, mgr, key, host, batch, run, approval, name, args):
 
         attempt = approval.get("attempt")
         if not attempt:
+            number = str(args.get("request_no", "")).strip()
+            if any(receipt.get("request_no") == number for receipt in approval.get("receipts", [])):
+                return f"Заявка {number} уже сохранена для предыдущего товара. Повторная запись не нужна; продолжайте текущий товар."
             raise BrowserError("Нет отправки, результат которой нужно зафиксировать")
         number = str(args.get("request_no", "")).strip()
         page = mgr.read_text(key, limit=20000)

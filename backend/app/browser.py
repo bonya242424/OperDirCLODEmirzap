@@ -79,8 +79,13 @@ class BrowserManager:
                 raise BrowserError(f"Ошибка браузера: {msg or type(exc).__name__}") from None
 
     async def _start(self) -> None:
-        if self._browser is not None:
+        if self._browser is not None and self._browser.is_connected():
             return
+        if self._browser is not None:
+            self._browser = None
+            if self._pw is not None:
+                await self._pw.stop()
+                self._pw = None
         try:
             from playwright.async_api import async_playwright
         except ImportError:
@@ -108,6 +113,12 @@ class BrowserManager:
     # --- действия (синхронные обёртки) ---
     def is_open(self, key: int) -> bool:
         return key in self._sessions
+
+    def auth_required(self, key: int) -> bool:
+        return self._run(lambda: self._auth_required(key))
+
+    async def _auth_required(self, key: int) -> bool:
+        return await self._get(key).page.locator('input[type=password]:visible').count() > 0
 
     def open(self, key: int, url: str, state: dict | None) -> None:
         self._run(lambda: self._open(key, url, state), timeout=60.0)

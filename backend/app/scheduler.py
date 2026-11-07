@@ -54,5 +54,7 @@ def start_scheduler() -> BackgroundScheduler:
     )
     stop_stale_runs()
     scheduler.add_job(run_due_agents, "interval", minutes=1, id="agents_due", max_instances=1, coalesce=True)
+    from .return_jobs import recover_jobs
+    scheduler.add_job(recover_jobs, "interval", seconds=15, id="returns_recovery", max_instances=1, coalesce=True, next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5))
     scheduler.start()
     return scheduler

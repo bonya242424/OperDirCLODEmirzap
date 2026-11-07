@@ -117,7 +117,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
   const running = false;
   const [multi, setMulti] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
-  const [queue, setQueue] = useState<{ active: boolean; active_suppliers?: number[]; total: number; pos: number; current: { id: number; number: string } | null; done: { batch_id: number; status: string }[] } | null>(null);
+  const [queue, setQueue] = useState<{ active: boolean; note?: string; active_suppliers?: number[]; total: number; pos: number; current: { id: number; number: string } | null; done: { batch_id: number; status: string }[] } | null>(null);
   const [info, setInfo] = useState("");
   const [logOpen, setLogOpen] = useState(false);
   const [logRunId, setLogRunId] = useState<number | null>(null);
@@ -456,6 +456,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
               <div className="ag-hint">
                 Очередь возвратов: документ {queue.pos} из {queue.total}{queue.current ? ` (${queue.current.number || queue.current.id})` : ""}.
                 {(queue.active_suppliers?.length ?? 0) > 1 && ` Одновременно идут поставщиков: ${queue.active_suppliers?.length}.`}
+                {queue.note && <span className="muted small"> {queue.note} </span>}
                 <button className="ghost danger" onClick={cancelQueue}>Отменить очередь</button>
               </div>
             )}
@@ -510,7 +511,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                 {me.role === "owner" && (checking ? (
                   <button className="danger" onClick={stopCheck}>Остановить{activeRuns.length > 1 ? ` все потоки (${activeRuns.length})` : ""}{activeRun?.batch_id !== current.id ? " проверку другой сборки" : ""}</button>
                 ) : (
-                  <button className="primary" onClick={startCheck} disabled={busy || !runs || !supplier?.has_session} title={supplier?.has_session ? "Агент оформит и отправит возвраты по неотправленным позициям после подтверждения запуска" : "Сначала войдите в кабинет и сохраните вход"}>
+                  <button className="primary" onClick={startCheck} disabled={busy || !!queue?.active || !runs || !supplier?.has_session} title={supplier?.has_session ? "Агент оформит и отправит возвраты по неотправленным позициям после подтверждения запуска" : "Сначала войдите в кабинет и сохраните вход"}>
                     {busy ? "Запускаю оформление…" : "Оформить возвраты"}
                   </button>
                 ))}
