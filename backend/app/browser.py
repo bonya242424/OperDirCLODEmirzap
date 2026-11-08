@@ -154,7 +154,10 @@ class BrowserManager:
             if(Array.from(document.querySelectorAll('a,button,[role=button]')).some(e=>/^(Выйти|Выход|Logout|Log out|Sign out)$/i.test(e.innerText.trim()))) return true;
             if(location.hostname.endsWith('.armtek.ru') && location.pathname.includes('/order_return')) return !!document.querySelector('input[name=MATNR]');
             if(location.hostname.endsWith('.forum-auto.ru') && location.pathname.includes('/shop/returns/')) return /Создание возвратов|Поиск документов для создания/.test(document.body.innerText);
-            return false;
+            const path=location.pathname.toLowerCase(), body=(document.body.innerText||'').toLowerCase();
+            if(/login|logon|signin|auth|авторизац|вход/.test(path)) return false;
+            if(/введите пароль|введите логин и пароль|для продолжения войдите|необходимо авторизоваться/.test(body)) return false;
+            return true;
         }""")
 
     def login_diagnostic(self, key: int) -> dict:
@@ -203,7 +206,13 @@ class BrowserManager:
                     return await page.locator('input[name="MATNR" i]').count() == 1
                 if domain == "forum-auto.ru" and "/shop/returns/" in page.url:
                     return await page.get_by_text(re.compile(r"Создание возвратов|Поиск документов для создания")).count() > 0
-                return False
+                path = urlsplit(page.url).path.lower()
+                body = (await page.locator("body").inner_text()).lower()
+                if re.search(r"login|logon|signin|auth|авторизац|вход", path):
+                    return False
+                if re.search(r"введите пароль|введите логин и пароль|для продолжения войдите|необходимо авторизоваться", body):
+                    return False
+                return True
             except Exception as exc:
                 if "context was destroyed" in str(exc).lower() or "navigation" in str(exc).lower():
                     return False

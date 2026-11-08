@@ -236,6 +236,7 @@ def test_repeated_blocked_item_is_skipped_and_next_is_processed(client, owner, m
         navigate=lambda *a: visits.append(a[-1]))
     script = Script(call("finish", reason="blocked", summary="Старая заявка другого товара"),
         call("finish", reason="blocked", summary="Не удалось перейти"),
+        call("finish", reason="blocked", summary="Повторная попытка также не помогла"),
         call("record_item_result", line_id=ids[1], status="error", note="Нет доступных поставок"))
     monkeypatch.setattr("app.returns_run.manager", browser)
     monkeypatch.setattr("app.returns_run.get_provider", lambda: script)

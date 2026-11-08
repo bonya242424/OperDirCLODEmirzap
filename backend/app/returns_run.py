@@ -316,6 +316,11 @@ def run_check(run_id: int) -> None:
         if kind == "guided":
             from .return_profiles import profile_for
             profile = profile_for(sup.portal_url)
+            if profile["name"] == "Автоконтинент":
+                system += (
+                    " Для обязательных полей автоконтинента worker_name укажи «Бондарев Дан», "
+                    "worker_position — «рекламация». Заполни их в форме перед отправкой."
+                )
             system += (
                 " Поставщик " + profile["name"] + ". Выполняй сохранённую инструкцию видео. "
                 "После поиска текущего артикула вызови supplier_find_product. Исследуй и оформляй только один текущий товар. "
