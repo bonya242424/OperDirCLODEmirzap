@@ -22,6 +22,12 @@ wait_ready() {
   return 1
 }
 
+if [ "$PREV" = "$NEW" ] && wait_ready; then
+  echo "Версия уже запущена, перезапуск не требуется."
+  docker compose exec -T backend python -m app.supplier_credentials --wait-status || echo "Статус автовхода пока недоступен."
+  exit 0
+fi
+
 docker compose up -d --build
 if wait_ready; then
   echo "Готово: система отвечает."

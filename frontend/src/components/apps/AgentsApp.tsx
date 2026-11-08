@@ -393,7 +393,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             <li key={x.id}>
               <button className={x.id === supSel ? "on" : ""} onClick={() => { setSupSel(x.id); reset(); }} disabled={running}>
                 <strong>{x.name}</strong>
-                {x.has_credentials && <span className={x.login_status === "error" ? "bad small" : "muted small"}>Автовход: {x.login_status === "ok" ? "проверен" : x.login_status === "error" ? "ошибка" : "настраивается"}</span>
+                {x.has_credentials && <span className={x.login_status === "error" ? "bad small" : "muted small"}>Автовход: {x.login_status === "ok" ? "проверен" : x.login_status === "error" ? "ошибка" : "настраивается"}</span>}
                 <span className={`small supplier-check-status supplier-check-${x.check_status ?? "not_started"}`}>
                   {{ not_started: "Не запущен", running: "В процессе", done: "Готово", error: "Ошибка" }[x.check_status ?? "not_started"]}
                 </span>

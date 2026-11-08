@@ -272,8 +272,8 @@ def preflight_one(supplier_id):
             supplier = db.get(ReturnSupplier, supplier_id)
             if not supplier or not supplier.credentials_encrypted or supplier.login_status == "error":
                 return
-            raw = connections.decrypt(supplier.session_encrypted).get("state")
-            manager.open(key, supplier.portal_url, json.loads(raw) if raw else None)
+            # Проверяем именно доступы таблицы в чистом контексте, не принимая старую cookie за проверку пароля.
+            manager.open(key, supplier.portal_url, None)
             ensure_session(db, supplier, manager, key, force=True)
             db.refresh(supplier)
             supplier.login_status, supplier.login_error = "ok", ""
