@@ -69,6 +69,9 @@ async def lifespan(_: FastAPI):
         if settings.seed_project_context:
             project_context_seed.sync(db)
         invalidate_legacy(db)
+        from .return_brands import sync_instructions
+        sync_instructions(db)
+        db.commit()
     reset_stale()
     reset_stale_guides()
     reset_stale_runs()

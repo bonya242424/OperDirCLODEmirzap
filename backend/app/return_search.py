@@ -20,7 +20,13 @@ def article_variants(article, brand):
 def matching_offers(offers, row):
     if isinstance(offers, dict):
         offers = offers.get("offers", [])
-    return [offer for offer in offers if on_page(row.article, offer.get("product", "")) and on_page(row.brand, offer.get("product", "")) and offer.get("quantity", 0) > 0]
+    from .return_brands import selected_indices, product_brand
+    relevant = [offer for offer in offers if on_page(row.article, offer.get("product", ""))]
+    candidates = [{"article": row.article, "brand": offer.get("brand") or product_brand(offer.get("product", ""), row.article)} for offer in relevant]
+    # При точном названии бренда достаточно прежней проверки целой ячейки.
+    exact = [offer for offer in relevant if on_page(row.brand, offer.get("product", ""))]
+    selected = exact if exact else [relevant[index] for index in selected_indices(candidates, row.article, row.brand)]
+    return [offer for offer in selected if offer.get("quantity", 0) > 0]
 
 
 def forum_offers_from_tables(tables):

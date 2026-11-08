@@ -30,10 +30,8 @@ def valid_key(name: str) -> bool:
 
 
 def exact_product_index(candidates: list[dict], article: str, brand: str) -> int | None:
-    from .return_verification import normalized
-    matches = [index for index, item in enumerate(candidates)
-               if normalized(item.get("article", "")) == normalized(article)
-               and normalized(item.get("brand", "")) == normalized(brand)]
+    from .return_brands import selected_indices
+    matches = selected_indices(candidates, article, brand)
     return matches[0] if len(matches) == 1 else None
 
 
@@ -464,8 +462,9 @@ class BrowserManager:
         rows = await self._evaluate_read(session.page, r"""({article,brand,version}) => {
             const norm=s=>s.toUpperCase().replace(/[\s./-]+/g,'');
             let index=0;
-            return Array.from(document.querySelectorAll('tr')).filter(row=>!row.querySelector('tr') && row.getClientRects().length && norm(row.innerText).includes(norm(article)) && norm(row.innerText).includes(norm(brand))).map(row=>({
+            return Array.from(document.querySelectorAll('tr')).filter(row=>!row.querySelector('tr') && row.getClientRects().length && norm(row.innerText).includes(norm(article))).map(row=>({
                 text:row.innerText,
+                brand:(Array.from(row.cells)[2]?.innerText || '').trim(),
                 headers:Array.from(row.closest('table')?.rows[0]?.cells || []).map(c=>c.innerText.trim()),
                 controls:Array.from(row.querySelectorAll('input,select,button,a')).filter(e=>e.getClientRects().length && !['hidden','password','file'].includes(e.type)).map(e=>{
                     const previous=e.getAttribute('data-operdir-control');
@@ -476,8 +475,16 @@ class BrowserManager:
             }));
         }""", {"article": article, "brand": brand, "version": session.controls_version})
         from .return_verification import on_page
-        matched = [row for row in rows if on_page(article, row["text"]) and on_page(brand, row["text"])]
+        from .return_brands import selected_indices
+        article_rows = [row for row in rows if on_page(article, row["text"])]
+        if article_rows and all(row.get("brand") for row in article_rows):
+            indices = selected_indices([{"article": article, "brand": row["brand"]} for row in article_rows], article, brand)
+            matched = [article_rows[index] for index in indices]
+        else:
+            matched = [row for row in article_rows if on_page(brand, row["text"])]
         result = {"article": article, "brand": brand, "rows": matched}
+        if matched and matched[0].get("brand"):
+            result["selected_brand"] = matched[0]["brand"]
         if not matched:
             result["diagnostics"] = await self._evaluate_read(session.page, r"""({article,brand}) => {
                 const norm=s=>(s || '').toUpperCase().replace(/[\s./-]+/g,'');

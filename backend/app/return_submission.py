@@ -93,12 +93,13 @@ def validate_preview(preview, rows, host):
         raise BrowserError("Форма открыта на другом сайте")
     if preview["label"] not in ("Оформить возврат", "Отправить заявку"):
         raise BrowserError("Выбрана не кнопка отправки возврата")
+    from .return_brands import effective_brand
     text = normalized(preview["text"])
     if supplier_kind(preview["url"]) == "forum":
         if len(rows) != 1 or "созданиеновоговозврата" not in text:
             raise BrowserError("Форум оформляет одну товарную позицию за заявку")
         row = rows[0]
-        if normalized(row.article) not in text or not row.brand or normalized(row.brand) not in text:
+        if normalized(row.article) not in text or not effective_brand(row) or normalized(effective_brand(row)) not in text:
             raise BrowserError("Товар или бренд в форме не совпадает со сборкой")
         if preview.get("quantities") != [row.qty]:
             raise BrowserError("Количество в форме не совпадает со сборкой")
@@ -112,7 +113,7 @@ def validate_preview(preview, rows, host):
         actual = preview.get("items", [])
         expected = {}
         for row in rows:
-            key = (normalized(row.article), normalized(row.brand))
+            key = (normalized(row.article), normalized(effective_brand(row)))
             if not all(key):
                 raise BrowserError("Для оформления нужны артикул и бренд")
             expected[key] = expected.get(key, 0) + row.qty
