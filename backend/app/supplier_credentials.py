@@ -173,6 +173,9 @@ def ensure_session(db, supplier, manager, key, force=False, verify_credentials=F
         db.refresh(supplier)
         authenticated = lambda: manager.session_authenticated(key) if hasattr(manager, "session_authenticated") else not manager.auth_required(key)
         if not force and supplier.session_encrypted and authenticated():
+            if supplier.login_status != "ok" or supplier.login_error:
+                supplier.login_status, supplier.login_error = "ok", ""
+                db.commit()
             return False
         config = connections.decrypt(supplier.credentials_encrypted)
         if not config.get("username") or not config.get("password"):
@@ -185,6 +188,9 @@ def ensure_session(db, supplier, manager, key, force=False, verify_credentials=F
             if raw and not verify_credentials:
                 manager.open(key, supplier.portal_url, json.loads(raw))
                 if authenticated():
+                    if supplier.login_status != "ok" or supplier.login_error:
+                        supplier.login_status, supplier.login_error = "ok", ""
+                        db.commit()
                     return False
             state = manager.login(key, supplier.login_url, config["username"], config["password"], supplier.portal_url)
             supplier.session_encrypted = connections.encrypt({"state": json.dumps(state)})

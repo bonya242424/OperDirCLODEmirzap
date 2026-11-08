@@ -146,3 +146,54 @@ def test_parallel_recovery_tries_saved_session_before_new_password(client, owner
             login=lambda *args: (_ for _ in ()).throw(AssertionError("password must not be sent again")))
         assert ensure_session(db, supplier, driver, 1, force=True) is False
         assert events == ["restore"]
+
+
+def test_confirmed_existing_session_clears_stale_login_error(client, owner):
+    with SessionLocal() as db:
+        supplier = ReturnSupplier(name="Партком", portal_url="https://b2b.part-kom.ru/",
+            session_encrypted=connections.encrypt({"state": "{}"}),
+            credentials_encrypted=connections.encrypt({"username": "account", "password": "private"}),
+            login_status="error", login_error="Не найдена форма входа.")
+        db.add(supplier)
+        db.commit()
+        sid = supplier.id
+        driver = SimpleNamespace(session_authenticated=lambda key: True,
+            login=lambda *args: (_ for _ in ()).throw(AssertionError("must reuse authenticated session")))
+        assert ensure_session(db, supplier, driver, 1) is False
+    result = next(s for s in client.get("/api/returns/suppliers", headers=owner).json() if s["id"] == sid)
+    assert result["login_status"] == "ok"
+    assert result["login_error"] == ""
+
+
+def test_restored_session_clears_stale_diagnostic(client, owner):
+    with SessionLocal() as db:
+        supplier = ReturnSupplier(name="Партком", portal_url="https://b2b.part-kom.ru/",
+            session_encrypted=connections.encrypt({"state": "{}"}),
+            credentials_encrypted=connections.encrypt({"username": "account", "password": "private"}),
+            login_status="ready", login_error="Не найдена форма входа.")
+        db.add(supplier)
+        db.commit()
+        opened = []
+        driver = SimpleNamespace(session_authenticated=lambda key: bool(opened),
+            open=lambda *args: opened.append(True),
+            login=lambda *args: (_ for _ in ()).throw(AssertionError("must reuse restored session")))
+        assert ensure_session(db, supplier, driver, 1, force=True) is False
+        db.expire_all()
+        assert supplier.login_status == "ok"
+        assert supplier.login_error == ""
+
+
+def test_saving_new_session_discards_old_error_without_claiming_verified(client, owner, monkeypatch):
+    with SessionLocal() as db:
+        supplier = ReturnSupplier(name="Партком", portal_url="https://b2b.part-kom.ru/",
+            login_status="error", login_error="Не найдена форма входа.")
+        db.add(supplier)
+        db.commit()
+        sid = supplier.id
+    monkeypatch.setattr("app.routers.returns.manager.state",
+                        lambda key: {"cookies": [], "origins": []})
+    response = client.post(f"/api/returns/suppliers/{sid}/browser/save", headers=owner)
+    assert response.status_code == 200, response.text
+    assert response.json()["login_status"] == "ready"
+    assert response.json()["login_error"] == ""
+    assert response.json()["has_session"] is True

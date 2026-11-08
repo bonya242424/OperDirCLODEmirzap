@@ -699,6 +699,8 @@ def browser_save(supplier_id: int, db: Session = Depends(get_db), me: User = Dep
     state = _browser(lambda: manager.state(supplier_id))
     sup.session_encrypted = conn_lib.encrypt({"state": json.dumps(state)})
     sup.session_saved_at = utcnow()
+    # Ошибка относится к прежней сессии. Новую проверит агент при открытии.
+    sup.login_status, sup.login_error = "ready", ""
     db.commit()
     return _supplier_out(db, sup)
 
