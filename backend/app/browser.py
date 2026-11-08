@@ -142,6 +142,34 @@ class BrowserManager:
             log.info("Страница %s не загрузилась до конца", url)
 
 
+
+    def session_authenticated(self, key: int) -> bool:
+        return self._run(lambda: self._session_authenticated(key))
+
+    async def _session_authenticated(self, key: int) -> bool:
+        return await self._evaluate_read(self._get(key).page, """() => {
+            const visible=e=>!!e.getClientRects().length;
+            if(Array.from(document.querySelectorAll('input[type=password]')).some(visible)) return false;
+            if(document.querySelector('a[href*="logout" i],a[href*="logoff" i],a[href*="/exit" i]')) return true;
+            if(Array.from(document.querySelectorAll('a,button,[role=button]')).some(e=>/^(Выйти|Выход|Logout|Log out|Sign out)$/i.test(e.innerText.trim()))) return true;
+            if(location.hostname.endsWith('.armtek.ru') && location.pathname.includes('/order_return')) return !!document.querySelector('input[name=MATNR]');
+            if(location.hostname.endsWith('.forum-auto.ru') && location.pathname.includes('/shop/returns/')) return /Создание возвратов|Поиск документов для создания/.test(document.body.innerText);
+            return false;
+        }""")
+
+    def login_diagnostic(self, key: int) -> dict:
+        return self._run(lambda: self._login_diagnostic(key))
+
+    async def _login_diagnostic(self, key: int) -> dict:
+        session = self._get(key)
+        data = await self._evaluate_read(session.page, """() => ({
+            fields:Array.from(document.querySelectorAll('input')).filter(e=>e.getClientRects().length && e.type!=='hidden').map(e=>({type:e.type,name:e.name,id:e.id,autocomplete:e.autocomplete})).slice(0,20),
+            buttons:Array.from(document.querySelectorAll('a,button,input[type=submit],input[type=button],[role=button]')).filter(e=>e.getClientRects().length).map(e=>(e.tagName==='INPUT'?e.value:e.innerText).trim()).filter(t=>/вход|войти|авториз|login|sign in|log in/i.test(t) && !t.includes('@')).map(t=>t.slice(0,70)).slice(0,15),
+            password_count:Array.from(document.querySelectorAll('input[type=password]')).filter(e=>e.getClientRects().length).length
+        })""")
+        return {"stage": getattr(session, "login_stage", "open_cabinet"), **data}
+
+
     def login(self, key: int, login_url: str, username: str, password: str, target_url: str) -> dict:
         # Не повторять ввод/отправку пароля внутри общего механизма _run.
         return self._run(lambda: self._login(key, login_url, username, password, target_url), timeout=60, retry=False)
@@ -180,16 +208,18 @@ class BrowserManager:
                 raise
 
         try:
+            self._get(key).login_stage = "open_login"
             await page.goto(login_url, wait_until="domcontentloaded", timeout=25000)
             if not same_site(page.url):
                 raise BrowserError("Авторизация перенаправила на другой сайт")
             if await authenticated():
                 await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
                 return await self._state(key)
+            self._get(key).login_stage = "find_form"
             passwords = page.locator('input[type="password"]:visible')
             if await passwords.count() == 0:
                 # Открытие формы входа не является отправкой возврата.
-                entry = page.locator('a:visible,button:visible').filter(has_text=re.compile(r"^\s*(?:Войти|Вход|Авторизация|Личный кабинет|Login|Sign in)\s*$", re.I))
+                entry = page.locator('a:visible,button:visible').filter(has_text=re.compile(r"^\s*(?:Войти|Вход|Авторизация|Личный кабинет|Войти на сайт|Вход на сайт|Войти в личный кабинет|Войти в кабинет|Вход в кабинет|Вход в ЛК|Войти в ЛК|Вход / Регистрация|Вход для клиентов|Login|Sign in)\s*$", re.I))
                 if await entry.count() == 1:
                     await entry.click()
                     await page.wait_for_timeout(700)
@@ -204,29 +234,34 @@ class BrowserManager:
             from urllib.parse import urljoin
             if not same_site(urljoin(page.url, form_target)):
                 raise BrowserError("Форма входа отправляет данные на другой сайт")
+            self._get(key).login_stage = "find_username"
             users = root.locator(
-                'input[autocomplete="username"]:visible,input[type="email"]:visible,input[name*="login" i]:visible,input[name*="user" i]:visible,input[id*="login" i]:visible')
+                'input[autocomplete="username"]:visible,input[type="email"]:visible,input[name*="login" i]:visible,input[name*="user" i]:visible,input[id*="login" i]:visible,input[name*="email" i]:visible,input[id*="email" i]:visible')
             # Исключаем пароль даже если его имя содержит user/login.
             users = users.locator('xpath=self::input[not(@type="password") and not(@type="hidden") and not(@type="submit") and not(@type="button")]')
             if await users.count() != 1:
                 users = root.locator('input[type="text"]:visible,input[type="email"]:visible,input:not([type]):visible')
             if await users.count() != 1:
                 raise BrowserError("Не найдено однозначное поле логина")
-            submit = root.locator('button:visible,input[type="submit"]:visible').filter(
-                has_text=re.compile(r"^\s*(?:Войти|Вход|Вход в систему|Авторизоваться|Авторизация|Login|Sign in|Log in)\s*$", re.I))
+            self._get(key).login_stage = "find_submit"
+            submit = root.locator('button:visible,input[type="submit"]:visible,input[type="button"]:visible,[role="button"]:visible').filter(
+                has_text=re.compile(r"^\s*(?:Войти|Вход|Вход в систему|Войти на сайт|Вход на сайт|Войти в кабинет|Войти в личный кабинет|Войти в ЛК|Вход в ЛК|Авторизоваться|Авторизация|Login|Sign in|Log in)\s*$", re.I))
             if await submit.count() != 1:
                 submit = root.locator('button[type="submit"]:visible,input[type="submit"]:visible')
             if await submit.count() != 1:
                 raise BrowserError("Не найдена однозначная кнопка входа")
             label = await submit.get_attribute("value") or await submit.inner_text()
-            if not re.fullmatch(r"\s*(?:Войти|Вход|Вход в систему|Авторизоваться|Авторизация|Login|Sign in|Log in|Продолжить)\s*", label, re.I):
+            if not re.fullmatch(r"\s*(?:Войти|Вход|Вход в систему|Войти на сайт|Вход на сайт|Войти в кабинет|Войти в личный кабинет|Войти в ЛК|Вход в ЛК|Авторизоваться|Авторизация|Login|Sign in|Log in|Продолжить)\s*", label, re.I):
                 raise BrowserError("Кнопка формы не является входом")
+            self._get(key).login_stage = "fill_credentials"
             await users.fill(username)
             await password_field.fill(password)
             # Последняя проверка адреса непосредственно перед отправкой секретов.
             if not same_site(page.url):
                 raise BrowserError("Страница авторизации изменилась")
+            self._get(key).login_stage = "submit_login"
             await submit.click()
+            self._get(key).login_stage = "verify_login"
             for _ in range(20):
                 await page.wait_for_timeout(500)
                 if not same_site(page.url):
@@ -304,7 +339,7 @@ class BrowserManager:
             pass
 
     # --- режим проверки для агента: опасные действия блокируются кодом, а не просьбой к модели ---
-    RISKY = r"отправ|подтверд|оформить возврат|создать заяв|удал|submit|send|confirm|delete"
+    RISKY = r"отправ|подтверд|оформить возврат|создать заяв|удал|submit|send|confirm|delete|\bвернуть\b"
 
     def goto(self, key: int, url: str) -> None:
         self._run(lambda: self._goto(key, url), timeout=60.0)
@@ -373,6 +408,10 @@ class BrowserManager:
             is_preview = allow_return_preview and label.strip() == "Оформить возврат" and await page.evaluate(
                 "() => location.hostname.endsWith('.armtek.ru') && !/Оформить возврат по фактуре/i.test(document.body.innerText)"
             )
+            if allow_return_preview and not is_preview:
+                from urllib.parse import urlsplit
+                host = (urlsplit(page.url).hostname or "").lower()
+                is_preview = (host == "motexc.ru" or host.endswith(".motexc.ru")) and label.strip() == "Отправить заявку на возврат"
             if not is_preview:
                 raise BrowserError(f"Кнопка «{label.strip()}» заблокирована: в режиме проверки ничего не отправляется")
         from playwright.async_api import TimeoutError as PlaywrightTimeout
@@ -566,7 +605,12 @@ class BrowserManager:
             let index=0;
             return Array.from(document.querySelectorAll('tr')).filter(row=>!row.querySelector('tr') && row.getClientRects().length && norm(row.innerText).includes(norm(article))).map(row=>({
                 text:row.innerText,
-                brand:(Array.from(row.cells)[2]?.innerText || '').trim(),
+                brand:(() => {
+                    const headers=Array.from(row.closest('table')?.rows[0]?.cells || []).map(c=>c.innerText.trim());
+                    const index=headers.findIndex(s=>/^(?:Бренд|Производитель|Марка|Brand|Manufacturer)$/i.test(s));
+                    const fallback=location.hostname.endsWith('.armtek.ru') ? 2 : -1;
+                    return (row.getAttribute('data-brand') || Array.from(row.cells)[index>=0 ? index : fallback]?.innerText || '').trim();
+                })(),
                 headers:Array.from(row.closest('table')?.rows[0]?.cells || []).map(c=>c.innerText.trim()),
                 controls:Array.from(row.querySelectorAll('input,select,button,a')).filter(e=>e.getClientRects().length && !['hidden','password','file'].includes(e.type)).map(e=>{
                     const previous=e.getAttribute('data-operdir-control');
@@ -674,6 +718,44 @@ class BrowserManager:
                     if (Number.isFinite(qty)) items.push({article:c[a].innerText.trim(),brand:c[b].innerText.trim(),qty});
                 }
             }
+
+            const guided = !/(?:^|\.)armtek\.ru$|(?:^|\.)forum-auto\.ru$/.test(location.hostname);
+            const unmapped = [];
+            if (guided) {
+                items.length = 0;
+                const mapped = new Set();
+                for (const table of root.querySelectorAll('table')) {
+                    const heading = Array.from(table.rows).find(r=>Array.from(r.cells).some(c=>/^(?:Артикул|Код|Номер детали|Номер запчасти|Article|SKU|Part number)$/i.test(c.innerText.trim())));
+                    if (!heading) continue;
+                    const labels = Array.from(heading.cells).map(c=>c.innerText.trim());
+                    const a=labels.findIndex(s=>/^(?:Артикул|Код|Номер детали|Номер запчасти|Article|SKU|Part number)$/i.test(s));
+                    const b=labels.findIndex(s=>/^(?:Бренд|Производитель|Марка|Brand|Manufacturer)$/i.test(s));
+                    let q=labels.findIndex(s=>/к возврату|возвращаем|количеств[оа] возврата/i.test(s));
+                    if(q<0) q=labels.findIndex(s=>/^(?:Кол[.-]?во|Количество|Quantity|Qty)(?:\s|$)/i.test(s));
+                    if(a<0 || q<0) continue;
+                    for(const row of Array.from(table.rows)) {
+                        if(row===heading || !visible(row) || row.cells.length<=Math.max(a,q,b)) continue;
+                        const checks=Array.from(row.querySelectorAll('input[type=checkbox]'));
+                        if(checks.length && !checks.some(c=>c.checked)) continue;
+                        const cell=row.cells[q];
+                        const fields=Array.from(cell.querySelectorAll('input')).filter(e=>!['password','checkbox','radio'].includes(e.type));
+                        fields.forEach(e=>mapped.add(e));
+                        const nums=fields.map(e=>Number(e.value.replace(',','.'))).filter(n=>Number.isFinite(n));
+                        const distinct=[...new Set(nums)];
+                        if(distinct.length>1) {unmapped.push('conflicting quantity fields');continue;}
+                        const qty=nums.length?nums[0]:Number(cell.innerText.trim().replace(',','.'));
+                        if(!Number.isFinite(qty) || qty<=0) continue;
+                        items.push({article:row.cells[a].innerText.trim(),brand:b>=0?row.cells[b].innerText.trim():'',
+                                    qty,text:row.innerText});
+                    }
+                }
+                for(const field of root.querySelectorAll('input:enabled')) {
+                    const label=[field.name,field.id,field.placeholder,...Array.from(field.labels || []).map(l=>l.innerText)].join(' ');
+                    if(visible(field) && /quantity|qty|количеств|кол-во/i.test(label) && !mapped.has(field) && Number(field.value)>0)
+                        unmapped.push('unmapped quantity field');
+                }
+            }
+
             const quantities = [];
             for (const row of root.querySelectorAll('tr')) {
                 if (row.querySelector('tr') || !/Кол-во\s+для\s+возврата/i.test(row.innerText)) continue;
@@ -685,7 +767,10 @@ class BrowserManager:
                 .filter(visible).map(e => e.tagName === 'SELECT' ? (e.selectedOptions[0]?.text || '') : e.value).join(' ');
             const text = root.innerText;
             const documentMatch = text.match(/(?:Документ\s*:|фактуре\s*№)\s*([0-9]+)/i);
-            return {label,text,items,quantities,values,supplier_document:documentMatch ? documentMatch[1] : ''};
+            return {label,text,items,quantities,values,supplier_document:documentMatch ? documentMatch[1] : '',
+                root_scope:root.matches('.modal-content,[role=dialog],.modal')?'dialog':root.tagName==='FORM'?'form':'body',
+                form_valid:root.tagName==='FORM'?root.checkValidity():!Array.from(root.querySelectorAll('input,select,textarea')).some(e=>e.willValidate&&!e.checkValidity()),
+                unmapped_quantities:unmapped};
         }""", [x, y])
         return {"url": page.url, "page_text": await page.evaluate("document.body.innerText"), **data}
 

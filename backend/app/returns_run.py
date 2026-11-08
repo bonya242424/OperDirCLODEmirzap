@@ -97,6 +97,7 @@ SUBMIT_SYSTEM = (
 
 
 TOOLS = [
+    {"name": "supplier_find_product", "description": "Прочитать строки текущего артикула поставщика и сверить бренд; не отправляет заявки.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}}, "required": ["line_id"]}},
     {"name": "armtek_find_product", "description": "Найти текущий артикул и бренд во всех загруженных строках открытой фактуры Армтека, включая строки ниже начала страницы. Возвращает полные строки, заголовки и элементы управления без обрезки текста всей фактуры.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}}, "required": ["line_id"]}},
     {"name": "armtek_search_page", "description": "Вернуться к уже открытой вкладке поиска возвратов Армтека после просмотра фактуры. Если вкладки нет, открыть известную страницу /order_return. Возвращает текст и поля поиска; не отправляет заявок.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "armtek_search_article", "description": "Ввести только артикул текущей строки с реальными событиями клавиатуры и получить подсказки. variant=0 — исходный артикул; ответ содержит все варианты, включая пробелы и короткий запрос. Поле MATNR определяется автоматически: control можно не указывать. После ввода выберите полный артикул и бренд в подсказках.", "input_schema": {"type": "object", "properties": {"line_id": {"type": "integer"}, "control": {"type": "string"}, "variant": {"type": "integer", "minimum": 0}}, "required": ["line_id"]}},
@@ -128,6 +129,7 @@ TOOLS = [
 SUBMIT_TOOLS = [
     {"name": "submit_return", "description": "Один раз отправить итоговую форму возврата по подтверждённым line_id. Проверяются состав и количества формы.",
      "input_schema": {"type": "object", "properties": {"line_ids": {"type": "array", "items": {"type": "integer"}}, "control": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}}, "required": ["line_ids"]}},
+    {"name": "record_confirmation", "description": "После submit_return сохранить только НОВОЕ явное подтверждение регистрации без номера. Черновик, старое сообщение или просто закрытая форма не принимаются.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "record_submission", "description": "Зафиксировать новый номер отправленной заявки, видимый на странице после submit_return.",
      "input_schema": {"type": "object", "properties": {"request_no": {"type": "string"}}, "required": ["request_no"]}},
 ]
@@ -136,10 +138,12 @@ SUBMIT_TOOLS = [
 def tools_for_supplier(kind, submit=False, awaiting_receipt=False):
     tools = [tool for tool in TOOLS if not (
         (tool["name"].startswith("armtek_") and kind != "armtek") or
-        (tool["name"].startswith("forum_") and kind != "forum")
+        (tool["name"].startswith("forum_") and kind != "forum") or
+        (tool["name"] == "supplier_find_product" and kind != "guided")
     )]
     if submit:
-        tools += [tool for tool in SUBMIT_TOOLS if tool["name"] == ("record_submission" if awaiting_receipt else "submit_return")]
+        names = ("record_submission", "record_confirmation") if awaiting_receipt and kind == "guided" else ("record_submission",) if awaiting_receipt else ("submit_return",)
+        tools += [tool for tool in SUBMIT_TOOLS if tool["name"] in names]
     return tools
 
 
@@ -303,6 +307,20 @@ def run_check(run_id: int) -> None:
                 system += "Первый шаг «Оформить возврат» открывает итоговое окно обычным кликом; финальный клик только через submit_return."
             elif kind == "forum":
                 system += "Нажми «Отказ от товара», выбери доступный документ, количество из сборки и примечание «Отказ клиента», затем submit_return."
+        if kind == "guided":
+            from .return_profiles import profile_for
+            profile = profile_for(sup.portal_url)
+            system += (
+                " Поставщик " + profile["name"] + ". Выполняй сохранённую инструкцию видео. "
+                "После поиска текущего артикула вызови supplier_find_product. Исследуй и оформляй только один текущий товар. "
+                "Сначала проверь период, исходную поставку, бренд и доступное количество. Причину выбирай по инструкции этого поставщика. "
+                "Не придумывай ФИО, телефон, внутренние номера, Торг2 или документы: используй данные аккаунта и заполненные настройки. "
+                "Если обязательных фактических реквизитов/фото нет, укажи конкретный блокер и продолжай остальные независимые товары. "
+                "Финальная кнопка этой инструкции: " + ", ".join(profile["final"]) + ". Отправляй только через submit_return. "
+                "Состав итоговой формы должен явно показывать артикул, бренд, количество и исходный документ поставки. "
+                "После отправки получи новый номер заявки через record_submission. Если номера нет, но есть новое явное сообщение "
+                "об успешной регистрации, вызови record_confirmation; не выдумывай номер и не считай черновик отправленной заявкой."
+            )
         from .return_brands import BRAND_RULE
         system += "\n" + BRAND_RULE
         tools = tools_for_supplier(kind, run.mode == "submit", bool(approval and approval.get("attempt")))
@@ -361,8 +379,8 @@ def run_check(run_id: int) -> None:
                     manager.armtek_search_page(key, f"https://{host}/order_return")
                 elif hasattr(manager, "navigate"):
                     manager.navigate(key, sup.portal_url)
-            elif kind == "forum":
-                url = f"https://{host}/shop/returns/index.html"
+            elif kind in ("forum", "guided"):
+                url = f"https://{host}/shop/returns/index.html" if kind == "forum" else sup.portal_url
                 if hasattr(manager, "navigate"):
                     manager.navigate(key, url)
                 elif hasattr(manager, "goto"):
@@ -539,7 +557,7 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
         result = mgr.armtek_search_page(key, f"https://{host}/order_return")
         say("Вернулся к вкладке поиска возвратов Армтека")
         return json.dumps(result, ensure_ascii=False)
-    if name in ("armtek_search_article", "forum_available_returns", "armtek_find_product"):
+    if name in ("armtek_search_article", "forum_available_returns", "armtek_find_product", "supplier_find_product"):
         line_id = args.get("line_id")
         if type(line_id) is not int:
             raise BrowserError("Укажите line_id текущего товара")
@@ -548,17 +566,19 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             raise BrowserError("Товар не найден")
         row = validate_item(db, mgr, key, batch, {"line_id": line_id, "article": row.article, "brand": row.brand, "status": "error"},
             submit=bool(run and run.mode == "submit"), line_ids=[item["id"] for item in approval["lines"]] if approval else None)
-        if name == "armtek_find_product":
-            if supplier_kind(f"https://{host}") != "armtek":
-                raise BrowserError("Этот инструмент доступен только Армтеку")
-            guard_armtek_invoice(row, mgr.read_text(key, limit=20000))
+        if name in ("armtek_find_product", "supplier_find_product"):
+            required_kind = "guided" if name == "supplier_find_product" else "armtek"
+            if supplier_kind(f"https://{host}") != required_kind:
+                raise BrowserError("Инструмент другого поставщика недоступен")
+            if required_kind == "armtek":
+                guard_armtek_invoice(row, mgr.read_text(key, limit=20000))
             result = mgr.find_product(key, row.article, row.brand)
             if result.get("selected_brand"):
                 from .return_brands import remember_selection
                 remember_selection(row, result["selected_brand"])
                 db.commit()
                 say(f"Бренд: сборка «{row.brand}», сайт «{result['selected_brand']}»; выбран по точному артикулу")
-            say(f"Фактура Армтека: найдено строк {len(result['rows'])} для {row.article} · {row.brand}")
+            say(f"Товар поставщика: найдено строк {len(result['rows'])} для {row.article} · {row.brand}")
             if result.get("diagnostics"):
                 say("Диагностика строк фактуры: " + json.dumps(result["diagnostics"], ensure_ascii=False))
             return json.dumps(result, ensure_ascii=False)
@@ -621,7 +641,7 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
     if name == "browser_wait":
         mgr.wait_response(key)
         return mgr.read_text(key) or "Страница пуста"
-    if name in ("submit_return", "record_submission"):
+    if name in ("submit_return", "record_submission", "record_confirmation"):
         if name == "submit_return":
             query = select(ReturnLine.id).where(ReturnLine.batch_id == batch.id,
                 ReturnLine.status.in_(("pending", "checked")), ReturnLine.request_no == "")

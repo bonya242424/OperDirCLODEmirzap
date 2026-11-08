@@ -129,3 +129,20 @@ def test_fetch_is_pinned_to_sheet12_and_does_not_guess_headers(monkeypatch):
     assert params["sheet"] == ["Лист12"]
     assert params["headers"] == ["1"]
     assert params["range"] == ["A1:D500"]
+
+
+def test_parallel_recovery_tries_saved_session_before_new_password(client, owner):
+    with SessionLocal() as db:
+        supplier = ReturnSupplier(name="Армтек", portal_url="https://etp.armtek.ru/order_return",
+            login_url="https://etp.armtek.ru/", session_encrypted=connections.encrypt({"state": "{}"}),
+            credentials_encrypted=connections.encrypt({"username": "account", "password": "test-private"}))
+        db.add(supplier)
+        db.commit()
+        events = []
+        driver = SimpleNamespace(
+            session_authenticated=lambda key: bool(events),
+            auth_required=lambda key: False,
+            open=lambda *args: events.append("restore"),
+            login=lambda *args: (_ for _ in ()).throw(AssertionError("password must not be sent again")))
+        assert ensure_session(db, supplier, driver, 1, force=True) is False
+        assert events == ["restore"]
