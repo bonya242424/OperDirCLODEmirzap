@@ -19,7 +19,14 @@ class Script(BaseScript):
             for tool in step.calls:
                 if tool.name in ("save_document", "save_document_text"):
                     nums.extend(numbers_in(tool.input.get("label", "")))
-        super().__init__(call("check_saved", numbers=nums, all_suppliers=True), *steps)
+        checked = []
+        for step in steps:
+            for tool in step.calls:
+                if tool.name in ("save_document", "save_document_text"):
+                    checked.append(call("record_document_state", supplier=tool.input["supplier"], label=tool.input["label"],
+                        posted=True, deletion_mark=False, evidence="Документ проведён; пометка удаления отсутствует"))
+            checked.append(step)
+        super().__init__(call("check_saved", numbers=nums, all_suppliers=True), *checked)
 
 
 

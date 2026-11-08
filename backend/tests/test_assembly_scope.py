@@ -81,7 +81,8 @@ def test_save_rejects_supplier_and_date_outside_task(client, owner, term):
 def test_plain_text_after_saved_file_is_not_success(client, owner, term, monkeypatch):
     cid, _ = term
     monkeypatch.setattr(rdp_manager, "clipboard", lambda key: PRINT_FORM)
-    script = Script(call("save_document", supplier="Шате", label="№000007141 от 06.11.2026"),
+    script = Script(call("record_document_state", supplier="Шате", label="№000007141 от 06.11.2026", posted=True, deletion_mark=False, evidence="Проведён, пометки удаления нет"),
+                    call("save_document", supplier="Шате", label="№000007141 от 06.11.2026"),
                     say("Записал в память. Готово"), say("Готово"), say("Готово"), say("Готово"))
     monkeypatch.setattr("app.assembly_run.get_provider", lambda: script)
     monkeypatch.setattr("app.assembly_run.MAX_CONTINUES", 0)

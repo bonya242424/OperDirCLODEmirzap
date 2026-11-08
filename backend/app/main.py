@@ -72,6 +72,8 @@ async def lifespan(_: FastAPI):
         from .return_brands import sync_instructions
         sync_instructions(db)
         db.commit()
+        from .assembly_scope import seed_reported_deleted
+        seed_reported_deleted(db)
     reset_stale()
     reset_stale_guides()
     reset_stale_runs()
