@@ -165,13 +165,14 @@ def supplier_lock(supplier_id):
         return _LOCKS.setdefault(supplier_id, threading.Lock())
 
 
-def ensure_session(db, supplier, manager, key, force=False):
+def ensure_session(db, supplier, manager, key, force=False, verify_credentials=False):
     """Секреты передаются только детерминированному драйверу, никогда в инструменты ИИ."""
     if not supplier.credentials_encrypted:
         raise BrowserError("Нужен вход в кабинет поставщика")
     with supplier_lock(supplier.id):
         db.refresh(supplier)
-        if not force and supplier.session_encrypted and not manager.auth_required(key):
+        authenticated = lambda: manager.session_authenticated(key) if hasattr(manager, "session_authenticated") else not manager.auth_required(key)
+        if not force and supplier.session_encrypted and authenticated():
             return False
         config = connections.decrypt(supplier.credentials_encrypted)
         if not config.get("username") or not config.get("password"):
@@ -181,9 +182,9 @@ def ensure_session(db, supplier, manager, key, force=False):
         try:
             # Другой поток мог уже обновить общую сохранённую сессию.
             raw = connections.decrypt(supplier.session_encrypted).get("state")
-            if raw and not force:
+            if raw and not verify_credentials:
                 manager.open(key, supplier.portal_url, json.loads(raw))
-                if not manager.auth_required(key):
+                if authenticated():
                     return False
             state = manager.login(key, supplier.login_url, config["username"], config["password"], supplier.portal_url)
             supplier.session_encrypted = connections.encrypt({"state": json.dumps(state)})
@@ -192,6 +193,11 @@ def ensure_session(db, supplier, manager, key, force=False):
             db.commit()
             return True
         except BrowserError:
+            if hasattr(manager, "login_diagnostic"):
+                try:
+                    set_setting(db, f"supplier-login-diagnostic:{supplier.id}", {"at": utcnow().isoformat(), **manager.login_diagnostic(key)})
+                except BrowserError:
+                    pass
             supplier.login_status, supplier.login_error = "error", "Автовход не подтверждён. Проверьте адрес и доступы в Лист12."
             db.commit()
             raise BrowserError("Нужен вход: автоматическая авторизация не подтверждена; очередь сохранена") from None
@@ -272,9 +278,12 @@ def preflight_one(supplier_id):
             supplier = db.get(ReturnSupplier, supplier_id)
             if not supplier or not supplier.credentials_encrypted or supplier.login_status == "error":
                 return
+            if supplier.login_status == "ok" and supplier.session_encrypted:
+                launch_approved(db)
+                return
             # Проверяем именно доступы таблицы в чистом контексте, не принимая старую cookie за проверку пароля.
             manager.open(key, supplier.portal_url, None)
-            ensure_session(db, supplier, manager, key, force=True)
+            ensure_session(db, supplier, manager, key, force=True, verify_credentials=True)
             db.refresh(supplier)
             supplier.login_status, supplier.login_error = "ok", ""
             db.commit()
@@ -321,8 +330,13 @@ def sanitized_status():
         result = []
         for supplier in db.scalars(select(ReturnSupplier).where(ReturnSupplier.id.in_(ids))):
             job = db.scalar(select(ReturnJob).where(ReturnJob.supplier_id == supplier.id).order_by(ReturnJob.id.desc()))
-            result.append({"supplier": supplier.name, "login": supplier.login_status,
-                           "returns": job.status if job else ("not_started" if supplier_kind(supplier.portal_url) else "adapter_required")})
+            diagnostic = db.get(AppSetting, f"supplier-login-diagnostic:{supplier.id}")
+            from .return_submission import eligible_rows
+            batches = list(db.scalars(select(ReturnBatch).where(ReturnBatch.supplier_id == supplier.id)))
+            pending = sum(len(eligible_rows(db, batch.id)) for batch in batches)
+            result.append({"supplier": supplier.name, "login": supplier.login_status, "batches": len(batches), "pending": pending,
+                           "returns": job.status if job else ("not_started" if supplier_kind(supplier.portal_url) else "adapter_required"),
+                           "diagnostic": json.loads(diagnostic.value) if diagnostic and supplier.login_status == "error" else None})
         return {"imported": len(ids), "skipped": len(imported.get("skipped", [])), "suppliers": result}
 
 

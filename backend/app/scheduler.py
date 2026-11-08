@@ -56,9 +56,8 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.add_job(run_due_agents, "interval", minutes=1, id="agents_due", max_instances=1, coalesce=True)
     from .return_jobs import recover_jobs
     scheduler.add_job(recover_jobs, "interval", seconds=15, id="returns_recovery", max_instances=1, coalesce=True, next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5))
-    if settings.seed_return_suppliers:
-        from .supplier_credentials import synchronize
-        scheduler.add_job(synchronize, "interval", hours=1, id="supplier_credentials", max_instances=1, coalesce=True,
-                          next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5))
+    from .supplier_credentials import synchronize
+    scheduler.add_job(synchronize, "interval", hours=1, id="supplier_credentials", max_instances=1, coalesce=True,
+                      next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5))
     scheduler.start()
     return scheduler

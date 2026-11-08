@@ -832,7 +832,7 @@ def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends
                 if blocked:
                     raise HTTPException(status_code=409, detail=f"Сборка {batch.number} исключена: {blocked}")
                 if not supplier_kind(sup.portal_url):
-                    raise HTTPException(status_code=422, detail="Оформление поддерживается для Армтека и Форума")
+                    raise HTTPException(status_code=422, detail="Для этого поставщика финальный этап оформления ещё не проверен")
                 rows = eligible_rows(db, bid)
                 approvals[bid] = approval_log(rows, sup.portal_url)
                 for row in rows:
@@ -935,7 +935,7 @@ def start_submit(batch_id: int, body: SubmitIn, tasks: BackgroundTasks, db: Sess
         if not sup.portal_url or not (sup.session_encrypted or sup.credentials_encrypted):
             raise HTTPException(status_code=422, detail="Укажите кабинет поставщика и сохраните вход")
         if not supplier_kind(sup.portal_url):
-            raise HTTPException(status_code=422, detail="Оформление поддерживается для Армтека и Форума")
+            raise HTTPException(status_code=422, detail="Для этого поставщика финальный этап оформления ещё не проверен")
         if supplier_busy(db, sup.id):
             raise HTTPException(status_code=409, detail="У поставщика уже идёт запуск или очередь")
         rows = eligible_rows(db, batch.id)

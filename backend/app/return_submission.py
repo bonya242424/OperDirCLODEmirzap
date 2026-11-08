@@ -25,7 +25,8 @@ def supplier_kind(url):
         return "armtek"
     if host == "forum-auto.ru" or host.endswith(".forum-auto.ru"):
         return "forum"
-    return None
+    from .return_profiles import profile_for
+    return "guided" if profile_for(url) else None
 
 
 def supplier_busy(db, supplier_id):
@@ -94,9 +95,12 @@ def park_submission(db, run, approval):
 
 
 def validate_preview(preview, rows, host):
-    if urlparse(preview["url"]).netloc != host:
+    from .return_profiles import profile_for, same_guided_site
+    profile = profile_for(preview["url"])
+    if urlparse(preview["url"]).netloc != host and not same_guided_site(preview["url"], "https://" + host):
         raise BrowserError("Форма открыта на другом сайте")
-    if preview["label"] not in ("Оформить возврат", "Отправить заявку"):
+    allowed_labels = profile["final"] if profile else ("Оформить возврат", "Отправить заявку")
+    if preview["label"] not in allowed_labels:
         raise BrowserError("Выбрана не кнопка отправки возврата")
     from .return_brands import effective_brand
     text = normalized(preview["text"])
@@ -131,8 +135,39 @@ def validate_preview(preview, rows, host):
         invoices = {normalized(re.sub(r"/\s*\d+\s*$", "", row.invoice_no)) for row in rows}
         if len(invoices) != 1 or not all(invoices) or not all(inv in normalized(preview.get("page_text", "")) for inv in invoices):
             raise BrowserError("Не подтверждён исходный УПД Армтека для выбранных товаров")
+    elif profile:
+        validate_guided_preview(preview, rows, profile)
     else:
-        raise BrowserError("Оформление поддерживается только для Армтека и Форума")
+        raise BrowserError("Для этого поставщика финальный этап оформления ещё не проверен")
+
+
+
+def validate_guided_preview(preview, rows, profile):
+    from .return_brands import effective_brand
+    from .return_verification import on_page
+    if preview.get("root_scope") not in ("form", "dialog") or "возврат" not in normalized(preview.get("text", "")):
+        raise BrowserError("Не подтверждена итоговая форма возврата")
+    if preview.get("form_valid") is not True or preview.get("unmapped_quantities"):
+        raise BrowserError("Не заполнены обязательные поля или не удалось однозначно прочитать количества")
+    if len(rows) != 1:
+        raise BrowserError("Этот поставщик оформляется по одному текущему товару")
+    row = rows[0]
+    items = preview.get("items", [])
+    if len(items) != 1:
+        raise BrowserError("Итоговая форма должна содержать ровно один подтверждённый товар")
+    item = items[0]
+    if normalized(item.get("article", "")) != normalized(row.article):
+        raise BrowserError("Артикул итоговой формы не совпадает с текущим товаром")
+    actual_brand = item.get("brand", "")
+    brand_ok = normalized(actual_brand) == normalized(effective_brand(row)) if actual_brand else on_page(effective_brand(row), item.get("text", ""))
+    if not brand_ok or item.get("qty") != row.qty:
+        raise BrowserError("Бренд или количество итоговой формы не совпадают с проверенным товаром")
+    source = row.invoice_no.strip()
+    if not normalized(source) or not on_page(source, preview.get("text", "") + " " + preview.get("values", "")):
+        raise BrowserError("Не подтверждён исходный документ поставки в итоговой форме")
+    values = normalized(preview.get("values", ""))
+    if not all(reason in values for reason in profile["reason"]):
+        raise BrowserError("Не подтверждена причина возврата и комментарий отказа клиента")
 
 
 def submission_tool(db, mgr, key, host, batch, run, approval, name, args):
@@ -142,6 +177,8 @@ def submission_tool(db, mgr, key, host, batch, run, approval, name, args):
         db.refresh(run)
         if run.status != "running" and name == "submit_return":
             raise BrowserError("Запуск остановлен")
+        if name == "record_confirmation":
+            return record_guided_confirmation(db, mgr, key, run, approval)
         if name == "submit_return":
             from .assembly_scope import source_block_reason
             if source_block_reason(db, batch):
@@ -210,3 +247,36 @@ def submission_tool(db, mgr, key, host, batch, run, approval, name, args):
         save_approval(run, approval)
         db.commit()
         return f"Заявка {number} записана. Эти товары защищены от повторной отправки и очистки."
+
+
+def record_guided_confirmation(db, mgr, key, run, approval):
+    """Сохраняем только новое явное подтверждение поставщика, без выдуманного номера."""
+    from .return_profiles import profile_for, confirmed_message
+    from .models import ReturnBatch, ReturnSupplier
+    attempt = approval.get("attempt")
+    if not attempt:
+        raise BrowserError("Нет отправки, подтверждение которой нужно сохранить")
+    batch = db.get(ReturnBatch, run.batch_id)
+    supplier = db.get(ReturnSupplier, batch.supplier_id)
+    profile = profile_for(supplier.portal_url)
+    if not profile:
+        raise BrowserError("Подтверждение без номера недоступно этому поставщику")
+    page = mgr.read_text(key, limit=20000)
+    proof = confirmed_message(profile, page)
+    if not proof or confirmed_message(profile, attempt["before"]):
+        raise BrowserError("Новое подтверждение регистрации не показано; повтор отправки запрещён")
+    rows = list(db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch.id, ReturnLine.id.in_(attempt["ids"]))))
+    if any(row.status not in ("submitting", "uncertain") for row in rows):
+        raise BrowserError("Отправка уже обработана")
+    for row in rows:
+        row.status = "submitted"
+        row.request_no = ""
+        row.note = "Возврат зарегистрирован без показанного номера: " + proof[:200]
+        evidence = json.loads(row.check_evidence or "{}")
+        evidence["submission_confirmation"] = {"run_id": run.id, "at": utcnow().isoformat(), "message": proof[:200]}
+        row.check_evidence = json.dumps(evidence, ensure_ascii=False)
+    approval.setdefault("receipts", []).append({"ids": attempt["ids"], "confirmation": proof[:200]})
+    approval.pop("attempt")
+    save_approval(run, approval)
+    db.commit()
+    return "Регистрация возврата подтверждена поставщиком без номера. Товары защищены от повторной отправки."
