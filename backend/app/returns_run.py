@@ -192,9 +192,9 @@ def _plan(db, batch: ReturnBatch, submit: bool = False, limit=None, line_ids=Non
         text.append(f"Счёт {inv} (дата {items[0].invoice_date or '?'}):")
         for ln in items:
             reason = (ln.reason or "").strip()
-        if not reason or normalized(reason).startswith("неуказан"):
-            reason = "Отказ клиента"
-        text.append(f"  - line_id={ln.id}: {ln.article} {ln.name} {ln.brand}, вернуть {ln.qty} шт., склад {ln.warehouse}, причина: {reason}")
+            if not reason or normalized(reason).startswith("неуказан"):
+                reason = "Отказ клиента"
+            text.append(f"  - line_id={ln.id}: {ln.article} {ln.name} {ln.brand}, вернуть {ln.qty} шт., склад {ln.warehouse}, причина: {reason}")
     return "\n".join(text), list(by)
 
 

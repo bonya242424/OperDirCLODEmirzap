@@ -159,8 +159,12 @@ def store_batch(db, sup: ReturnSupplier, number: str, lines: list[dict], source:
         db.flush()
         for ln in lines:
             row = {k: (v[:500] if isinstance(v, str) else v) for k, v in ln.items()}
-            if not row.get("reason") and sup.default_reason:
-                row["reason"] = sup.default_reason
+            reason = (row.get("reason") or "").strip()
+            if not reason or "не указ" in reason.lower():
+                reason = (sup.default_reason or "").strip()
+            if not reason or "не указ" in reason.lower():
+                reason = "Отказ клиента"
+            row["reason"] = reason
             db.add(ReturnLine(batch_id=batch.id, **row))
         db.commit()
         return batch

@@ -337,7 +337,7 @@ def lines(batch_id: int, db: Session = Depends(get_db), _: User = Depends(curren
         raise HTTPException(status_code=404, detail="Сборка не найдена")
     rows = db.scalars(select(ReturnLine).where(ReturnLine.batch_id == batch_id).order_by(ReturnLine.id))
     return [
-        {c: getattr(r, c) for c in ("id", "article", "name", "brand", "qty", "warehouse", "invoice_date", "invoice_no", "reason", "status", "request_no", "note")}
+        {**{c: getattr(r, c) for c in ("id", "article", "name", "brand", "qty", "warehouse", "invoice_date", "invoice_no", "status", "request_no", "note")}, "reason": r.reason if r.reason and "не указ" not in r.reason.lower() else "Отказ клиента"}
         for r in rows
     ]
 
