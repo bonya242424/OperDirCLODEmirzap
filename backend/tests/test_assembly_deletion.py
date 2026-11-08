@@ -73,6 +73,8 @@ def test_reported_deleted_source_is_quarantined_without_erasing_history(client, 
         row = db.query(ReturnLine).filter_by(batch_id=bid).first()
         row.status, row.request_no = "submitted", "123456789"
         db.commit()
+        from app.models import AppSetting
+        db.query(AppSetting).filter_by(key="assembly-reported-deleted-7094-20261106").delete()
         assembly_scope.seed_reported_deleted(db)
         assert assembly_scope.source_block_reason(db, batch)
         assert "ИСКЛЮЧЁН" in batch.source
