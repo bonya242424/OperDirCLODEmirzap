@@ -214,11 +214,25 @@ class BrowserManager:
     def read_text(self, key: int, limit: int = 6000) -> str:
         return self._run(lambda: self._read(key, limit))
 
+    async def _evaluate_read(self, page, expression, *args):
+        """Retry only DOM inspection after navigation, never a click or submission."""
+        for attempt in range(3):
+            try:
+                return await page.evaluate(expression, *args)
+            except Exception as exc:
+                message = str(exc).lower()
+                if "execution context was destroyed" not in message and "cannot find context with specified id" not in message:
+                    raise
+                if attempt == 2:
+                    raise
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                await page.wait_for_timeout(300)
+
     async def _read(self, key: int, limit: int) -> str:
         page = self._get(key).page
         await page.wait_for_load_state("domcontentloaded")
-        text = (await page.evaluate("document.body ? document.body.innerText : ''"))[:limit]
-        links = await page.evaluate("""() => Array.from(document.querySelectorAll('a[href]'))
+        text = (await self._evaluate_read(page, "document.body ? document.body.innerText : ''"))[:limit]
+        links = await self._evaluate_read(page, """() => Array.from(document.querySelectorAll('a[href]'))
             .filter(a => a.getClientRects().length && a.textContent.trim())
             .slice(0, 60).map(a => ({text: a.textContent.trim().slice(0, 120), href: a.href}))""")
         notices = "\n".join(self._get(key).submission_messages)
@@ -278,10 +292,10 @@ class BrowserManager:
     async def _controls(self, key: int) -> list[dict]:
         session = self._get(key)
         session.controls_version = getattr(session, "controls_version", 0) + 1
-        return await session.page.evaluate("""version => {
+        return await self._evaluate_read(session.page, """version => {
             const elements = Array.from(document.querySelectorAll(
-                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion,[data-operdir-suggestion],[data-dismiss=modal],[data-bs-dismiss=modal],.modal .close,[role=dialog] .close,.btn-close'
-            )).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type)).slice(0,150);
+                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,#MATNR .autocomplete-container #list-search > li,.dropdown-menu li,.autocomplete-suggestion,[data-operdir-suggestion],[data-dismiss=modal],[data-bs-dismiss=modal],.modal .close,[role=dialog] .close,.btn-close'
+            )).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type) && !e.matches('#MATNR .autocomplete-container a.brand-text')).slice(0,150);
             return elements.map((e,index) => {
                 const previous = e.getAttribute('data-operdir-control');
                 const control = previous && /^[0-9]+-[0-9]+$/.test(previous) && document.querySelectorAll('[data-operdir-control="' + previous + '"]').length === 1 ? previous : version + '-' + index;
@@ -383,11 +397,11 @@ class BrowserManager:
             trace.close()
 
     async def _article_suggestions(self, key: int, value: str) -> list[str]:
-        return await self._get(key).page.evaluate(r"""query => {
+        return await self._evaluate_read(self._get(key).page, r"""query => {
             const field=document.activeElement;
             const visible=e=>!!e.getClientRects().length && getComputedStyle(e).visibility!=='hidden';
             const norm=s=>(s || '').toUpperCase().replace(/[\s./-]+/g,'');
-            const candidates=new Set(document.querySelectorAll('[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion,.ac_results li,.easy-autocomplete-container li,.autocomplete-items > div,.list-group-item,.k-list-item,.k-item,.ui-autocomplete li'));
+            const candidates=new Set(document.querySelectorAll('[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,#MATNR .autocomplete-container #list-search > li,.dropdown-menu li,.autocomplete-suggestion,.ac_results li,.easy-autocomplete-container li,.autocomplete-items > div,.list-group-item,.k-list-item,.k-item,.ui-autocomplete li'));
             for(const id of ((field?.getAttribute('aria-controls') || '')+' '+(field?.getAttribute('aria-owns') || '')).split(/\s+/).filter(Boolean)) {
                 const list=document.getElementById(id);
                 if(list) {
@@ -413,7 +427,7 @@ class BrowserManager:
     async def _find_product(self, key: int, article: str, brand: str) -> dict:
         session = self._get(key)
         session.controls_version = getattr(session, "controls_version", 0) + 1
-        rows = await session.page.evaluate(r"""({article,brand,version}) => {
+        rows = await self._evaluate_read(session.page, r"""({article,brand,version}) => {
             const norm=s=>s.toUpperCase().replace(/[\s./-]+/g,'');
             let index=0;
             return Array.from(document.querySelectorAll('tr')).filter(row=>!row.querySelector('tr') && row.getClientRects().length && norm(row.innerText).includes(norm(article)) && norm(row.innerText).includes(norm(brand))).map(row=>({
@@ -431,7 +445,7 @@ class BrowserManager:
         matched = [row for row in rows if on_page(article, row["text"]) and on_page(brand, row["text"])]
         result = {"article": article, "brand": brand, "rows": matched}
         if not matched:
-            result["diagnostics"] = await session.page.evaluate(r"""({article,brand}) => {
+            result["diagnostics"] = await self._evaluate_read(session.page, r"""({article,brand}) => {
                 const norm=s=>(s || '').toUpperCase().replace(/[\s./-]+/g,'');
                 const rows=Array.from(document.querySelectorAll('tr')).filter(r=>r.getClientRects().length);
                 const text=r=>r.innerText+' '+Array.from(r.querySelectorAll('[alt],[title],[aria-label]')).map(e=>e.alt || e.title || e.getAttribute('aria-label')).join(' ');
@@ -443,7 +457,7 @@ class BrowserManager:
 
     async def _forum_returns(self, key: int) -> dict:
         await self._controls(key)
-        raw = await self._get(key).page.evaluate(r"""() => ({
+        raw = await self._evaluate_read(self._get(key).page, r"""() => ({
             tables:Array.from(document.querySelectorAll('table')).map(table=>Array.from(table.rows).map(row=>({
                 visible:!!row.getClientRects().length,
                 cells:Array.from(row.cells).map(cell=>{
