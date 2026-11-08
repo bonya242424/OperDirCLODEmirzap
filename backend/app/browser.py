@@ -164,8 +164,10 @@ class BrowserManager:
         session = self._get(key)
         data = await self._evaluate_read(session.page, """() => ({
             fields:Array.from(document.querySelectorAll('input')).filter(e=>e.getClientRects().length && e.type!=='hidden').map(e=>({type:e.type,name:e.name,id:e.id,autocomplete:e.autocomplete})).slice(0,20),
-            buttons:Array.from(document.querySelectorAll('a,button,input[type=submit],input[type=button],[role=button]')).filter(e=>e.getClientRects().length).map(e=>(e.tagName==='INPUT'?e.value:e.innerText).trim()).filter(t=>/вход|войти|авториз|кабинет|login|sign in|log in/i.test(t) && !t.includes('@')).map(t=>t.slice(0,70)).slice(0,15),
-            password_count:Array.from(document.querySelectorAll('input[type=password]')).filter(e=>e.getClientRects().length).length
+            buttons:Array.from(document.querySelectorAll('a,button,input[type=submit],input[type=button],[role=button]')).filter(e=>e.getClientRects().length).map(e=>(e.tagName==='INPUT'?e.value:(e.getAttribute('aria-label') || e.title || e.innerText)).trim()).filter(t=>/вход|войти|авториз|кабинет|login|sign in|log in/i.test(t) && !t.includes('@')).map(t=>t.slice(0,70)).slice(0,15),
+            password_count:Array.from(document.querySelectorAll('input[type=password]')).filter(e=>e.getClientRects().length).length,
+            entry_paths:Array.from(document.querySelectorAll('a[href]')).map(e=>{try{const u=new URL(e.href);return /login|logon|signin|auth|cabinet|personal|account|customer/i.test(u.pathname)?{host:u.hostname,path:u.pathname.replace(/[A-Za-z0-9_-]{25,}/g,'[token]')}:null;}catch{return null;}}).filter(Boolean).slice(0,15),
+            frames:Array.from(document.querySelectorAll('iframe[src]')).map(e=>{try{const u=new URL(e.src);return {host:u.hostname,path:u.pathname.replace(/[A-Za-z0-9_-]{25,}/g,'[token]')};}catch{return null;}}).filter(Boolean).slice(0,6)
         })""")
         return {"stage": getattr(session, "login_stage", "open_cabinet"), **data}
 
@@ -219,7 +221,8 @@ class BrowserManager:
             passwords = page.locator('input[type="password"]:visible')
             if await passwords.count() == 0:
                 # SPA может дорисовать кнопку входа уже после DOMContentLoaded.
-                entry = page.locator('a:visible,button:visible,[role=button]:visible').filter(has_text=re.compile(r"^\s*(?:Войти|Вход|Авторизация|Личный кабинет|Кабинет клиента|Личный кабинет клиента|Войти на сайт|Вход на сайт|Войти в личный кабинет|Войти в кабинет|Вход в кабинет|Вход в ЛК|Войти в ЛК|Вход / Регистрация|Вход для клиентов|Вход для партнеров|Login|Sign in)\s*$", re.I))
+                entry_name = re.compile(r"^\s*(?:Войти|Вход|Авторизация|Личный кабинет|Кабинет клиента|Личный кабинет клиента|Войти на сайт|Вход на сайт|Войти в личный кабинет|Войти в кабинет|Вход в кабинет|Вход в ЛК|Войти в ЛК|Вход / Регистрация|Вход для клиентов|Вход для партнеров|Login|Sign in)\s*$", re.I)
+                entry = page.locator('a:visible,button:visible,input[type="button"]:visible,input[type="submit"]:visible,[role=button]:visible,[role=link]:visible').and_(page.get_by_role("link", name=entry_name).or_(page.get_by_role("button", name=entry_name)))
                 for _ in range(30):
                     if await passwords.count():
                         break
