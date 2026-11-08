@@ -731,7 +731,9 @@ class BrowserManager:
             const button = el && (el.closest('button,input[type=submit],input[type=button],a,[role=button]') ||
                 (autokontinent ? el.closest('.btn') : null));
             if (!button) return {label: '', text: '', items: [], quantities: [], values: ''};
-            const root = location.hostname.endsWith('.forum-auto.ru') ? document.body : (button.closest('.modal-content,[role=dialog],.modal') || button.closest('form') || document.body);
+            const dialogSelector = '[role=dialog],[aria-modal="true"],.modal-content,.modal,.modal-dialog,.ant-modal,.ant-modal-content,[class*="modal"],[class*="Modal"],[class*="popup"],[class*="Popup"],[id*="modal"],[id*="Modal"],[id*="popup"],[id*="Popup"]';
+            const dialog = button.closest(dialogSelector);
+            const root = location.hostname.endsWith('.forum-auto.ru') ? document.body : (dialog || button.closest('form') || document.body);
             const visible = e => e.getClientRects().length > 0;
             const label = (button.innerText || button.value || '').trim();
             const items = [];
@@ -806,7 +808,7 @@ class BrowserManager:
             const text = root.innerText;
             const documentMatch = text.match(/(?:Документ\s*:|фактуре\s*№)\s*([0-9]+)/i);
             return {label,text,items,quantities,values,supplier_document:documentMatch ? documentMatch[1] : '',
-                root_scope:root.matches('.modal-content,[role=dialog],.modal')?'dialog':root.tagName==='FORM'?'form':'body',
+                root_scope:root!==document.body && dialog?'dialog':root.tagName==='FORM'?'form':'body',
                 form_valid:root.tagName==='FORM'?root.checkValidity():!Array.from(root.querySelectorAll('input,select,textarea')).some(e=>e.willValidate&&!e.checkValidity()),
                 unmapped_quantities:unmapped};
         }""", [x, y])

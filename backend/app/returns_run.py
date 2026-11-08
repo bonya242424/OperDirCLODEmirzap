@@ -331,8 +331,12 @@ def run_check(run_id: int) -> None:
                 system += (
                     " ПартКом: проверяй точный артикул и бренд. Если доступное количество не меньше количества из сборки, не записывай «расхождение»; помечай товар доступным только при подтверждённой строке поставки. "
                     "Историческая выданная строка сама по себе не подтверждает текущий документ сборки. "
-                    "Форма требует контактный e-mail и фото детали. Используй только e-mail из аккаунта или настроек и реальные предоставленные фото. "
-                    "Не пытайся заполнять поле загрузки файла и не придумывай контакты или фото; если обязательных данных нет, запиши точный блокер и переходи к следующему товару."
+                    "Контактный e-mail обязателен: используй его только из аккаунта или настроек; если он отсутствует, зафиксируй блокер. Фото детали необязательно — не заполняй поле загрузки файла без реальных фото и продолжай без фото."
+                )
+            if profile["name"] == "Шате":
+                system += (
+                    " Владелец разрешил произвольный внутренний номер возвратного документа для Шате. Для текущего line_id вычисли стабильный уникальный номер: 90000000 + line_id (например, line_id=1036 → 90001036); при повторе строки используй то же значение. "
+                    "Это только внутренний номер возврата, не номер исходной поставки. Перед отправкой итоговая форма должна содержать только текущий артикул одной строкой. Удаляй из черновика только явно посторонние строки; если не можешь оставить один текущий товар, не отправляй."
                 )
             system += (
                 " Поставщик " + profile["name"] + ". Выполняй сохранённую инструкцию видео. "
@@ -342,8 +346,8 @@ def run_check(run_id: int) -> None:
                    if profile["name"] == "Шате" else
                    "После поиска текущего артикула вызови supplier_find_product. Сверь товар, поставку и доступное количество. ")
                 + "Исследуй и оформляй только один текущий товар. Причину выбирай по инструкции этого поставщика. "
-                "Не придумывай ФИО, телефон, внутренние номера, Торг2 или документы: используй данные аккаунта и заполненные настройки. "
-                "Если обязательных фактических реквизитов/фото нет, укажи конкретный блокер и продолжай остальные независимые товары. "
+                "Не придумывай ФИО, телефон, Торг2 или документы: используй данные аккаунта и заполненные настройки. Для Шате действует отдельное разрешение владельца на уникальный технический внутренний номер. "
+                "Если обязательных реквизитов не хватает или сайт явно требует отсутствующее фото, укажи конкретный блокер и продолжай остальные независимые товары. "
                 + ("Финальная кнопка этой инструкции: " + ", ".join(profile["final"]) + ". " if profile["final"] else
                    "Определи финальную кнопку в текущей итоговой форме после заполнения всех полей. ")
                 + "Отправляй только через submit_return. "
@@ -375,9 +379,10 @@ def run_check(run_id: int) -> None:
         remaining_at_finish = count_for_run()
         item_steps, item_errors, item_started = 0, 0, time.monotonic()
         item_milestones = set()
+        auth_recoveries = 0
 
         def reset_focus(reason, recover=False):
-            nonlocal plan, context, messages, summary, item_steps, item_errors, item_started, item_milestones
+            nonlocal plan, context, messages, summary, item_steps, item_errors, item_started, item_milestones, auth_recoveries
             current_id = int(re.search(r"line_id=(\d+):", plan).group(1)) if plan else None
             row = db.get(ReturnLine, current_id) if current_id else None
             if approval and approval.get("attempt"):
@@ -401,6 +406,8 @@ def run_check(run_id: int) -> None:
                 plan = ""
                 return False
             next_id = int(re.search(r"line_id=(\d+):", next_plan).group(1))
+            if next_id != current_id:
+                auth_recoveries = 0
             next_row = db.get(ReturnLine, next_id)
             # Форум после отправки остаётся на странице старой заявки: всегда возвращаем поиск.
             # Армтек сохраняет подходящую открытую фактуру, а при восстановлении возвращает вкладку поиска.
@@ -502,16 +509,17 @@ def run_check(run_id: int) -> None:
                         continue
                     if finished or item_errors >= 3:
                         if hasattr(manager, "auth_required") and manager.auth_required(key):
-                            if sup.credentials_encrypted and not approval.get("attempt"):
+                            if sup.credentials_encrypted and not approval.get("attempt") and auth_recoveries < 1:
                                 from .supplier_credentials import ensure_session
+                                auth_recoveries += 1
                                 try:
                                     ensure_session(db, sup, manager, key, force=True)
-                                    say("Сессия восстановлена автоматически; продолжаю текущий товар")
-                                    if reset_focus("Восстановлен вход", recover=False):
+                                    say("Сессия проверена; выполняю одну повторную попытку текущего товара")
+                                    if reset_focus("Однократное восстановление входа", recover=False):
                                         continue
                                 except BrowserError:
                                     pass
-                            summary = "Нужен вход в кабинет поставщика. Очередь сохранена и продолжится после сохранения входа."
+                            summary = "Нужен вход в кабинет поставщика. Автоматическое восстановление для текущего товара уже исчерпано; очередь сохранена."
                             break
                         if not reset_focus(summary or "Повторные ошибки действий", recover=True):
                             break
