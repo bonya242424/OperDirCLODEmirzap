@@ -300,6 +300,8 @@ def run_check(run_id: int) -> None:
                 system += "Первый шаг «Оформить возврат» открывает итоговое окно обычным кликом; финальный клик только через submit_return."
             elif kind == "forum":
                 system += "Нажми «Отказ от товара», выбери доступный документ, количество из сборки и примечание «Отказ клиента», затем submit_return."
+        from .return_brands import BRAND_RULE
+        system += "\n" + BRAND_RULE
         tools = tools_for_supplier(kind, run.mode == "submit", bool(approval and approval.get("attempt")))
         raw = conn_lib.decrypt(sup.session_encrypted).get("state")
         key = 2_000_000 + run.id
@@ -535,6 +537,11 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
                 raise BrowserError("Этот инструмент доступен только Армтеку")
             guard_armtek_invoice(row, mgr.read_text(key, limit=20000))
             result = mgr.find_product(key, row.article, row.brand)
+            if result.get("selected_brand"):
+                from .return_brands import remember_selection
+                remember_selection(row, result["selected_brand"])
+                db.commit()
+                say(f"Бренд: сборка «{row.brand}», сайт «{result['selected_brand']}»; выбран по точному артикулу")
             say(f"Фактура Армтека: найдено строк {len(result['rows'])} для {row.article} · {row.brand}")
             if result.get("diagnostics"):
                 say("Диагностика строк фактуры: " + json.dumps(result["diagnostics"], ensure_ascii=False))
@@ -567,6 +574,9 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             query_type = "полный артикул" if normalized(variants[variant]) == normalized(row.article) else "сокращённый запрос подсказок"
             say(f"Армтек: в поле артикула «{result['input_value']}», товар {row.article} · {row.brand}; {query_type}, ожидалось «{variants[variant]}»")
             if result.get("selected"):
+                from .return_brands import remember_selection
+                remember_selection(row, result["selected_brand"])
+                db.commit()
                 say(f"Армтек: выбран товар {result['selected_article']} · {result['selected_brand']}; нажмите «Получить», повторно подсказку выбирать не нужно")
             field = result.get("field", {})
             if field:
@@ -583,6 +593,13 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
         if not snapshot.get("has_creation_section") or normalized(row.article) not in [normalized(v) for v in snapshot.get("search_values", [])]:
             raise BrowserError("Откройте поиск возвратов Форума по текущему артикулу и прочитайте нижнюю таблицу «Создание возвратов»")
         offers = matching_offers(snapshot, row)
+        if offers:
+            from .return_brands import remember_selection, product_brand
+            from .return_verification import on_page
+            actual_brand = row.brand if on_page(row.brand, offers[0]["product"]) else offers[0].get("brand") or product_brand(offers[0]["product"], row.article)
+            remember_selection(row, actual_brand)
+            db.commit()
+            say(f"Бренд: сборка «{row.brand}», сайт «{actual_brand}»; выбран по точному артикулу")
         say(f"Форум: доступных поставок для {row.article} · {row.brand}: {len(offers)}")
         return json.dumps({"article": row.article, "brand": row.brand, "required_qty": row.qty, "offers": offers}, ensure_ascii=False)
     if name == "browser_wait":
@@ -677,7 +694,7 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
         if status in ("ok", "mismatch"):
             note = f"{row.article} · {row.brand}: нужно {row.qty} шт., доступно {args['available_qty']} шт."
         row.status, row.note = RESULTS[status], f"{LABEL[status]}: {note}"
-        row.check_evidence = json.dumps({"version": 1, "article": row.article, "brand": row.brand, "qty": row.qty,
+        row.check_evidence = json.dumps({**json.loads(row.check_evidence or "{}"), "version": 1, "article": row.article, "brand": row.brand, "qty": row.qty,
             "available_qty": args.get("available_qty"), "run_id": run.id if run else None, "at": utcnow().isoformat()}, ensure_ascii=False)
         db.commit()
         done.add(row.invoice_no)

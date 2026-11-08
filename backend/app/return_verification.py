@@ -56,11 +56,28 @@ def validate_item(db, mgr, key, batch, args, submit=False, line_ids=None):
         raise BrowserError("Артикул или бренд результата не совпадает с товарной строкой. Проверьте текущий товар.")
     status = args.get("status")
     if status in ("ok", "already_returned", "mismatch"):
-        if hasattr(mgr, "find_product"):
-            page = "\n".join(item["text"] for item in mgr.find_product(key, row.article, row.brand)["rows"])
+        from .return_brands import effective_brand, remember_selection, product_brand
+        from .models import ReturnSupplier
+        from .return_submission import supplier_kind
+        supplier = db.get(ReturnSupplier, batch.supplier_id) if batch.supplier_id else None
+        if supplier and supplier_kind(supplier.portal_url) == "forum" and hasattr(mgr, "forum_returns"):
+            from .return_search import matching_offers
+            snapshot = mgr.forum_returns(key)
+            offers = matching_offers(snapshot, row) if snapshot.get("has_creation_section") and normalized(row.article) in [normalized(value) for value in snapshot.get("search_values", [])] else []
+            if offers:
+                actual_brand = row.brand if on_page(row.brand, offers[0]["product"]) else offers[0].get("brand") or product_brand(offers[0]["product"], row.article)
+                remember_selection(row, actual_brand)
+                page = "\n".join(item["product"] for item in offers)
+            else:
+                page = mgr.read_text(key, limit=20000)
+        elif hasattr(mgr, "find_product"):
+            result = mgr.find_product(key, row.article, row.brand)
+            if result.get("selected_brand"):
+                remember_selection(row, result["selected_brand"])
+            page = "\n".join(item["text"] for item in result["rows"])
         else:
             page = mgr.read_text(key, limit=20000)
-        if not on_page(row.article, page) or not on_page(row.brand, page):
+        if not on_page(row.article, page) or normalized(effective_brand(row)) not in normalized(page):
             raise BrowserError("На странице не подтверждено сочетание артикула и бренда текущего товара")
     available = args.get("available_qty")
     if status in ("ok", "mismatch"):
