@@ -551,7 +551,7 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
                 raise BrowserError("Сначала выполните полный поиск variant=0 и дождитесь подсказок; сокращённый запрос пока запрещён")
             if normalized(variants[variant]) != normalized(row.article) and not prior.get("lookup_confirmed"):
                 raise BrowserError("Полный артикул введён, но запуск поиска не подтверждён ответом или списком. Сокращённый ввод не исправляет технический сбой виджета")
-            result = mgr.search_article(key, str(args.get("control", "")), variants[variant])
+            result = mgr.search_article(key, str(args.get("control", "")), variants[variant], article=row.article, brand=row.brand)
             if result["input_value"] != variants[variant]:
                 raise BrowserError(f"В поле введён другой запрос: ожидалось «{variants[variant]}», получено «{result['input_value']}»")
             evidence = json.loads(row.check_evidence or "{}")
@@ -566,6 +566,8 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
             db.commit()
             query_type = "полный артикул" if normalized(variants[variant]) == normalized(row.article) else "сокращённый запрос подсказок"
             say(f"Армтек: в поле артикула «{result['input_value']}», товар {row.article} · {row.brand}; {query_type}, ожидалось «{variants[variant]}»")
+            if result.get("selected"):
+                say(f"Армтек: выбран товар {result['selected_article']} · {result['selected_brand']}; нажмите «Получить», повторно подсказку выбирать не нужно")
             field = result.get("field", {})
             if field:
                 say(f"Поле поиска: name={field.get('name', '')}, id={field.get('id', '')}, maxlength={field.get('max_length', '?')}")

@@ -28,7 +28,7 @@ def test_armtek_search_logs_actual_input_and_needs_fallback_before_not_found(cli
         db.commit()
     inputs = []
 
-    def search(key, control, value):
+    def search(key, control, value, **kwargs):
         inputs.append(value)
         return {"input_value": value, "suggestions": ["AR113 AREOL масло"], "controls": []}
 

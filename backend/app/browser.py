@@ -29,6 +29,14 @@ def valid_key(name: str) -> bool:
     return last in KEYS or (len(last) == 1 and last.isprintable()) or (last.startswith("F") and last[1:].isdigit() and 1 <= int(last[1:]) <= 12)
 
 
+def exact_product_index(candidates: list[dict], article: str, brand: str) -> int | None:
+    from .return_verification import normalized
+    matches = [index for index, item in enumerate(candidates)
+               if normalized(item.get("article", "")) == normalized(article)
+               and normalized(item.get("brand", "")) == normalized(brand)]
+    return matches[0] if len(matches) == 1 else None
+
+
 class BrowserError(Exception):
     """Текст безопасен для показа пользователю."""
 
@@ -214,11 +222,25 @@ class BrowserManager:
     def read_text(self, key: int, limit: int = 6000) -> str:
         return self._run(lambda: self._read(key, limit))
 
+    async def _evaluate_read(self, page, expression, *args):
+        """Retry only DOM inspection after navigation, never a click or submission."""
+        for attempt in range(3):
+            try:
+                return await page.evaluate(expression, *args)
+            except Exception as exc:
+                message = str(exc).lower()
+                if "execution context was destroyed" not in message and "cannot find context with specified id" not in message:
+                    raise
+                if attempt == 2:
+                    raise
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                await page.wait_for_timeout(300)
+
     async def _read(self, key: int, limit: int) -> str:
         page = self._get(key).page
         await page.wait_for_load_state("domcontentloaded")
-        text = (await page.evaluate("document.body ? document.body.innerText : ''"))[:limit]
-        links = await page.evaluate("""() => Array.from(document.querySelectorAll('a[href]'))
+        text = (await self._evaluate_read(page, "document.body ? document.body.innerText : ''"))[:limit]
+        links = await self._evaluate_read(page, """() => Array.from(document.querySelectorAll('a[href]'))
             .filter(a => a.getClientRects().length && a.textContent.trim())
             .slice(0, 60).map(a => ({text: a.textContent.trim().slice(0, 120), href: a.href}))""")
         notices = "\n".join(self._get(key).submission_messages)
@@ -278,10 +300,10 @@ class BrowserManager:
     async def _controls(self, key: int) -> list[dict]:
         session = self._get(key)
         session.controls_version = getattr(session, "controls_version", 0) + 1
-        return await session.page.evaluate("""version => {
+        return await self._evaluate_read(session.page, """version => {
             const elements = Array.from(document.querySelectorAll(
-                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion,[data-operdir-suggestion],[data-dismiss=modal],[data-bs-dismiss=modal],.modal .close,[role=dialog] .close,.btn-close'
-            )).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type)).slice(0,150);
+                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,#MATNR .autocomplete-container #list-search > li,.dropdown-menu li,.autocomplete-suggestion,[data-operdir-suggestion],[data-dismiss=modal],[data-bs-dismiss=modal],.modal .close,[role=dialog] .close,.btn-close'
+            )).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type) && !e.matches('#MATNR .autocomplete-container a.brand-text')).slice(0,150);
             return elements.map((e,index) => {
                 const previous = e.getAttribute('data-operdir-control');
                 const control = previous && /^[0-9]+-[0-9]+$/.test(previous) && document.querySelectorAll('[data-operdir-control="' + previous + '"]').length === 1 ? previous : version + '-' + index;
@@ -306,8 +328,8 @@ class BrowserManager:
     def fill_control(self, key: int, control: str, value: str) -> None:
         self._run(lambda: self._fill_control(key, control, value))
 
-    def search_article(self, key: int, control: str, value: str) -> dict:
-        return self._run(lambda: self._search_article(key, control, value))
+    def search_article(self, key: int, control: str, value: str, *, article: str = "", brand: str = "") -> dict:
+        return self._run(lambda: self._search_article(key, control, value, article=article, brand=brand))
 
     def armtek_search_page(self, key: int, url: str) -> dict:
         return self._run(lambda: self._armtek_search_page(key, url))
@@ -326,8 +348,22 @@ class BrowserManager:
             await session.page.goto(url, wait_until="domcontentloaded", timeout=30000)
         return {"page": await self._read(key, 6000), "controls": await self._controls(key)}
 
-    async def _search_article(self, key: int, control: str, value: str) -> dict:
+    async def _search_article(self, key: int, control: str, value: str, *, article: str = "", brand: str = "") -> dict:
         import re
+
+        page = self._get(key).page
+        if article and brand:
+            state = await self._evaluate_read(page, """() => ({selected:!!document.querySelector('#MATNR > div .glyphicon-remove'), dates:['date-with','date-to'].map(id=>({id,value:document.getElementById(id)?.value || ''}))})""")
+            if state.get("selected"):
+                from urllib.parse import urlsplit, urlunsplit
+                address = urlsplit(page.url)
+                await page.goto(urlunsplit((address.scheme, address.netloc, "/order_return", "", "")), wait_until="domcontentloaded", timeout=30000)
+                for field in state["dates"]:
+                    if field["value"]:
+                        date_field = page.locator('[id="' + field["id"] + '"]')
+                        await date_field.fill(field["value"])
+                        await date_field.press("Tab")
+                control = ""
 
         async def valid(element):
             info = await element.evaluate("e => ({tag:e.tagName,type:e.type,name:e.name || '',id:e.id || '',disabled:e.disabled,label:[...Array.from(e.labels || []).map(l=>l.innerText), e.placeholder, e.title, e.getAttribute('aria-label'), e.closest('tr')?.cells?.[0]?.innerText].filter(Boolean).join(' ')})")
@@ -376,18 +412,30 @@ class BrowserManager:
                 raise BrowserError(f"Поле изменилось при ожидании подсказок: ожидалось «{value}», получено «{actual}»")
             field = await element.evaluate("e => ({name:e.name || '', id:e.id || '', max_length:e.maxLength, aria_controls:e.getAttribute('aria-controls') || ''})")
             network = await trace.snapshot()
+            selected = {}
+            if article and brand and suggestions:
+                candidates = await self._evaluate_read(page, """() => Array.from(document.querySelectorAll('#MATNR .autocomplete-container #list-search > li')).filter(e=>e.getClientRects().length).map(e=>({article:e.querySelector('span')?.innerText || '',brand:e.querySelector('a.brand-text')?.innerText || ''}))""")
+                index = exact_product_index(candidates, article, brand)
+                if index is not None:
+                    items = page.locator('#MATNR .autocomplete-container #list-search > li:visible')
+                    # The brand anchor opens information, the article selects the product.
+                    await items.nth(index).locator('span').first.click()
+                    chosen = await self._evaluate_read(page, """() => Array.from(document.querySelectorAll('#MATNR > div')).filter(e=>e.querySelector('i.glyphicon-remove')).map(e=>({article:e.querySelector('span')?.innerText || '',brand:e.querySelector('a.brand-text')?.innerText || ''}))""")
+                    if len(chosen) != 1 or exact_product_index(chosen, article, brand) != 0:
+                        raise BrowserError("Выбор артикула и бренда не подтверждён: перечитайте страницу")
+                    selected = {"selected": True, "selected_article": chosen[0]["article"], "selected_brand": chosen[0]["brand"]}
             controls = await self._controls(key)
-            return {"lookup_requests": trace.requests_seen, "lookup_responses": network, "field": field, "requested_value": value, "input_value": actual, "input_verified": True,
+            return {**selected, "lookup_requests": trace.requests_seen, "lookup_responses": network, "field": field, "requested_value": value, "input_value": actual, "input_verified": True,
                     "suggestions": suggestions, "waited_ms": waited, "controls": controls}
         finally:
             trace.close()
 
     async def _article_suggestions(self, key: int, value: str) -> list[str]:
-        return await self._get(key).page.evaluate(r"""query => {
+        return await self._evaluate_read(self._get(key).page, r"""query => {
             const field=document.activeElement;
             const visible=e=>!!e.getClientRects().length && getComputedStyle(e).visibility!=='hidden';
             const norm=s=>(s || '').toUpperCase().replace(/[\s./-]+/g,'');
-            const candidates=new Set(document.querySelectorAll('[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,.dropdown-menu li,.autocomplete-suggestion,.ac_results li,.easy-autocomplete-container li,.autocomplete-items > div,.list-group-item,.k-list-item,.k-item,.ui-autocomplete li'));
+            const candidates=new Set(document.querySelectorAll('[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,#MATNR .autocomplete-container #list-search > li,.dropdown-menu li,.autocomplete-suggestion,.ac_results li,.easy-autocomplete-container li,.autocomplete-items > div,.list-group-item,.k-list-item,.k-item,.ui-autocomplete li'));
             for(const id of ((field?.getAttribute('aria-controls') || '')+' '+(field?.getAttribute('aria-owns') || '')).split(/\s+/).filter(Boolean)) {
                 const list=document.getElementById(id);
                 if(list) {
@@ -413,7 +461,7 @@ class BrowserManager:
     async def _find_product(self, key: int, article: str, brand: str) -> dict:
         session = self._get(key)
         session.controls_version = getattr(session, "controls_version", 0) + 1
-        rows = await session.page.evaluate(r"""({article,brand,version}) => {
+        rows = await self._evaluate_read(session.page, r"""({article,brand,version}) => {
             const norm=s=>s.toUpperCase().replace(/[\s./-]+/g,'');
             let index=0;
             return Array.from(document.querySelectorAll('tr')).filter(row=>!row.querySelector('tr') && row.getClientRects().length && norm(row.innerText).includes(norm(article)) && norm(row.innerText).includes(norm(brand))).map(row=>({
@@ -431,7 +479,7 @@ class BrowserManager:
         matched = [row for row in rows if on_page(article, row["text"]) and on_page(brand, row["text"])]
         result = {"article": article, "brand": brand, "rows": matched}
         if not matched:
-            result["diagnostics"] = await session.page.evaluate(r"""({article,brand}) => {
+            result["diagnostics"] = await self._evaluate_read(session.page, r"""({article,brand}) => {
                 const norm=s=>(s || '').toUpperCase().replace(/[\s./-]+/g,'');
                 const rows=Array.from(document.querySelectorAll('tr')).filter(r=>r.getClientRects().length);
                 const text=r=>r.innerText+' '+Array.from(r.querySelectorAll('[alt],[title],[aria-label]')).map(e=>e.alt || e.title || e.getAttribute('aria-label')).join(' ');
@@ -443,7 +491,7 @@ class BrowserManager:
 
     async def _forum_returns(self, key: int) -> dict:
         await self._controls(key)
-        raw = await self._get(key).page.evaluate(r"""() => ({
+        raw = await self._evaluate_read(self._get(key).page, r"""() => ({
             tables:Array.from(document.querySelectorAll('table')).map(table=>Array.from(table.rows).map(row=>({
                 visible:!!row.getClientRects().length,
                 cells:Array.from(row.cells).map(cell=>{
