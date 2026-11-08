@@ -27,10 +27,13 @@ interface Supplier {
   batches: number;
   positions: number;
   has_session: boolean;
+  has_credentials: boolean;
+  login_status: string;
+  login_error: string;
   session_saved_at: string | null;
   check_status: "not_started" | "running" | "done" | "error";
 }
-type SupplierForm = Omit<Supplier, "id" | "batches" | "positions" | "has_session" | "session_saved_at" | "check_status"> & { id: number | null };
+type SupplierForm = Omit<Supplier, "id" | "batches" | "positions" | "has_session" | "has_credentials" | "login_status" | "login_error" | "session_saved_at" | "check_status"> & { id: number | null };
 const EMPTY_SUP: SupplierForm = { id: null, name: "", portal_url: "", contact: "", rules: "", default_reason: "", notes: "" };
 
 interface Run {
@@ -390,6 +393,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             <li key={x.id}>
               <button className={x.id === supSel ? "on" : ""} onClick={() => { setSupSel(x.id); reset(); }} disabled={running}>
                 <strong>{x.name}</strong>
+                {x.has_credentials && <span className={x.login_status === "error" ? "bad small" : "muted small"}>Автовход: {x.login_status === "ok" ? "проверен" : x.login_status === "error" ? "ошибка" : "настраивается"}</span>
                 <span className={`small supplier-check-status supplier-check-${x.check_status ?? "not_started"}`}>
                   {{ not_started: "Не запущен", running: "В процессе", done: "Готово", error: "Ошибка" }[x.check_status ?? "not_started"]}
                 </span>
@@ -400,6 +404,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
         </ul>
         {suppliers && suppliers.length === 0 && <p className="muted small">Поставщиков пока нет.</p>}
         <button className="primary" onClick={() => setSupForm({ ...EMPTY_SUP })}>+ Поставщик</button>
+        {me.role === "owner" && <button className="ghost" onClick={() => api("/returns/credentials/synchronize", { method: "POST" }).then(() => setInfo("Обновление доступов из Лист12 запущено")).catch((e) => setError(String(e)))}>Обновить доступы из Лист12</button>}
         {error && <p className="error">{error}</p>}
       </aside>
 
@@ -425,9 +430,11 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             {supplier.rules && <p className="muted small">Правила: {supplier.rules}</p>}
             {me.role === "owner" && (
               <div className="ag-session">
+                {supplier.has_credentials && <span className={supplier.login_status === "error" ? "bad" : "good"} title={supplier.login_error || "Доступы загружены из Лист12; пароль скрыт"}>Автовход: {supplier.login_status === "ok" ? "проверен" : supplier.login_status === "error" ? "ошибка" : "доступы настроены"}</span>}
                 <span className={supplier.has_session ? "good" : "muted"}>
                   {supplier.has_session ? `Вход в кабинет сохранён ${supplier.session_saved_at ? new Date(supplier.session_saved_at).toLocaleString("ru-RU") : ""}` : "Вход в кабинет не выполнен"}
                 </span>
+                {supplier.has_credentials && <button disabled={running} onClick={() => api(`/returns/suppliers/${supplier.id}/auto-login`, { method: "POST" }).then(() => setInfo("Автоматический вход запущен")).catch((e) => setError(String(e)))}>Повторить автовход</button>}
                 <button onClick={() => setLoginOpen(true)} disabled={!supplier.portal_url} title={supplier.portal_url ? "" : "Укажите адрес кабинета в данных поставщика"}>
                   {supplier.has_session ? "Войти заново" : "Войти в кабинет"}
                 </button>
@@ -466,7 +473,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                 <button className="ghost" onClick={() => { setMulti((m) => !m); setPicked([]); }} disabled={!!queue?.active}>{multi ? "Выход из выбора" : "Выбрать несколько"}</button>
                 {multi && <button className="ghost" onClick={() => setPicked(batches.map((b) => b.id))}>Выбрать все</button>}
                 {multi && (
-                  <button className="primary" onClick={startQueue} disabled={picked.length === 0 || !supplier?.has_session} title={supplier?.has_session ? "Агент оформит возвраты по выбранным сборкам после подтверждения запуска" : "Сначала войдите в кабинет и сохраните вход"}>
+                  <button className="primary" onClick={startQueue} disabled={picked.length === 0 || !(supplier?.has_session || supplier?.has_credentials)} title={(supplier?.has_session || supplier?.has_credentials) ? "Агент оформит возвраты по выбранным сборкам после подтверждения запуска" : "Сначала войдите в кабинет и сохраните вход"}>
                     Оформить выбранные ({picked.length})
                   </button>
                 )}
@@ -511,7 +518,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                 {me.role === "owner" && (checking ? (
                   <button className="danger" onClick={stopCheck}>Остановить{activeRuns.length > 1 ? ` все потоки (${activeRuns.length})` : ""}{activeRun?.batch_id !== current.id ? " проверку другой сборки" : ""}</button>
                 ) : (
-                  <button className="primary" onClick={startCheck} disabled={busy || !!queue?.active || !runs || !supplier?.has_session} title={supplier?.has_session ? "Агент оформит и отправит возвраты по неотправленным позициям после подтверждения запуска" : "Сначала войдите в кабинет и сохраните вход"}>
+                  <button className="primary" onClick={startCheck} disabled={busy || !!queue?.active || !runs || !(supplier?.has_session || supplier?.has_credentials)} title={(supplier?.has_session || supplier?.has_credentials) ? "Агент оформит и отправит возвраты по неотправленным позициям после подтверждения запуска" : "Сначала войдите в кабинет и сохраните вход"}>
                     {busy ? "Запускаю оформление…" : "Оформить возвраты"}
                   </button>
                 ))}

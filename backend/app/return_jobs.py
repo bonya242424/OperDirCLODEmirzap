@@ -100,7 +100,7 @@ def run_job(job_id, runner=None):
                 job.status, job.note = "paused", "Изменён поставщик или адрес кабинета. Нужен новый подтверждённый запуск."
                 db.commit()
                 return
-            if not supplier.session_encrypted:
+            if not supplier.session_encrypted and not supplier.credentials_encrypted:
                 job.status, job.note = "paused", "Нужен вход в кабинет поставщика; очередь сохранена"
                 db.commit()
                 return
@@ -193,6 +193,8 @@ def run_job(job_id, runner=None):
 def recover_jobs():
     """Вызывается планировщиком; один процесс приложения, один исполнитель задания."""
     with SessionLocal() as db:
+        from .supplier_credentials import launch_approved
+        launch_approved(db)
         now = utcnow()
         for job in db.scalars(select(ReturnJob).where(ReturnJob.status.in_(ACTIVE_STATUSES))):
             ACTIVE_QUEUES[job.supplier_id] = queue_snapshot(job)
@@ -204,7 +206,9 @@ def recover_jobs():
                 supplier = db.get(ReturnSupplier, job.supplier_id)
                 payload = json.loads(job.payload)
                 saved = session_stamp(supplier)
-                if not supplier or supplier.portal_url != payload["portal_url"] or not saved or saved == payload.get("session_saved_at"):
+                if not supplier or supplier.portal_url != payload["portal_url"]:
+                    continue
+                if (not saved or saved == payload.get("session_saved_at")) and not (supplier.credentials_encrypted and supplier.login_status in ("ready", "ok")):
                     continue
             if job.retry_at and job.retry_at.replace(tzinfo=timezone.utc) > now:
                 continue

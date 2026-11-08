@@ -442,7 +442,7 @@ def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
         "check_status": check_status,
         "id": sup.id, "name": sup.name, "portal_url": sup.portal_url, "contact": sup.contact, "rules": sup.rules,
         "default_reason": sup.default_reason, "notes": sup.notes, "batches": len(ids), "positions": positions or 0,
-        "has_session": bool(sup.session_encrypted), "session_saved_at": sup.session_saved_at.isoformat() if sup.session_saved_at else None,
+        "has_session": bool(sup.session_encrypted), "has_credentials": bool(sup.credentials_encrypted), "login_status": sup.login_status, "login_error": sup.login_error, "session_saved_at": sup.session_saved_at.isoformat() if sup.session_saved_at else None,
         "browser_open": manager.is_open(sup.id),
     }
 
@@ -820,7 +820,7 @@ def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends
             sup = db.get(ReturnSupplier, batch.supplier_id) if batch.supplier_id else None
             if sup is None or not sup.portal_url:
                 raise HTTPException(status_code=422, detail=f"У поставщика документа {batch.number or bid} не указан адрес кабинета")
-            if not sup.session_encrypted:
+            if not sup.session_encrypted and not sup.credentials_encrypted:
                 raise HTTPException(status_code=422, detail=f"Для документа {batch.number or bid} сначала войдите в кабинет и сохраните вход")
             if supplier_busy(db, sup.id):
                 raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» очередь уже идёт: дождитесь окончания или отмените её")
@@ -899,7 +899,7 @@ def start_check(batch_id: int, tasks: BackgroundTasks, db: Session = Depends(get
         sup = db.get(ReturnSupplier, batch.supplier_id) if batch.supplier_id else None
         if sup is None or not sup.portal_url:
             raise HTTPException(status_code=422, detail="У поставщика не указан адрес кабинета")
-        if not sup.session_encrypted:
+        if not sup.session_encrypted and not sup.credentials_encrypted:
             raise HTTPException(status_code=422, detail="Сначала войдите в кабинет и сохраните вход")
         busy = db.scalar(
             select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)
@@ -932,7 +932,7 @@ def start_submit(batch_id: int, body: SubmitIn, tasks: BackgroundTasks, db: Sess
         if blocked:
             raise HTTPException(status_code=409, detail="Исходная сборка исключена: " + blocked)
         sup = _get_supplier(db, batch.supplier_id)
-        if not sup.portal_url or not sup.session_encrypted:
+        if not sup.portal_url or not (sup.session_encrypted or sup.credentials_encrypted):
             raise HTTPException(status_code=422, detail="Укажите кабинет поставщика и сохраните вход")
         if not supplier_kind(sup.portal_url):
             raise HTTPException(status_code=422, detail="Оформление поддерживается для Армтека и Форума")
@@ -1032,3 +1032,35 @@ def make_from_file(file_id: int, db: Session = Depends(get_db), me: User = Depen
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Не получилось разобрать таблицу: {exc}") from exc
     return _summary(db, batch)
+
+
+@router.get("/credentials/sheet-status")
+def credential_sheet_status(db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    from ..supplier_credentials import STATUS_KEY
+    from ..models import AppSetting
+    row = db.get(AppSetting, STATUS_KEY)
+    return json.loads(row.value) if row else {"sheet": "Лист12", "imported": [], "skipped": []}
+
+
+@router.post("/credentials/synchronize", status_code=202)
+def synchronize_credentials(tasks: BackgroundTasks, me: User = Depends(current_user)):
+    _owner(me)
+    from ..supplier_credentials import synchronize
+    tasks.add_task(synchronize)
+    return {"status": "started", "sheet": "Лист12"}
+
+
+@router.post("/suppliers/{supplier_id}/auto-login", status_code=202)
+def automatic_supplier_login(supplier_id: int, tasks: BackgroundTasks, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    supplier = _get_supplier(db, supplier_id)
+    if not supplier.credentials_encrypted:
+        raise HTTPException(status_code=409, detail="Для поставщика нет доступов из Лист12")
+    if supplier_busy(db, supplier.id):
+        raise HTTPException(status_code=409, detail="У поставщика уже идёт запуск")
+    supplier.login_status, supplier.login_error = "ready", ""
+    db.commit()
+    from ..supplier_credentials import preflight_one
+    tasks.add_task(preflight_one, supplier.id)
+    return {"status": "started"}
