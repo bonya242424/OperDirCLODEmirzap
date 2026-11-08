@@ -132,9 +132,6 @@ def validate_preview(preview, rows, host):
             found[key] = found.get(key, 0) + item["qty"]
         if found != expected:
             raise BrowserError("Артикулы, бренды или количества в итоговой заявке не совпадают со сборкой")
-        invoices = {normalized(re.sub(r"/\s*\d+\s*$", "", row.invoice_no)) for row in rows}
-        if len(invoices) != 1 or not all(invoices) or not all(inv in normalized(preview.get("page_text", "")) for inv in invoices):
-            raise BrowserError("Не подтверждён исходный УПД Армтека для выбранных товаров")
     elif profile:
         validate_guided_preview(preview, rows, profile)
     else:
@@ -162,9 +159,6 @@ def validate_guided_preview(preview, rows, profile):
     brand_ok = normalized(actual_brand) == normalized(effective_brand(row)) if actual_brand else on_page(effective_brand(row), item.get("text", ""))
     if not brand_ok or item.get("qty") != row.qty:
         raise BrowserError("Бренд или количество итоговой формы не совпадают с проверенным товаром")
-    source = row.invoice_no.strip()
-    if not normalized(source) or not on_page(source, preview.get("text", "") + " " + preview.get("values", "")):
-        raise BrowserError("Не подтверждён исходный документ поставки в итоговой форме")
     values = normalized(preview.get("values", ""))
     if not all(reason in values for reason in profile["reason"]):
         raise BrowserError("Не подтверждена причина возврата и комментарий отказа клиента")

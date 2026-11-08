@@ -806,7 +806,7 @@ class BrowserManager:
             const values = Array.from(root.querySelectorAll('input,textarea,select'))
                 .filter(visible).map(e => e.tagName === 'SELECT' ? (e.selectedOptions[0]?.text || '') : e.value).join(' ');
             const text = root.innerText;
-            const documentMatch = text.match(/(?:Документ\s*:|фактуре\s*№)\s*([0-9]+)/i);
+            const documentMatch = text.match(/(?:Документ\s*:|(?:УПД|накладная|сч[её]т|заказ|фактур[аеы])\s*(?:№|N[oо]?\s*)?)\s*([A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9./-]{2,})/i);
             return {label,text,items,quantities,values,supplier_document:documentMatch ? documentMatch[1] : '',
                 root_scope:root!==document.body && dialog?'dialog':root.tagName==='FORM'?'form':'body',
                 form_valid:root.tagName==='FORM'?root.checkValidity():!Array.from(root.querySelectorAll('input,select,textarea')).some(e=>e.willValidate&&!e.checkValidity()),
