@@ -396,13 +396,13 @@ def run_check(run_id: int) -> None:
             return True
 
         try:
+            if entries[-3:] == ["Кабинет открыт; проверяю товары"] * 3:
+                return finish("failed", "Повторные перезапуски без действий. Проверьте подключение модели и вход поставщика.")
             manager.open(key, sup.portal_url, json.loads(raw) if raw else None)
             if sup.credentials_encrypted:
                 from .supplier_credentials import ensure_session
                 if ensure_session(db, sup, manager, key):
                     say("Автоматически вошёл в кабинет; новая сессия сохранена")
-            if manager.auth_required(key):
-                return finish("failed", "Сохранённый вход не сработал: нужен вход в кабинет поставщика.")
             say("Кабинет открыт; проверяю товары")
             checkpoint_remaining = remaining_at_finish
             for step_number in range(MAX_STEPS * max(1, remaining_at_finish)):
