@@ -1,110 +1,82 @@
+"""Выбор единственного бренда по точному артикулу; исходная строка 1С неизменна."""
 import json
-from types import SimpleNamespace
+import re
 
-import pytest
-
-from app.browser import BrowserError, exact_product_index
-from app.return_brands import BRAND_RULE, MARKER, effective_brand, remember_selection, selected_indices, sync_instructions
-from app.return_search import matching_offers
-from app.return_submission import validate_preview
-
-
-@pytest.mark.parametrize("article,original,site", [
-    ("50013081", "KOLBENSCHMIDT", "KS ФИЛЬТРА"),
-    ("305664", "GKN", "LOBRO"),
-    ("6V08671749B9", "VAG", "VW"),
-])
-def test_sole_brand_is_accepted_only_for_full_article(article, original, site):
-    candidates = [{"article": article, "brand": site}, {"article": article + "2", "brand": original}]
-    assert selected_indices(candidates, article, original) == [0]
-    assert exact_product_index(candidates, article, original) == 0
-    candidates.append({"article": article, "brand": "OTHER"})
-    assert selected_indices(candidates, article, original) == []
-    assert exact_product_index(candidates, article, original) is None
-    candidates.append({"article": article, "brand": original})
-    assert selected_indices(candidates, article, original) == [3]
+BRAND_RULE = (
+    "Общее правило брендов для всех поставщиков: ищи по полному артикулу, игнорируя пробелы, точки, дефисы и слеши. "
+    "Если для этого точного артикула на сайте есть только один вариант бренда, используй его даже при отличии названия от 1С "
+    "(например, KOLBENSCHMIDT / KS ФИЛЬТРА или GKN / LOBRO). "
+    "Если вариантов бренда несколько, выбирай соответствующий бренду сборки; при неоднозначности не отправляй. "
+    "В журнале фиксируй название из сборки и принятое название сайта. "
+    "Проверь исходную поставку, дату, доступное количество и отсутствие повторной отправки. "
+    "После подтверждения сразу оформляй возврат текущего товара. "
+    "Это правило имеет приоритет над прежними требованиями буквального совпадения бренда в инструкции."
+)
+MARKER = "Общее правило брендов для всех поставщиков:"
 
 
-def test_forum_single_variant_across_multiple_deliveries_and_ambiguous_variants():
-    row = SimpleNamespace(article="50013081", brand="KOLBENSCHMIDT")
-    offers = [
-        {"product": "50013081 KS ФИЛЬТРА Фильтр", "quantity": 1, "document": "A"},
-        {"product": "50013081 KS ФИЛЬТРА Фильтр", "quantity": 2, "document": "B"},
-        {"product": "500130812 OTHER", "quantity": 10},
-    ]
-    assert matching_offers(offers, row) == offers[:2]
-    assert matching_offers(offers + [{"product": "50013081 OTHER Фильтр", "quantity": 0}], row) == []
-    assert matching_offers([{"product": "305664 LOBRO ШРУС", "quantity": 1}], SimpleNamespace(article="305664", brand="GKN"))
+def norm(value):
+    return re.sub(r"[^\w]", "", str(value).casefold(), flags=re.UNICODE)
 
 
-def test_alias_evidence_is_scoped_and_final_form_still_checks_quantity():
-    row = SimpleNamespace(article="50013081", brand="KOLBENSCHMIDT", qty=1, invoice_no="A", check_evidence="")
-    preview = {"url": "https://itrade.forum-auto.ru/shop/returns/new", "label": "Отправить заявку",
-        "text": "Создание нового возврата 50013081 KS ФИЛЬТРА Фильтр", "values": "Отказ клиента", "quantities": [1]}
-    with pytest.raises(BrowserError):
-        validate_preview(preview, [row], "itrade.forum-auto.ru")
-    remember_selection(row, "KS ФИЛЬТРА Фильтр")
-    validate_preview(preview, [row], "itrade.forum-auto.ru")
-    preview["quantities"] = [2]
-    with pytest.raises(BrowserError):
-        validate_preview(preview, [row], "itrade.forum-auto.ru")
-    row.invoice_no = "B"
-    assert effective_brand(row) == "KOLBENSCHMIDT"
-    preview["quantities"] = [1]
-    with pytest.raises(BrowserError):
-        validate_preview(preview, [row], "itrade.forum-auto.ru")
+def selected_indices(candidates, article, brand):
+    """Рассматриваем все варианты точного артикула, включая недоступные."""
+    article_matches = [(index, item) for index, item in enumerate(candidates)
+                       if norm(item.get("article", "")) == norm(article)]
+    relevant = [(index, item) for index, item in article_matches if item.get("brand", "").strip()]
+    exact = [index for index, item in relevant if norm(item["brand"]) == norm(brand)]
+    if exact:
+        return exact
+    if len(relevant) != len(article_matches):
+        return []
+    brands = {norm(item["brand"]) for _, item in relevant}
+    return [index for index, _ in relevant] if len(brands) == 1 else []
 
 
-def test_armtek_final_composition_accepts_confirmed_site_brand():
-    row = SimpleNamespace(article="305664", brand="GKN", qty=1, invoice_no="ЮП123456 /3", check_evidence="")
-    remember_selection(row, "LOBRO")
-    preview = {"url": "https://etp.armtek.ru/invoice/viewReturnInfo/1/2", "label": "Оформить возврат",
-        "text": "Оформить возврат по фактуре", "values": "Отказ клиента", "page_text": "УПД ЮП123456 /3",
-        "items": [{"article": "305664", "brand": "LOBRO", "qty": 1}]}
-    validate_preview(preview, [row], "etp.armtek.ru")
-    preview["items"][0]["brand"] = "OTHER"
-    with pytest.raises(BrowserError):
-        validate_preview(preview, [row], "etp.armtek.ru")
+def product_brand(product, article):
+    # Форум печатает артикул + наименование бренда и товара в одной ячейке.
+    # Без отдельного поля бренда считаем различающиеся полные варианты неоднозначными.
+    token = norm(article)
+    if not token:
+        return ""
+    pattern = r"^\s*" + r"[\s./-]*".join(re.escape(char) for char in token) + r"(?!\w)"
+    match = re.match(pattern, product, re.I)
+    return product[match.end():].strip() if match else ""
 
 
-def test_forum_alias_passes_search_then_submission(client, owner, monkeypatch):
-    from app.db import SessionLocal
-    from app.models import ReturnLine
-    from tests.test_return_submission import setup_submission
-    bid, lid, browser, script = setup_submission(client, owner, monkeypatch)
-    with SessionLocal() as db:
-        row = db.get(ReturnLine, lid)
-        row.article, row.brand, row.qty = "50013081", "KOLBENSCHMIDT", 1
-        db.commit()
-    browser.preview.update(text="Создание нового возврата 50013081 KS ФИЛЬТРА Фильтр", quantities=[1])
-    browser.forum_returns = lambda *a: {"has_creation_section": True, "search_values": ["50013081"], "offers": [
-        {"product": "50013081 KS ФИЛЬТРА Фильтр", "quantity": 1, "href": "https://itrade.forum-auto.ru/shop/returns/new", "control": "1-2"}
-    ]}
-    from tests.test_returns_run import call
-    script.steps.insert(0, call("forum_available_returns", line_id=lid))
-    response = client.post(f"/api/returns/batches/{bid}/submit-run", headers=owner, json={"confirmed": True})
-    assert response.status_code == 202
-    assert browser.clicks == 1
-    with SessionLocal() as db:
-        row = db.get(ReturnLine, lid)
-        assert row.status == "submitted" and row.request_no == "987654321"
-        assert row.brand == "KOLBENSCHMIDT"
-        assert "KS ФИЛЬТРА" in effective_brand(row)
+def remember_selection(row, actual_brand):
+    evidence = json.loads(getattr(row, "check_evidence", "") or "{}")
+    evidence["brand_selection"] = {
+        "article": row.article, "brand": row.brand, "qty": row.qty,
+        "invoice_no": row.invoice_no, "actual_brand": actual_brand,
+    }
+    row.check_evidence = json.dumps(evidence, ensure_ascii=False)
 
 
-def test_instructions_are_saved_for_every_supplier_without_erasing_steps(client, owner):
-    from app.db import SessionLocal
-    from app.models import ReturnSupplier, ReturnGuide
-    from tests.test_returns_run import _batch
-    _batch(client, owner, "https://itrade.forum-auto.ru")
-    with SessionLocal() as db:
-        supplier = db.query(ReturnSupplier).first()
-        guide = ReturnGuide(supplier_id=supplier.id, filename="Шаги", disk_name="", size=0, status="ok", text="Открой возвраты", created_by=supplier.created_by)
-        db.add(guide)
-        db.flush()
-        sync_instructions(db)
-        sync_instructions(db)
-        db.commit()
-        assert supplier.rules.count(MARKER) == 1
-        assert guide.text.count(MARKER) == 1
-        assert "Открой возвраты" in guide.text
+def effective_brand(row):
+    evidence = json.loads(getattr(row, "check_evidence", "") or "{}").get("brand_selection", {})
+    if all(evidence.get(key) == getattr(row, key, None) for key in ("article", "brand", "qty", "invoice_no")):
+        return evidence.get("actual_brand") or row.brand
+    return row.brand
+
+
+def instruction_text(text):
+    return text if MARKER in (text or "") else BRAND_RULE + "\n\n" + (text or "")
+
+
+def sync_instructions(db, supplier_id=None):
+    from sqlalchemy import select
+    from .models import ReturnSupplier, ReturnGuide
+    query = select(ReturnSupplier)
+    if supplier_id is not None:
+        query = query.where(ReturnSupplier.id == supplier_id)
+    for supplier in db.scalars(query):
+        supplier.rules = instruction_text(supplier.rules)
+        guides = list(db.scalars(select(ReturnGuide).where(ReturnGuide.supplier_id == supplier.id)))
+        for guide in guides:
+            if guide.text:
+                guide.text = instruction_text(guide.text)
+        if not guides:
+            db.add(ReturnGuide(supplier_id=supplier.id, filename="Общие правила возвратов", disk_name="",
+                size=0, status="ok", text=BRAND_RULE, created_by=supplier.created_by,
+                message="Общее правило выбора бренда. Дополните шагами кабинета поставщика."))

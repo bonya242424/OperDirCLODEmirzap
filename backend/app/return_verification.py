@@ -77,7 +77,7 @@ def validate_item(db, mgr, key, batch, args, submit=False, line_ids=None):
             page = "\n".join(item["text"] for item in result["rows"])
         else:
             page = mgr.read_text(key, limit=20000)
-        if not on_page(row.article, page) or normalized(effective_brand(row)) not in normalized(page):
+        if not on_page(row.article, page) or not normalized(effective_brand(row)) or normalized(effective_brand(row)) not in normalized(page):
             raise BrowserError("На странице не подтверждено сочетание артикула и бренда текущего товара")
     available = args.get("available_qty")
     if status in ("ok", "mismatch"):

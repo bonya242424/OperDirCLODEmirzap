@@ -21,11 +21,14 @@ def norm(value):
 
 def selected_indices(candidates, article, brand):
     """Рассматриваем все варианты точного артикула, включая недоступные."""
-    relevant = [(index, item) for index, item in enumerate(candidates)
-                if norm(item.get("article", "")) == norm(article) and item.get("brand", "").strip()]
+    article_matches = [(index, item) for index, item in enumerate(candidates)
+                       if norm(item.get("article", "")) == norm(article)]
+    relevant = [(index, item) for index, item in article_matches if item.get("brand", "").strip()]
     exact = [index for index, item in relevant if norm(item["brand"]) == norm(brand)]
     if exact:
         return exact
+    if len(relevant) != len(article_matches):
+        return []
     brands = {norm(item["brand"]) for _, item in relevant}
     return [index for index, _ in relevant] if len(brands) == 1 else []
 
