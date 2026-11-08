@@ -195,7 +195,7 @@ def ensure_session(db, supplier, manager, key, force=False, verify_credentials=F
         except BrowserError:
             if hasattr(manager, "login_diagnostic"):
                 try:
-                    set_setting(db, f"supplier-login-diagnostic:{supplier.id}", manager.login_diagnostic(key))
+                    set_setting(db, f"supplier-login-diagnostic:{supplier.id}", {"at": utcnow().isoformat(), **manager.login_diagnostic(key)})
                 except BrowserError:
                     pass
             supplier.login_status, supplier.login_error = "error", "Автовход не подтверждён. Проверьте адрес и доступы в Лист12."
@@ -331,7 +331,10 @@ def sanitized_status():
         for supplier in db.scalars(select(ReturnSupplier).where(ReturnSupplier.id.in_(ids))):
             job = db.scalar(select(ReturnJob).where(ReturnJob.supplier_id == supplier.id).order_by(ReturnJob.id.desc()))
             diagnostic = db.get(AppSetting, f"supplier-login-diagnostic:{supplier.id}")
-            result.append({"supplier": supplier.name, "login": supplier.login_status,
+            from .return_submission import eligible_rows
+            batches = list(db.scalars(select(ReturnBatch).where(ReturnBatch.supplier_id == supplier.id)))
+            pending = sum(len(eligible_rows(db, batch.id)) for batch in batches)
+            result.append({"supplier": supplier.name, "login": supplier.login_status, "batches": len(batches), "pending": pending,
                            "returns": job.status if job else ("not_started" if supplier_kind(supplier.portal_url) else "adapter_required"),
                            "diagnostic": json.loads(diagnostic.value) if diagnostic and supplier.login_status == "error" else None})
         return {"imported": len(ids), "skipped": len(imported.get("skipped", [])), "suppliers": result}

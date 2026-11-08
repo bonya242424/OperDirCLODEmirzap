@@ -670,7 +670,8 @@ def _tool(db, mgr, key: int, host: str, batch: ReturnBatch, name: str, args: dic
         return "Готово"
     if name == "browser_goto":
         url = str(args.get("url", ""))
-        if urlparse(url).netloc != host:
+        from .return_profiles import same_guided_site
+        if urlparse(url).netloc != host and not same_guided_site(url, "https://" + host):
             raise BrowserError("Можно открывать только сайт поставщика")
         say(f"Открываю {url}")
         mgr.goto(key, url)

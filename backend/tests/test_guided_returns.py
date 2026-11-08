@@ -91,6 +91,7 @@ def test_explicit_registration_without_number_is_locked_after_send(client, owner
         assert "без показанного номера" in line.note
         assert json.loads(line.check_evidence)["submission_confirmation"]
     client.post("/api/returns/check-queue/cancel", headers=owner)
+    assert client.delete(f"/api/returns/batches/{bid}", headers=owner).status_code == 409
     client.post(f"/api/returns/batches/{bid}/reset-errors", headers=owner)
     with SessionLocal() as db:
         assert db.get(ReturnLine, lid).status == "submitted"
@@ -101,3 +102,23 @@ def test_source_document_prefix_is_not_a_match():
     data["text"] = "Возврат товара, поставка 123456-990"
     with pytest.raises(BrowserError):
         validate_preview(data, [row()], "lk.favorit-parts.ru")
+
+
+def test_generic_supplier_document_suffix_cannot_be_discarded():
+    data = preview()
+    data["text"] = "Возврат товара, поставка 123456/2"
+    line = row()
+    line.invoice_no = "123456/1"
+    with pytest.raises(BrowserError):
+        validate_preview(data, [line], "lk.favorit-parts.ru")
+
+
+def test_only_same_guided_supplier_can_use_canonical_subdomain():
+    from app.return_profiles import same_guided_site
+    assert same_guided_site("https://www.favorit-parts.ru/returns", "https://lk.favorit-parts.ru")
+    assert not same_guided_site("https://www.favorit-parts.ru.evil.test", "https://lk.favorit-parts.ru")
+    assert not same_guided_site("https://berg.ru", "https://lk.favorit-parts.ru")
+    assert not same_guided_site("http://lk.favorit-parts.ru", "https://lk.favorit-parts.ru")
+    data = preview()
+    data["url"] = "https://www.favorit-parts.ru/returns/new"
+    validate_preview(data, [row()], "lk.favorit-parts.ru")

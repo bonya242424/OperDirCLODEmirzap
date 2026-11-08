@@ -426,7 +426,7 @@ class BrowserManager:
                 host = (urlsplit(page.url).hostname or "").lower()
                 is_preview = (host == "motexc.ru" or host.endswith(".motexc.ru")) and label.strip() == "Отправить заявку на возврат"
             if not is_preview:
-                raise BrowserError(f"Кнопка «{label.strip()}» заблокирована: в режиме проверки ничего не отправляется")
+                raise BrowserError("Финальный клик разрешён только через submit_return после проверки формы" if allow_return_preview else f"Кнопка «{label.strip()}» заблокирована: в режиме проверки ничего не отправляется")
         from playwright.async_api import TimeoutError as PlaywrightTimeout
         from urllib.parse import urlparse
 
@@ -442,7 +442,8 @@ class BrowserManager:
                 await popup.wait_for_load_state("domcontentloaded", timeout=10000)
             except PlaywrightTimeout:
                 pass
-            if urlparse(popup.url).netloc != urlparse(page.url).netloc:
+            from .return_profiles import same_guided_site
+            if urlparse(popup.url).netloc != urlparse(page.url).netloc and not same_guided_site(popup.url, page.url):
                 raise BrowserError("Новая вкладка ведёт на другой сайт; агент остаётся в кабинете поставщика")
             self._get(key).page = popup
 
@@ -741,6 +742,7 @@ class BrowserManager:
                     const heading = Array.from(table.rows).find(r=>Array.from(r.cells).some(c=>/^(?:Артикул|Код|Номер детали|Номер запчасти|Article|SKU|Part number)$/i.test(c.innerText.trim())));
                     if (!heading) continue;
                     const labels = Array.from(heading.cells).map(c=>c.innerText.trim());
+                    const selectionCols=labels.map((s,i)=>/^(?:Выбрать|Выбор|Отметить|Select)?$/i.test(s)?i:-1).filter(i=>i>=0);
                     const a=labels.findIndex(s=>/^(?:Артикул|Код|Номер детали|Номер запчасти|Article|SKU|Part number)$/i.test(s));
                     const b=labels.findIndex(s=>/^(?:Бренд|Производитель|Марка|Brand|Manufacturer)$/i.test(s));
                     let q=labels.findIndex(s=>/к возврату|возвращаем|количеств[оа] возврата/i.test(s));
@@ -748,23 +750,28 @@ class BrowserManager:
                     if(a<0 || q<0) continue;
                     for(const row of Array.from(table.rows)) {
                         if(row===heading || !visible(row) || row.cells.length<=Math.max(a,q,b)) continue;
-                        const checks=Array.from(row.querySelectorAll('input[type=checkbox]'));
-                        if(checks.length && !checks.some(c=>c.checked)) continue;
+                        if(/^(?:Итого|Всего|Сумма)(?:\s|:|$)/i.test(row.innerText.trim()) || /^(?:Итого|Всего|Сумма)(?:\s|:|$)/i.test(row.cells[a].innerText.trim())) continue;
+                        const checks=selectionCols.flatMap(i=>Array.from(row.cells[i]?.querySelectorAll('input[type=checkbox]') || []));
+                        if(checks.length && !checks.some(c=>c.checked)) {
+                            row.cells[q].querySelectorAll('input').forEach(e=>mapped.add(e));
+                            continue;
+                        }
                         const cell=row.cells[q];
-                        const fields=Array.from(cell.querySelectorAll('input')).filter(e=>!['password','checkbox','radio'].includes(e.type));
+                        const fields=Array.from(cell.querySelectorAll('input')).filter(e=>['number','text','tel',''].includes(e.type) || (e.type==='hidden' && /quantity|qty|return.?count|количеств/i.test(e.name+' '+e.id)));
                         fields.forEach(e=>mapped.add(e));
-                        const nums=fields.map(e=>Number(e.value.replace(',','.'))).filter(n=>Number.isFinite(n));
+                        const nums=fields.map(e=>Number(e.value.replace(/\s/g,'').replace(',','.'))).filter(n=>Number.isFinite(n));
                         const distinct=[...new Set(nums)];
                         if(distinct.length>1) {unmapped.push('conflicting quantity fields');continue;}
-                        const qty=nums.length?nums[0]:Number(cell.innerText.trim().replace(',','.'));
-                        if(!Number.isFinite(qty) || qty<=0) continue;
+                        const qty=nums.length?nums[0]:Number(cell.innerText.replace(/\s/g,'').replace(',','.'));
+                        if(!Number.isFinite(qty) || qty<0) {unmapped.push("invalid quantity");continue;}
+                        if(qty===0) continue;
                         items.push({article:row.cells[a].innerText.trim(),brand:b>=0?row.cells[b].innerText.trim():'',
                                     qty,text:row.innerText});
                     }
                 }
                 for(const field of root.querySelectorAll('input:enabled')) {
                     const label=[field.name,field.id,field.placeholder,...Array.from(field.labels || []).map(l=>l.innerText)].join(' ');
-                    if(visible(field) && /quantity|qty|количеств|кол-во/i.test(label) && !mapped.has(field) && Number(field.value)>0)
+                    if(/quantity|qty|return.?count|количеств|кол-во/i.test(label) && !mapped.has(field) && field.value.trim() && Number(field.value.replace(/\s/g,'').replace(',','.'))!==0)
                         unmapped.push('unmapped quantity field');
                 }
             }

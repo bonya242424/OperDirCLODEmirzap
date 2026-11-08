@@ -35,3 +35,11 @@ def profile_for(url):
 def confirmed_message(profile, text):
     match = re.search(profile["success"], text, re.I)
     return match.group(0) if match else ""
+
+
+def same_guided_site(left, right):
+    a, b = urlsplit(left), urlsplit(right)
+    if a.scheme != "https" or b.scheme != "https" or a.port not in (None, 443) or b.port not in (None, 443):
+        return False
+    profile = profile_for(left)
+    return profile is not None and profile is profile_for(right)
