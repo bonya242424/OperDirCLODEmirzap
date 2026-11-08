@@ -40,3 +40,19 @@ def test_navigation_read_is_bounded_and_does_not_hide_other_errors(message, expe
     with pytest.raises(RuntimeError, match=message):
         asyncio.run(BrowserManager()._evaluate_read(page, "() => document.title"))
     assert len(calls) == expected
+
+
+def test_native_picker_matches_full_article_and_brand():
+    from app.browser import exact_product_index
+    rows = [
+        {"article": "AR1130", "brand": "AREOL"},
+        {"article": "AR113", "brand": "CHAMPION"},
+        {"article": "AR113", "brand": "AREOL"},
+    ]
+    assert exact_product_index(rows, "AR113", "AREOL") == 2
+    assert exact_product_index(rows, "AR11", "AREOL") is None
+    assert exact_product_index(rows + [rows[2]], "AR113", "AREOL") is None
+    assert exact_product_index([
+        {"article": "6V0867174  9B9", "brand": "VAG"},
+        {"article": "6V08671749B9", "brand": "FORD"},
+    ], "6V08671749B9", "VAG") == 0

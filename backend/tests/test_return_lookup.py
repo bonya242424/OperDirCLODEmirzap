@@ -61,7 +61,7 @@ def test_unread_suggestions_cannot_be_reported_as_missing_product(client, owner,
         row.article, row.brand = "AR113", "AREOL"
         db.commit()
         lid = row.id
-    returns_run.manager.search_article = lambda key, control, value: {"input_value": value, "suggestions": [],
+    returns_run.manager.search_article = lambda key, control, value, **kwargs: {"input_value": value, "suggestions": [],
         "lookup_responses": [{"status": 200, "shape": {"arrays": {"$.items": 0}, "has_error": False}}]}
     script = Script(call("armtek_search_article", line_id=lid, variant=0),
                     call("armtek_search_article", line_id=lid, variant=1),

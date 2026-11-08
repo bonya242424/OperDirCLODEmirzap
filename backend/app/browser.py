@@ -29,6 +29,14 @@ def valid_key(name: str) -> bool:
     return last in KEYS or (len(last) == 1 and last.isprintable()) or (last.startswith("F") and last[1:].isdigit() and 1 <= int(last[1:]) <= 12)
 
 
+def exact_product_index(candidates: list[dict], article: str, brand: str) -> int | None:
+    from .return_verification import normalized
+    matches = [index for index, item in enumerate(candidates)
+               if normalized(item.get("article", "")) == normalized(article)
+               and normalized(item.get("brand", "")) == normalized(brand)]
+    return matches[0] if len(matches) == 1 else None
+
+
 class BrowserError(Exception):
     """Текст безопасен для показа пользователю."""
 
@@ -320,8 +328,8 @@ class BrowserManager:
     def fill_control(self, key: int, control: str, value: str) -> None:
         self._run(lambda: self._fill_control(key, control, value))
 
-    def search_article(self, key: int, control: str, value: str) -> dict:
-        return self._run(lambda: self._search_article(key, control, value))
+    def search_article(self, key: int, control: str, value: str, *, article: str = "", brand: str = "") -> dict:
+        return self._run(lambda: self._search_article(key, control, value, article=article, brand=brand))
 
     def armtek_search_page(self, key: int, url: str) -> dict:
         return self._run(lambda: self._armtek_search_page(key, url))
@@ -340,8 +348,22 @@ class BrowserManager:
             await session.page.goto(url, wait_until="domcontentloaded", timeout=30000)
         return {"page": await self._read(key, 6000), "controls": await self._controls(key)}
 
-    async def _search_article(self, key: int, control: str, value: str) -> dict:
+    async def _search_article(self, key: int, control: str, value: str, *, article: str = "", brand: str = "") -> dict:
         import re
+
+        page = self._get(key).page
+        if article and brand:
+            state = await self._evaluate_read(page, """() => ({selected:!!document.querySelector('#MATNR > div .glyphicon-remove'), dates:['date-with','date-to'].map(id=>({id,value:document.getElementById(id)?.value || ''}))})""")
+            if state.get("selected"):
+                from urllib.parse import urlsplit, urlunsplit
+                address = urlsplit(page.url)
+                await page.goto(urlunsplit((address.scheme, address.netloc, "/order_return", "", "")), wait_until="domcontentloaded", timeout=30000)
+                for field in state["dates"]:
+                    if field["value"]:
+                        date_field = page.locator('[id="' + field["id"] + '"]')
+                        await date_field.fill(field["value"])
+                        await date_field.press("Tab")
+                control = ""
 
         async def valid(element):
             info = await element.evaluate("e => ({tag:e.tagName,type:e.type,name:e.name || '',id:e.id || '',disabled:e.disabled,label:[...Array.from(e.labels || []).map(l=>l.innerText), e.placeholder, e.title, e.getAttribute('aria-label'), e.closest('tr')?.cells?.[0]?.innerText].filter(Boolean).join(' ')})")
@@ -390,8 +412,20 @@ class BrowserManager:
                 raise BrowserError(f"Поле изменилось при ожидании подсказок: ожидалось «{value}», получено «{actual}»")
             field = await element.evaluate("e => ({name:e.name || '', id:e.id || '', max_length:e.maxLength, aria_controls:e.getAttribute('aria-controls') || ''})")
             network = await trace.snapshot()
+            selected = {}
+            if article and brand and suggestions:
+                candidates = await self._evaluate_read(page, """() => Array.from(document.querySelectorAll('#MATNR .autocomplete-container #list-search > li')).filter(e=>e.getClientRects().length).map(e=>({article:e.querySelector('span')?.innerText || '',brand:e.querySelector('a.brand-text')?.innerText || ''}))""")
+                index = exact_product_index(candidates, article, brand)
+                if index is not None:
+                    items = page.locator('#MATNR .autocomplete-container #list-search > li:visible')
+                    # The brand anchor opens information, the article selects the product.
+                    await items.nth(index).locator('span').first.click()
+                    chosen = await self._evaluate_read(page, """() => Array.from(document.querySelectorAll('#MATNR > div')).filter(e=>e.querySelector('i.glyphicon-remove')).map(e=>({article:e.querySelector('span')?.innerText || '',brand:e.querySelector('a.brand-text')?.innerText || ''}))""")
+                    if len(chosen) != 1 or exact_product_index(chosen, article, brand) != 0:
+                        raise BrowserError("Выбор артикула и бренда не подтверждён: перечитайте страницу")
+                    selected = {"selected": True, "selected_article": chosen[0]["article"], "selected_brand": chosen[0]["brand"]}
             controls = await self._controls(key)
-            return {"lookup_requests": trace.requests_seen, "lookup_responses": network, "field": field, "requested_value": value, "input_value": actual, "input_verified": True,
+            return {**selected, "lookup_requests": trace.requests_seen, "lookup_responses": network, "field": field, "requested_value": value, "input_value": actual, "input_verified": True,
                     "suggestions": suggestions, "waited_ms": waited, "controls": controls}
         finally:
             trace.close()
