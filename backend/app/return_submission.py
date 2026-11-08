@@ -38,6 +38,11 @@ def supplier_busy(db, supplier_id):
 
 
 def eligible_rows(db, batch_id):
+    from .models import ReturnBatch
+    from .assembly_scope import source_block_reason
+    batch = db.get(ReturnBatch, batch_id)
+    if batch and source_block_reason(db, batch):
+        return []
     return list(db.scalars(select(ReturnLine).where(
         ReturnLine.batch_id == batch_id,
         ReturnLine.status.in_(("pending", "checked", "failed")),
@@ -138,6 +143,9 @@ def submission_tool(db, mgr, key, host, batch, run, approval, name, args):
         if run.status != "running" and name == "submit_return":
             raise BrowserError("Запуск остановлен")
         if name == "submit_return":
+            from .assembly_scope import source_block_reason
+            if source_block_reason(db, batch):
+                raise BrowserError("Отправка запрещена: исходная сборка исключена из-за статуса в 1С")
             ids = args.get("line_ids")
             if not isinstance(ids, list) or not ids or any(type(i) is not int for i in ids) or len(set(ids)) != len(ids):
                 raise BrowserError("Укажите уникальные line_id товаров одной заявки")

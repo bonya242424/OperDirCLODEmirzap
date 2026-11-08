@@ -221,6 +221,9 @@ def run_check(run_id: int) -> None:
                 return finish("failed", "Нет действительного подтверждения владельца на оформление")
         batch = db.get(ReturnBatch, run.batch_id)
         sup = db.get(ReturnSupplier, batch.supplier_id) if batch and batch.supplier_id else None
+        from .assembly_scope import source_block_reason
+        if batch and source_block_reason(db, batch):
+            return finish("failed", "Исходная сборка исключена: " + source_block_reason(db, batch))
         if sup is None or not sup.portal_url:
             return finish("failed", "У поставщика не указан адрес кабинета")
         if approval and approval.get("portal_url", sup.portal_url) != sup.portal_url:

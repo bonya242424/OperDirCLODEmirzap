@@ -827,6 +827,10 @@ def start_queue(body: QueueIn, db: Session = Depends(get_db), me: User = Depends
             if db.scalar(select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id).where(ReturnRun.status == "running", ReturnBatch.supplier_id == sup.id)):
                 raise HTTPException(status_code=409, detail=f"У поставщика «{sup.name}» проверка уже идёт")
             if body.mode == "submit":
+                from ..assembly_scope import source_block_reason
+                blocked = source_block_reason(db, batch)
+                if blocked:
+                    raise HTTPException(status_code=409, detail=f"Сборка {batch.number} исключена: {blocked}")
                 if not supplier_kind(sup.portal_url):
                     raise HTTPException(status_code=422, detail="Оформление поддерживается для Армтека и Форума")
                 rows = eligible_rows(db, bid)
@@ -923,6 +927,10 @@ def start_submit(batch_id: int, body: SubmitIn, tasks: BackgroundTasks, db: Sess
         batch = db.get(ReturnBatch, batch_id)
         if batch is None:
             raise HTTPException(status_code=404, detail="Сборка не найдена")
+        from ..assembly_scope import source_block_reason
+        blocked = source_block_reason(db, batch)
+        if blocked:
+            raise HTTPException(status_code=409, detail="Исходная сборка исключена: " + blocked)
         sup = _get_supplier(db, batch.supplier_id)
         if not sup.portal_url or not sup.session_encrypted:
             raise HTTPException(status_code=422, detail="Укажите кабинет поставщика и сохраните вход")
