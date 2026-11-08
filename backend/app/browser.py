@@ -463,9 +463,9 @@ class BrowserManager:
         session = self._get(key)
         session.controls_version = getattr(session, "controls_version", 0) + 1
         return await self._evaluate_read(session.page, """version => {
-            const elements = Array.from(document.querySelectorAll(
-                'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,#MATNR .autocomplete-container #list-search > li,.dropdown-menu li,.autocomplete-suggestion,[data-operdir-suggestion],[data-dismiss=modal],[data-bs-dismiss=modal],.modal .close,[role=dialog] .close,.btn-close'
-            )).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type) && !e.matches('#MATNR .autocomplete-container a.brand-text')).slice(0,150);
+            const selector = 'input,textarea,select,button,a,[role=option],.ui-menu-item,.select2-results__option,.tt-suggestion,#MATNR .autocomplete-container #list-search > li,.dropdown-menu li,.autocomplete-suggestion,[data-operdir-suggestion],[data-dismiss=modal],[data-bs-dismiss=modal],.modal .close,[role=dialog] .close,.btn-close';
+            const autokontinent = /(?:^|\\.)autokontinent\\.ru$/i.test(location.hostname);
+            const elements = Array.from(document.querySelectorAll(selector + (autokontinent ? ',.btn' : ''))).filter(e => e.getClientRects().length && !['password','hidden','file'].includes(e.type) && !e.matches('#MATNR .autocomplete-container a.brand-text')).slice(0,150);
             return elements.map((e,index) => {
                 const previous = e.getAttribute('data-operdir-control');
                 const control = previous && /^[0-9]+-[0-9]+$/.test(previous) && document.querySelectorAll('[data-operdir-control="' + previous + '"]').length === 1 ? previous : version + '-' + index;
@@ -720,7 +720,9 @@ class BrowserManager:
         page = self._get(key).page
         data = await page.evaluate(r"""([x,y]) => {
             const el = document.elementFromPoint(x,y);
-            const button = el && el.closest('button,input[type=submit],a,[role=button]');
+            const autokontinent = /(?:^|\\.)autokontinent\\.ru$/i.test(location.hostname);
+            const button = el && (el.closest('button,input[type=submit],input[type=button],a,[role=button]') ||
+                (autokontinent ? el.closest('.btn') : null));
             if (!button) return {label: '', text: '', items: [], quantities: [], values: ''};
             const root = location.hostname.endsWith('.forum-auto.ru') ? document.body : (button.closest('.modal-content,[role=dialog],.modal') || button.closest('form') || document.body);
             const visible = e => e.getClientRects().length > 0;
