@@ -595,7 +595,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             <input placeholder="Адрес кабинета, https://etp.armtek.ru" value={supForm.portal_url} onChange={(e) => setSupForm({ ...supForm, portal_url: e.target.value })} />
             <textarea rows={2} placeholder="Контакты: менеджер, телефон, почта" value={supForm.contact} onChange={(e) => setSupForm({ ...supForm, contact: e.target.value })} />
             <input placeholder="Причина возврата по умолчанию (если в таблице пусто)" value={supForm.default_reason} onChange={(e) => setSupForm({ ...supForm, default_reason: e.target.value })} />
-            <textarea rows={4} placeholder="Как оформлять возврат на этом сайте: одна заявка на счёт, что подставляется само, когда спросить владельца" value={supForm.rules} onChange={(e) => setSupForm({ ...supForm, rules: e.target.value })} />
+            <textarea rows={4} placeholder="Как оформлять возврат. Для Автоконтинента при необходимости укажите worker_name и worker_position в правилах, например: worker_name: …; worker_position: …" value={supForm.rules} onChange={(e) => setSupForm({ ...supForm, rules: e.target.value })} />
             <textarea rows={2} placeholder="Заметки" value={supForm.notes} onChange={(e) => setSupForm({ ...supForm, notes: e.target.value })} />
             <p className="muted small">Логин и пароль кабинета здесь не хранятся: вход в кабинет выполняете вы сами.</p>
             {error && <p className="error">{error}</p>}
