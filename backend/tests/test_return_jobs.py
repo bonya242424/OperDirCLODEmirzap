@@ -246,7 +246,7 @@ def test_repeated_blocked_item_is_skipped_and_next_is_processed(client, owner, m
         assert "пропущен" in db.get(ReturnLine, ids[0]).note
         assert db.get(ReturnLine, ids[1]).status == "failed"
         assert not pending_ids(db, db.get(ReturnRun, rid))
-    assert len(visits) == 2
+    assert len(visits) == 3
     assert all(url.endswith("/shop/returns/index.html") for url in visits)
     assert f"line_id={ids[1]}:" in script.seen[-1][0][0]["content"]
 

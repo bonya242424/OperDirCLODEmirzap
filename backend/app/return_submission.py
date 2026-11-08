@@ -100,8 +100,8 @@ def validate_preview(preview, rows, host):
     if urlparse(preview["url"]).netloc != host and not same_guided_site(preview["url"], "https://" + host):
         raise BrowserError("Форма открыта на другом сайте")
     allowed_labels = profile["final"] if profile else ("Оформить возврат", "Отправить заявку")
-    if preview["label"] not in allowed_labels:
-        raise BrowserError("Выбрана не кнопка отправки возврата")
+    if (allowed_labels and preview["label"] not in allowed_labels) or not str(preview.get("label", "")).strip():
+        raise BrowserError("Не удалось определить финальную кнопку оформления")
     from .return_brands import effective_brand
     text = normalized(preview["text"])
     if supplier_kind(preview["url"]) == "forum":

@@ -16,8 +16,16 @@ def test_profiles_only_enable_documented_final_action(domain):
 
 
 @pytest.mark.parametrize("domain", ["shate-m.ru", "msk.rossko.ru"])
-def test_unverified_final_stage_is_not_treated_as_ready(domain):
-    assert supplier_kind("https://" + domain) is None
+def test_generic_profile_checks_the_final_form(domain):
+    assert supplier_kind("https://" + domain) == "guided"
+    data = preview()
+    data["url"] = "https://" + domain + "/personal/returns/create/return"
+    data["label"] = "Подтвердить"
+    data["values"] = "Отказ клиента" if "rossko" in domain else "Возврат товара клиентом"
+    validate_preview(data, [row()], domain)
+    data["items"][0]["qty"] = 2
+    with pytest.raises(BrowserError):
+        validate_preview(data, [row()], domain)
 
 
 def row():
