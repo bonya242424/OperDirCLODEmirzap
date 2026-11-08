@@ -191,7 +191,7 @@ def _plan(db, batch: ReturnBatch, submit: bool = False, limit=None, line_ids=Non
     for inv, items in by.items():
         text.append(f"Счёт {inv} (дата {items[0].invoice_date or '?'}):")
         for ln in items:
-            text.append(f"  - line_id={ln.id}: {ln.article} {ln.name} {ln.brand}, вернуть {ln.qty} шт., склад {ln.warehouse}, причина: {ln.reason or 'не указана'}")
+            text.append(f"  - line_id={ln.id}: {ln.article} {ln.name} {ln.brand}, вернуть {ln.qty} шт., склад {ln.warehouse}, причина: {ln.reason or 'Отказ клиента'}")
     return "\n".join(text), list(by)
 
 
@@ -216,6 +216,8 @@ def run_check(run_id: int) -> None:
                     row.status = "uncertain"
                     row.note = "Результат отправки неизвестен. Проверьте кабинет поставщика; повторная отправка заблокирована."
                     status = "failed"
+            if status == "failed" and summary and (not entries or entries[-1] != summary[:400]):
+                say(summary)
             run.status, run.summary, run.finished_at = status, summary[:4000], utcnow()
             db.commit()
 

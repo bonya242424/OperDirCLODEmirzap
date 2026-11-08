@@ -37,7 +37,7 @@ def create_job(db, supplier, batch_ids, approvals, workers, owner_id, run_ids=No
 def queue_snapshot(job):
     payload = json.loads(job.payload)
     ids = payload["batch_ids"]
-    return {"job_id": job.id, "active": job.status in ACTIVE_STATUSES, "cancel": job.status == "stopped",
+    return {"job_id": job.id, "status": job.status, "active": job.status in ACTIVE_STATUSES, "cancel": job.status == "stopped",
             "ids": ids, "pos": min(job.position + 1, len(ids)), "done": payload.get("done", []), "note": job.note,
             "mode": "submit", "workers": payload["workers"]}
 
@@ -76,6 +76,10 @@ def pending_ids(db, run):
 
 def retry_later(job, note):
     job.retries += 1
+    if job.retries > 3:
+        job.status, job.retry_at, job.updated_at = "paused", None, utcnow()
+        job.note = f"Приостановлено после трёх повторных попыток. {note}"[:1000]
+        return
     delay = min(300, 10 * 2 ** min(job.retries - 1, 5))
     job.status, job.retry_at, job.updated_at = "waiting", utcnow() + timedelta(seconds=delay), utcnow()
     job.note = f"Автовосстановление через {delay} с. {note}"[:1000]

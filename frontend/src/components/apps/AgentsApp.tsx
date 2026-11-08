@@ -31,7 +31,7 @@ interface Supplier {
   login_status: string;
   login_error: string;
   session_saved_at: string | null;
-  check_status: "not_started" | "running" | "done" | "error";
+  check_status: "not_started" | "running" | "done" | "error" | "needs_login" | "paused" | "waiting";
 }
 type SupplierForm = Omit<Supplier, "id" | "batches" | "positions" | "has_session" | "has_credentials" | "login_status" | "login_error" | "session_saved_at" | "check_status"> & { id: number | null };
 const EMPTY_SUP: SupplierForm = { id: null, name: "", portal_url: "", contact: "", rules: "", default_reason: "", notes: "" };
@@ -395,7 +395,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                 <strong>{x.name}</strong>
                 {x.has_credentials && <span className={x.login_status === "error" ? "bad small" : "muted small"}>Автовход: {x.login_status === "ok" ? "проверен" : x.login_status === "error" ? "ошибка" : "настраивается"}</span>}
                 <span className={`small supplier-check-status supplier-check-${x.check_status ?? "not_started"}`}>
-                  {{ not_started: "Не запущен", running: "В процессе", done: "Готово", error: "Ошибка" }[x.check_status ?? "not_started"]}
+                  {{ not_started: "Не запущен", running: "В процессе", done: "Готово", error: "Ошибка", needs_login: "Нужен вход", paused: "Приостановлено", waiting: "Ожидает повтора" }[x.check_status ?? "not_started"]}
                 </span>
                 <span className="muted small">{x.batches} док. · в последнем {x.positions} поз.</span>
               </button>
@@ -440,6 +440,7 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
                 </button>
               </div>
             )}
+            {supplier.login_status === "error" && supplier.login_error && <p className="error" role="alert">{supplier.login_error}</p>}
             <div className="ag-upload">
               <label className="ag-file">
                 + Загрузить CSV
@@ -617,6 +618,8 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
         ) : (
           <>
             <p className="muted small">{lastRun.status === "running" ? "Идёт оформление…" : { done: "Запуск завершён", failed: "Запуск завершён с ошибкой", stopped: "Остановлена", running: "" }[lastRun.status]}</p>
+            {lastRun.summary && lastRun.status !== "running" && <p className={lastRun.status === "failed" ? "error" : "muted"}>{lastRun.summary}</p>}
+            {lastRun.log.length === 0 && lastRun.status !== "running" && <p className="muted small">Действия на сайте не выполнялись. Причина остановки указана выше.</p>}
             {lastRun.has_shot && lastRun.status !== "running" && <RunShot runId={lastRun.id} />}
             <ul>
               {[...lastRun.log].reverse().map((l, i) => (

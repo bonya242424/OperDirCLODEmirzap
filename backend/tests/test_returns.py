@@ -26,10 +26,11 @@ def test_import_sample_summary(client, owner):
     assert lines[0]["article"] == "SLKH073" and lines[0]["status"] == "pending"
 
 
-def test_missing_reason_is_reported(client, owner):
+def test_missing_reason_defaults_to_customer_refusal(client, owner):
     csv_text = "Сборка,№1\nПоставщик,Тест\n\nТовар,Кол. по документу,Номер счета,причина возврата\nA1,2,X1,\n"
     s = _upload(client, owner, csv_text.encode()).json()
-    assert s["problems"] == ["У 1 строк нет причины возврата"]
+    assert s["problems"] == []
+    assert s["reasons"] == [{"reason": "Отказ клиента", "qty": 2}]
 
 
 def test_bad_files_rejected(client, owner):

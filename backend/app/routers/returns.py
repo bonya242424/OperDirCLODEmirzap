@@ -199,12 +199,9 @@ def _summary(db: Session, batch: ReturnBatch) -> dict:
         w = by_wh[ln.warehouse or "не указан"]
         w["positions"] += 1
         w["qty"] += ln.qty
-        by_reason[ln.reason or "не указана"] += ln.qty
+        by_reason[(ln.reason or "").strip() or "Отказ клиента"] += ln.qty
         by_status[ln.status] += 1
     problems = []
-    no_reason = sum(1 for ln in lines if not ln.reason)
-    if no_reason:
-        problems.append(f"У {no_reason} строк нет причины возврата")
     no_inv = sum(1 for ln in lines if not ln.invoice_no)
     if no_inv:
         problems.append(f"У {no_inv} строк нет номера счёта")
@@ -426,9 +423,15 @@ def _supplier_out(db: Session, sup: ReturnSupplier) -> dict:
         .where(ReturnBatch.supplier_id == sup.id)
         .order_by((ReturnRun.status == "running").desc(), ReturnRun.id.desc()).limit(1)
     )
-    load_queue(db, sup.id)
+    queue = load_queue(db, sup.id) or {}
     check_status = "not_started"
-    if _QUEUES.get(sup.id, {}).get("active") or (last_run and last_run.status == "running"):
+    if last_run and last_run.status == "running":
+        check_status = "running"
+    elif queue.get("status") == "paused":
+        check_status = "needs_login" if queue.get("note", "").startswith("Нужен вход") else "paused"
+    elif queue.get("status") == "waiting":
+        check_status = "waiting"
+    elif queue.get("active"):
         check_status = "running"
     elif last_run and last_run.status == "failed":
         check_status = "error"
@@ -738,9 +741,9 @@ def _queue_out(db: Session, supplier_id: int | None = None) -> dict:
     if q["active"] and 0 < q["pos"] <= len(q["ids"]):
         b = db.get(ReturnBatch, q["ids"][q["pos"] - 1])
         cur = {"id": b.id, "number": b.number} if b else None
-    active = [k for k, x in _QUEUES.items() if x["active"]]
+    active = [k for k, x in _QUEUES.items() if x["active"] and x.get("status", "running") == "running"]
     return {
-        "supplier_id": supplier_id, "active": q["active"], "total": len(q["ids"]), "pos": q["pos"], "current": cur,
+        "supplier_id": supplier_id, "active": q["active"], "status": q.get("status"), "total": len(q["ids"]), "pos": q["pos"], "current": cur,
         "done": q["done"], "note": q["note"], "active_suppliers": active,
     }
 
@@ -1053,9 +1056,12 @@ def automatic_supplier_login(supplier_id: int, tasks: BackgroundTasks, db: Sessi
     supplier = _get_supplier(db, supplier_id)
     if not supplier.credentials_encrypted:
         raise HTTPException(status_code=409, detail="Для поставщика нет доступов из Лист12")
-    if supplier_busy(db, supplier.id):
+    queue = load_queue(db, supplier.id) or {}
+    active_run = db.scalar(select(ReturnRun.id).join(ReturnBatch, ReturnBatch.id == ReturnRun.batch_id)
+                          .where(ReturnBatch.supplier_id == supplier.id, ReturnRun.status == "running").limit(1))
+    if active_run or (supplier_busy(db, supplier.id) and queue.get("status") != "paused"):
         raise HTTPException(status_code=409, detail="У поставщика уже идёт запуск")
-    supplier.login_status, supplier.login_error = "ready", ""
+    supplier.login_status, supplier.login_error = "checking", ""
     db.commit()
     from ..supplier_credentials import preflight_one
     tasks.add_task(preflight_one, supplier.id)

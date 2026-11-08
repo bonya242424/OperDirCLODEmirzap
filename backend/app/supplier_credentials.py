@@ -178,7 +178,7 @@ def ensure_session(db, supplier, manager, key, force=False, verify_credentials=F
         if not config.get("username") or not config.get("password"):
             raise BrowserError("Нужен вход: доступы поставщика не настроены")
         if supplier.login_status == "error":
-            raise BrowserError("Нужен вход: предыдущий автовход не подтверждён; проверьте доступы в Лист12")
+            raise BrowserError("Нужен вход: предыдущий автовход не подтверждён. Нажмите «Повторить автовход» или «Войти заново».")
         try:
             # Другой поток мог уже обновить общую сохранённую сессию.
             raw = connections.decrypt(supplier.session_encrypted).get("state")
@@ -193,12 +193,22 @@ def ensure_session(db, supplier, manager, key, force=False, verify_credentials=F
             db.commit()
             return True
         except BrowserError:
+            diagnostic = {}
             if hasattr(manager, "login_diagnostic"):
                 try:
-                    set_setting(db, f"supplier-login-diagnostic:{supplier.id}", {"at": utcnow().isoformat(), **manager.login_diagnostic(key)})
+                    diagnostic = manager.login_diagnostic(key)
+                    set_setting(db, f"supplier-login-diagnostic:{supplier.id}", {"at": utcnow().isoformat(), **diagnostic})
                 except BrowserError:
                     pass
-            supplier.login_status, supplier.login_error = "error", "Автовход не подтверждён. Проверьте адрес и доступы в Лист12."
+            stages = {"open_login": "Не удалось открыть страницу входа.",
+                      "find_form": "Не найдена форма входа.",
+                      "find_username": "Не удалось определить поле логина.",
+                      "find_submit": "Не удалось определить кнопку входа.",
+                      "fill_credentials": "Не удалось заполнить форму входа.",
+                      "submit_login": "Не удалось отправить форму входа.",
+                      "verify_login": "Сайт не подтвердил вход после отправки формы."}
+            detail = stages.get(diagnostic.get("stage"), "Не удалось подтвердить вход в кабинет.")
+            supplier.login_status, supplier.login_error = "error", detail + " Повторите автовход или войдите через «Войти заново»."
             db.commit()
             raise BrowserError("Нужен вход: автоматическая авторизация не подтверждена; очередь сохранена") from None
 
@@ -292,7 +302,8 @@ def preflight_one(supplier_id):
         with SessionLocal() as db:
             supplier = db.get(ReturnSupplier, supplier_id)
             if supplier:
-                supplier.login_status, supplier.login_error = "error", "Автоматический вход не подтверждён; проверьте доступы и форму входа."
+                supplier.login_status = "error"
+                supplier.login_error = supplier.login_error or "Автоматический вход не подтверждён; повторите автовход или войдите заново."
                 db.commit()
         log.warning("Автовход поставщика %s не подтверждён; секреты не записывались в журнал", supplier_id)
     finally:

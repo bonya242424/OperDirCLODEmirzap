@@ -248,3 +248,80 @@ def test_repeated_blocked_item_is_skipped_and_next_is_processed(client, owner, m
     assert len(visits) == 2
     assert all(url.endswith("/shop/returns/index.html") for url in visits)
     assert f"line_id={ids[1]}:" in script.seen[-1][0][0]["content"]
+
+
+def test_paused_login_queue_has_login_status_and_allows_manual_retry(client, owner, monkeypatch):
+    from app import connections
+    jid, bid = make_job(client, owner)
+
+    def needs_login(rid):
+        with SessionLocal() as db:
+            run = db.get(ReturnRun, rid)
+            run.status, run.summary = "failed", "Нужен вход: предыдущий автовход не подтверждён"
+            db.commit()
+
+    run_job(jid, needs_login)
+    with SessionLocal() as db:
+        job = db.get(ReturnJob, jid)
+        sid = job.supplier_id
+        supplier = db.get(ReturnSupplier, sid)
+        supplier.credentials_encrypted = connections.encrypt({"username": "test", "password": "test"})
+        supplier.login_status = "error"
+        db.commit()
+    suppliers = client.get("/api/returns/suppliers", headers=owner).json()
+    assert next(s for s in suppliers if s["id"] == sid)["check_status"] == "needs_login"
+    queue = client.get(f"/api/returns/check-queue?supplier_id={sid}", headers=owner).json()
+    assert queue["status"] == "paused"
+    assert sid not in queue["active_suppliers"]
+    calls = []
+    monkeypatch.setattr("app.supplier_credentials.preflight_one", lambda supplier_id: calls.append(supplier_id))
+    response = client.post(f"/api/returns/suppliers/{sid}/auto-login", headers=owner)
+    assert response.status_code == 202, response.text
+    assert calls == [sid]
+    with SessionLocal() as db:
+        assert db.get(ReturnSupplier, sid).login_status == "checking"
+        assert db.get(ReturnJob, jid).status == "paused"
+
+
+def test_repeated_technical_failure_pauses_instead_of_retrying_forever(client, owner, monkeypatch):
+    from app.return_jobs import recover_jobs
+    jid, bid = make_job(client, owner)
+
+    def fail(rid):
+        with SessionLocal() as db:
+            run = db.get(ReturnRun, rid)
+            run.status, run.summary = "failed", "Модель не ответила"
+            db.commit()
+
+    for _ in range(4):
+        run_job(jid, fail)
+    with SessionLocal() as db:
+        job = db.get(ReturnJob, jid)
+        assert job.status == "paused" and job.retry_at is None
+        assert "трёх повторных попыток" in job.note
+        sid = job.supplier_id
+    ACTIVE_QUEUES.clear()
+    launches = []
+    monkeypatch.setattr("app.return_jobs.threading.Thread",
+                        lambda **kwargs: SimpleNamespace(start=lambda: launches.append(kwargs["args"][0])))
+    recover_jobs()
+    assert launches == []
+    suppliers = client.get("/api/returns/suppliers", headers=owner).json()
+    assert next(s for s in suppliers if s["id"] == sid)["check_status"] == "paused"
+
+
+def test_manual_auto_login_cannot_interrupt_running_job(client, owner, monkeypatch):
+    from app import connections
+    jid, _ = make_job(client, owner)
+    with SessionLocal() as db:
+        job = db.get(ReturnJob, jid)
+        sid = job.supplier_id
+        job.status = "running"
+        supplier = db.get(ReturnSupplier, sid)
+        supplier.credentials_encrypted = connections.encrypt({"username": "test", "password": "test"})
+        db.commit()
+    calls = []
+    monkeypatch.setattr("app.supplier_credentials.preflight_one", lambda supplier_id: calls.append(supplier_id))
+    response = client.post(f"/api/returns/suppliers/{sid}/auto-login", headers=owner)
+    assert response.status_code == 409
+    assert calls == []
