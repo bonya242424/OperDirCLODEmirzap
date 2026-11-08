@@ -162,8 +162,8 @@ def validate_guided_preview(preview, rows, profile):
     brand_ok = normalized(actual_brand) == normalized(effective_brand(row)) if actual_brand else on_page(effective_brand(row), item.get("text", ""))
     if not brand_ok or item.get("qty") != row.qty:
         raise BrowserError("Бренд или количество итоговой формы не совпадают с проверенным товаром")
-    source = normalized(re.sub(r"/\s*\d+\s*$", "", row.invoice_no))
-    if not source or source not in normalized(preview.get("text", "") + " " + preview.get("values", "")):
+    source = re.sub(r"/\s*\d+\s*$", "", row.invoice_no).strip()
+    if not normalized(source) or not on_page(source, preview.get("text", "") + " " + preview.get("values", "")):
         raise BrowserError("Не подтверждён исходный документ поставки в итоговой форме")
     values = normalized(preview.get("values", ""))
     if not all(reason in values for reason in profile["reason"]):

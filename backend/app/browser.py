@@ -164,7 +164,7 @@ class BrowserManager:
         session = self._get(key)
         data = await self._evaluate_read(session.page, """() => ({
             fields:Array.from(document.querySelectorAll('input')).filter(e=>e.getClientRects().length && e.type!=='hidden').map(e=>({type:e.type,name:e.name,id:e.id,autocomplete:e.autocomplete})).slice(0,20),
-            buttons:Array.from(document.querySelectorAll('a,button,input[type=submit],input[type=button],[role=button]')).filter(e=>e.getClientRects().length).map(e=>(e.tagName==='INPUT'?e.value:e.innerText).trim()).filter(t=>/вход|войти|авториз|login|sign in|log in/i.test(t) && !t.includes('@')).map(t=>t.slice(0,70)).slice(0,15),
+            buttons:Array.from(document.querySelectorAll('a,button,input[type=submit],input[type=button],[role=button]')).filter(e=>e.getClientRects().length).map(e=>(e.tagName==='INPUT'?e.value:e.innerText).trim()).filter(t=>/вход|войти|авториз|кабинет|login|sign in|log in/i.test(t) && !t.includes('@')).map(t=>t.slice(0,70)).slice(0,15),
             password_count:Array.from(document.querySelectorAll('input[type=password]')).filter(e=>e.getClientRects().length).length
         })""")
         return {"stage": getattr(session, "login_stage", "open_cabinet"), **data}
@@ -218,12 +218,22 @@ class BrowserManager:
             self._get(key).login_stage = "find_form"
             passwords = page.locator('input[type="password"]:visible')
             if await passwords.count() == 0:
-                # Открытие формы входа не является отправкой возврата.
-                entry = page.locator('a:visible,button:visible').filter(has_text=re.compile(r"^\s*(?:Войти|Вход|Авторизация|Личный кабинет|Войти на сайт|Вход на сайт|Войти в личный кабинет|Войти в кабинет|Вход в кабинет|Вход в ЛК|Войти в ЛК|Вход / Регистрация|Вход для клиентов|Login|Sign in)\s*$", re.I))
-                if await entry.count() == 1:
-                    await entry.click()
-                    await page.wait_for_timeout(700)
-            await passwords.first.wait_for(state="visible", timeout=10000)
+                # SPA может дорисовать кнопку входа уже после DOMContentLoaded.
+                entry = page.locator('a:visible,button:visible,[role=button]:visible').filter(has_text=re.compile(r"^\s*(?:Войти|Вход|Авторизация|Личный кабинет|Кабинет клиента|Личный кабинет клиента|Войти на сайт|Вход на сайт|Войти в личный кабинет|Войти в кабинет|Вход в кабинет|Вход в ЛК|Войти в ЛК|Вход / Регистрация|Вход для клиентов|Вход для партнеров|Login|Sign in)\s*$", re.I))
+                for _ in range(30):
+                    if await passwords.count():
+                        break
+                    count = await entry.count()
+                    if count == 1:
+                        await entry.click()
+                        break
+                    if count > 1:
+                        targets = await entry.evaluate_all("els=>els.map(e=>e.getAttribute('href') || '')")
+                        if targets and all(targets) and len(set(targets)) == 1:
+                            await entry.first.click()
+                            break
+                    await page.wait_for_timeout(500)
+            await passwords.first.wait_for(state="visible", timeout=20000)
             if await passwords.count() != 1 or not same_site(page.url):
                 raise BrowserError("Не найдена однозначная форма входа")
             password_field = passwords.first

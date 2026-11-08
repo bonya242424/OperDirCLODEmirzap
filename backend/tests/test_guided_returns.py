@@ -94,3 +94,10 @@ def test_explicit_registration_without_number_is_locked_after_send(client, owner
     client.post(f"/api/returns/batches/{bid}/reset-errors", headers=owner)
     with SessionLocal() as db:
         assert db.get(ReturnLine, lid).status == "submitted"
+
+
+def test_source_document_prefix_is_not_a_match():
+    data = preview()
+    data["text"] = "Возврат товара, поставка 123456-990"
+    with pytest.raises(BrowserError):
+        validate_preview(data, [row()], "lk.favorit-parts.ru")
