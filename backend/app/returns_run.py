@@ -26,8 +26,8 @@ from .return_search import article_variants, matching_offers
 log = logging.getLogger(__name__)
 
 MAX_STEPS = 300
-MAX_ITEM_STEPS = 18
-MAX_ITEM_SECONDS = 180
+MAX_ITEM_STEPS = 30
+MAX_ITEM_SECONDS = 300
 KEEP_IMAGES = 2
 RESULTS = {"ok": "checked", "not_found": "failed", "already_returned": "failed", "mismatch": "failed", "error": "failed"}
 LABEL = {
@@ -191,7 +191,10 @@ def _plan(db, batch: ReturnBatch, submit: bool = False, limit=None, line_ids=Non
     for inv, items in by.items():
         text.append(f"Счёт {inv} (дата {items[0].invoice_date or '?'}):")
         for ln in items:
-            text.append(f"  - line_id={ln.id}: {ln.article} {ln.name} {ln.brand}, вернуть {ln.qty} шт., склад {ln.warehouse}, причина: {ln.reason or 'Отказ клиента'}")
+            reason = (ln.reason or "").strip()
+        if not reason or normalized(reason).startswith("неуказан"):
+            reason = "Отказ клиента"
+        text.append(f"  - line_id={ln.id}: {ln.article} {ln.name} {ln.brand}, вернуть {ln.qty} шт., склад {ln.warehouse}, причина: {reason}")
     return "\n".join(text), list(by)
 
 
@@ -360,7 +363,7 @@ def run_check(run_id: int) -> None:
                 evidence = json.loads(row.check_evidence or "{}")
                 retries = evidence.get("automation_restarts", 0)
                 evidence["automation_restarts"] = retries + 1
-                if retries >= 1:
+                if retries >= 2:
                     row.status = "failed"
                     row.note = f"Техническая ошибка: товар пропущен после повторной попытки. {reason}"[:1000]
                     evidence["technical_skip"] = True
