@@ -14,7 +14,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-VIEW_W, VIEW_H = 1100, 700
+VIEW_W, VIEW_H = 1600, 1000
 IDLE_SECONDS = 15 * 60
 KEYS = {"Enter", "Tab", "Backspace", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Delete", "Space", "Home", "End", "PageUp", "PageDown", "Insert", "ContextMenu", "CapsLock"}
 MODS = {"Control", "Shift", "Alt", "Meta"}

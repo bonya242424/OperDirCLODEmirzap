@@ -1,4 +1,5 @@
 import { FormEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, getToken } from "../../api";
 
 interface Props {
@@ -110,8 +111,8 @@ export default function BrowserLogin({ supplierId, name, onClose }: Props) {
     onClose(saved);
   }
 
-  return (
-    <div className="modal-bg">
+  return createPortal(
+    <div className="modal-bg browser-modal-bg">
       <div className="modal browser-modal" role="dialog" aria-label={`Вход в кабинет: ${name}`}>
         <h3>Вход в кабинет: {name}</h3>
         <p className="muted small">
@@ -150,6 +151,6 @@ export default function BrowserLogin({ supplierId, name, onClose }: Props) {
           <button type="button" onClick={close}>Закрыть</button>
         </div>
       </div>
-    </div>
+    </div>, document.body
   );
 }

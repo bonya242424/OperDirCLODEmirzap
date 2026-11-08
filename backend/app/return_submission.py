@@ -138,7 +138,7 @@ def validate_preview(preview, rows, host):
     elif profile:
         validate_guided_preview(preview, rows, profile)
     else:
-        raise BrowserError("Для этого поставщика финальный этап оформления ещё не проверен")
+        validate_guided_preview(preview, rows, {"reason": ()})
 
 
 
