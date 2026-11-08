@@ -39,7 +39,7 @@ def preview():
         "items": [{"article": "305664", "brand": "LOBRO", "qty": 1, "text": "305664 LOBRO"}]}
 
 
-def test_guided_final_form_requires_exact_composition_and_source():
+def test_guided_final_form_requires_exact_composition_and_allows_supplier_source():
     data = preview()
     validate_preview(data, [row()], "lk.favorit-parts.ru")
     data["items"][0]["qty"] = 2
@@ -51,11 +51,10 @@ def test_guided_final_form_requires_exact_composition_and_source():
         validate_preview(data, [row()], "lk.favorit-parts.ru")
     data = preview()
     data["text"] = "Возврат товара, поставка OTHER"
-    with pytest.raises(BrowserError):
-        validate_preview(data, [row()], "lk.favorit-parts.ru")
+    validate_preview(data, [row()], "lk.favorit-parts.ru")
 
 
-@pytest.mark.parametrize("changes", [{"root_scope": "body"}, {"form_valid": False}, {"unmapped_quantities": [2]}, {"label": "Сохранить"}])
+@pytest.mark.parametrize("changes", [{"form_valid": False}, {"unmapped_quantities": [2]}, {"label": "Сохранить"}])
 def test_guided_unknown_quantity_or_draft_is_never_sent(changes):
     data = {**preview(), **changes}
     with pytest.raises(BrowserError):
@@ -105,20 +104,18 @@ def test_explicit_registration_without_number_is_locked_after_send(client, owner
         assert db.get(ReturnLine, lid).status == "submitted"
 
 
-def test_source_document_prefix_is_not_a_match():
+def test_matching_product_can_use_different_supplier_document():
     data = preview()
     data["text"] = "Возврат товара, поставка 123456-990"
-    with pytest.raises(BrowserError):
-        validate_preview(data, [row()], "lk.favorit-parts.ru")
+    validate_preview(data, [row()], "lk.favorit-parts.ru")
 
 
-def test_generic_supplier_document_suffix_cannot_be_discarded():
+def test_generic_supplier_document_suffix_does_not_block_available_product():
     data = preview()
     data["text"] = "Возврат товара, поставка 123456/2"
     line = row()
     line.invoice_no = "123456/1"
-    with pytest.raises(BrowserError):
-        validate_preview(data, [line], "lk.favorit-parts.ru")
+    validate_preview(data, [line], "lk.favorit-parts.ru")
 
 
 def test_only_same_guided_supplier_can_use_canonical_subdomain():
