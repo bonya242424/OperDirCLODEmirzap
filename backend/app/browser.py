@@ -633,7 +633,7 @@ class BrowserManager:
         rows = await self._evaluate_read(session.page, r"""({article,brand,version}) => {
             const norm=s=>s.toUpperCase().replace(/[\s./-]+/g,'');
             let index=0;
-            return Array.from(document.querySelectorAll('tr')).filter(row=>!row.querySelector('tr') && row.getClientRects().length && norm(row.innerText).includes(norm(article))).map(row=>({
+            return Array.from(document.querySelectorAll('tr')).filter(row=>!row.querySelector('tr') && norm(row.textContent || '').includes(norm(article)) && row.getClientRects().length).map(row=>({
                 text:row.innerText,
                 brand:(() => {
                     const headers=Array.from(row.closest('table')?.rows[0]?.cells || []).map(c=>c.innerText.trim());

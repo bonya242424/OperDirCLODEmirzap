@@ -100,7 +100,8 @@ def validate_preview(preview, rows, host):
     if urlparse(preview["url"]).netloc != host and not same_guided_site(preview["url"], "https://" + host):
         raise BrowserError("Форма открыта на другом сайте")
     allowed_labels = profile["final"] if profile else ("Оформить возврат", "Отправить заявку")
-    if (allowed_labels and preview["label"] not in allowed_labels) or not str(preview.get("label", "")).strip():
+    actual_label = normalized(preview.get("label", ""))
+    if (allowed_labels and actual_label not in {normalized(label) for label in allowed_labels}) or not actual_label:
         raise BrowserError("Не удалось определить финальную кнопку оформления")
     from .return_brands import effective_brand
     text = normalized(preview["text"])
@@ -142,7 +143,7 @@ def validate_preview(preview, rows, host):
 def validate_guided_preview(preview, rows, profile):
     from .return_brands import effective_brand
     from .return_verification import on_page
-    if preview.get("root_scope") not in ("form", "dialog") or "возврат" not in normalized(preview.get("text", "")):
+    if preview.get("root_scope") not in ("form", "dialog", "body") or "возврат" not in normalized(preview.get("text", "")):
         raise BrowserError("Не подтверждена итоговая форма возврата")
     if preview.get("form_valid") is not True or preview.get("unmapped_quantities"):
         raise BrowserError("Не заполнены обязательные поля или не удалось однозначно прочитать количества")
