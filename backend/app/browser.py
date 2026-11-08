@@ -141,6 +141,108 @@ class BrowserManager:
         except Exception:  # noqa: BLE001 - окно остаётся открытым, владелец увидит, что со страницей
             log.info("Страница %s не загрузилась до конца", url)
 
+
+    def login(self, key: int, login_url: str, username: str, password: str, target_url: str) -> dict:
+        # Не повторять ввод/отправку пароля внутри общего механизма _run.
+        return self._run(lambda: self._login(key, login_url, username, password, target_url), timeout=60, retry=False)
+
+    async def _login(self, key: int, login_url: str, username: str, password: str, target_url: str) -> dict:
+        import re
+        from urllib.parse import urlsplit
+        from .supplier_credentials import SUPPLIERS
+        page = self._get(key).page
+        original_host = (urlsplit(login_url).hostname or "").lower()
+        domain = next((d for d in SUPPLIERS if original_host == d or original_host.endswith("." + d)), None)
+        if not domain or urlsplit(login_url).scheme != "https":
+            raise BrowserError("Недопустимый адрес авторизации")
+
+        def same_site(url):
+            parsed = urlsplit(url)
+            host = (parsed.hostname or "").lower()
+            return parsed.scheme == "https" and (host == domain or host.endswith("." + domain))
+
+        async def authenticated():
+            try:
+                if await page.locator('input[type="password"]:visible').count():
+                    return False
+                if await page.locator('a[href*="logout" i],a[href*="logoff" i],a[href*="/exit" i]').count():
+                    return True
+                if await page.get_by_text(re.compile(r"^(?:Выйти|Выход|Logout|Log out|Sign out)$", re.I)).count():
+                    return True
+                if domain == "armtek.ru" and "/order_return" in page.url:
+                    return await page.locator('input[name="MATNR" i]').count() == 1
+                if domain == "forum-auto.ru" and "/shop/returns/" in page.url:
+                    return await page.get_by_text(re.compile(r"Создание возвратов|Поиск документов для создания")).count() > 0
+                return False
+            except Exception as exc:
+                if "context was destroyed" in str(exc).lower() or "navigation" in str(exc).lower():
+                    return False
+                raise
+
+        try:
+            await page.goto(login_url, wait_until="domcontentloaded", timeout=25000)
+            if not same_site(page.url):
+                raise BrowserError("Авторизация перенаправила на другой сайт")
+            if await authenticated():
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
+                return await self._state(key)
+            passwords = page.locator('input[type="password"]:visible')
+            if await passwords.count() == 0:
+                # Открытие формы входа не является отправкой возврата.
+                entry = page.locator('a:visible,button:visible').filter(has_text=re.compile(r"^\s*(?:Войти|Вход|Авторизация|Личный кабинет|Login|Sign in)\s*$", re.I))
+                if await entry.count() == 1:
+                    await entry.click()
+                    await page.wait_for_timeout(700)
+            await passwords.first.wait_for(state="visible", timeout=10000)
+            if await passwords.count() != 1 or not same_site(page.url):
+                raise BrowserError("Не найдена однозначная форма входа")
+            password_field = passwords.first
+            root = password_field.locator("xpath=ancestor::form[1]")
+            if await root.count() != 1:
+                root = page.locator("body")
+            form_target = await root.get_attribute("action") or page.url
+            from urllib.parse import urljoin
+            if not same_site(urljoin(page.url, form_target)):
+                raise BrowserError("Форма входа отправляет данные на другой сайт")
+            users = root.locator(
+                'input[autocomplete="username"]:visible,input[type="email"]:visible,input[name*="login" i]:visible,input[name*="user" i]:visible,input[id*="login" i]:visible')
+            # Исключаем пароль даже если его имя содержит user/login.
+            users = users.locator('xpath=self::input[not(@type="password") and not(@type="hidden") and not(@type="submit") and not(@type="button")]')
+            if await users.count() != 1:
+                users = root.locator('input[type="text"]:visible,input[type="email"]:visible,input:not([type]):visible')
+            if await users.count() != 1:
+                raise BrowserError("Не найдено однозначное поле логина")
+            submit = root.locator('button:visible,input[type="submit"]:visible').filter(
+                has_text=re.compile(r"^\s*(?:Войти|Вход|Вход в систему|Авторизоваться|Авторизация|Login|Sign in|Log in)\s*$", re.I))
+            if await submit.count() != 1:
+                submit = root.locator('button[type="submit"]:visible,input[type="submit"]:visible')
+            if await submit.count() != 1:
+                raise BrowserError("Не найдена однозначная кнопка входа")
+            label = await submit.get_attribute("value") or await submit.inner_text()
+            if not re.fullmatch(r"\s*(?:Войти|Вход|Вход в систему|Авторизоваться|Авторизация|Login|Sign in|Log in|Продолжить)\s*", label, re.I):
+                raise BrowserError("Кнопка формы не является входом")
+            await users.fill(username)
+            await password_field.fill(password)
+            # Последняя проверка адреса непосредственно перед отправкой секретов.
+            if not same_site(page.url):
+                raise BrowserError("Страница авторизации изменилась")
+            await submit.click()
+            for _ in range(20):
+                await page.wait_for_timeout(500)
+                if not same_site(page.url):
+                    raise BrowserError("Вход перенаправил на другой сайт")
+                if await authenticated():
+                    await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
+                    if not same_site(page.url) or await page.locator('input[type="password"]:visible').count():
+                        raise BrowserError("Сессия кабинета не подтверждена")
+                    return await self._state(key)
+            raise BrowserError("Сайт не подтвердил авторизацию")
+        except BrowserError:
+            raise
+        except Exception:
+            # Playwright может включить аргументы fill в traceback: наружу только фиксированный текст.
+            raise BrowserError("Автоматический вход не выполнен: форма изменилась или сайт не ответил") from None
+
     def screenshot(self, key: int) -> bytes:
         return self._run(lambda: self._shot(key))
 

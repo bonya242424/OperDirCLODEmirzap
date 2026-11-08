@@ -22,10 +22,18 @@ wait_ready() {
   return 1
 }
 
+if [ "$PREV" = "$NEW" ] && wait_ready; then
+  echo "Версия уже запущена, перезапуск не требуется."
+  docker compose exec -T backend python -m app.supplier_credentials --wait-status || echo "Статус автовхода пока недоступен."
+  exit 0
+fi
+
 docker compose up -d --build
 if wait_ready; then
   echo "Готово: система отвечает."
   docker image prune -f >/dev/null
+  # Только обезличенный статус проверки входов и очередей; секреты не читаются этим отчётом.
+  docker compose exec -T backend python -m app.supplier_credentials --wait-status || echo "Статус автовхода пока недоступен; сервис работает."
 else
   echo "Система не поднялась, откатываю на ${PREV:0:7}" >&2
   git reset --hard "$PREV"

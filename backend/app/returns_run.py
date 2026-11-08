@@ -228,7 +228,7 @@ def run_check(run_id: int) -> None:
             return finish("failed", "У поставщика не указан адрес кабинета")
         if approval and approval.get("portal_url", sup.portal_url) != sup.portal_url:
             return finish("failed", "Адрес кабинета изменён после подтверждения")
-        if not sup.session_encrypted:
+        if not sup.session_encrypted and not sup.credentials_encrypted:
             return finish("failed", "Вход в кабинет не выполнен: нажмите «Войти в кабинет» и сохраните вход")
         provider = get_provider()
         if provider is None:
@@ -378,6 +378,10 @@ def run_check(run_id: int) -> None:
 
         try:
             manager.open(key, sup.portal_url, json.loads(raw) if raw else None)
+            if sup.credentials_encrypted:
+                from .supplier_credentials import ensure_session
+                if ensure_session(db, sup, manager, key):
+                    say("Автоматически вошёл в кабинет; новая сессия сохранена")
             say("Открыл кабинет по сохранённому входу")
             checkpoint_remaining = remaining_at_finish
             for step_number in range(MAX_STEPS * max(1, remaining_at_finish)):
@@ -448,6 +452,15 @@ def run_check(run_id: int) -> None:
                         continue
                     if finished or item_errors >= 3:
                         if hasattr(manager, "auth_required") and manager.auth_required(key):
+                            if sup.credentials_encrypted and not approval.get("attempt"):
+                                from .supplier_credentials import ensure_session
+                                try:
+                                    ensure_session(db, sup, manager, key, force=True)
+                                    say("Сессия восстановлена автоматически; продолжаю текущий товар")
+                                    if reset_focus("Восстановлен вход", recover=False):
+                                        continue
+                                except BrowserError:
+                                    pass
                             summary = "Нужен вход в кабинет поставщика. Очередь сохранена и продолжится после сохранения входа."
                             break
                         if not reset_focus(summary or "Повторные ошибки действий", recover=True):
