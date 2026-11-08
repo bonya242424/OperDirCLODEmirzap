@@ -427,6 +427,13 @@ class BrowserManager:
             [x, y],
         )
         if re.search(self.RISKY, label, re.I):
+            from urllib.parse import urlsplit
+            host = (urlsplit(page.url).hostname or "").lower()
+            is_shate_tab = label.strip() == "Оформить возврат" and (host == "shate-m.ru" or host.endswith(".shate-m.ru")) and await page.evaluate(
+                """([x,y]) => { const el=document.elementFromPoint(x,y); const t=el && el.closest('button,a,[role=tab],[role=button]');
+                return !!t && (t.getAttribute('role') === 'tab' || /^nz-tabs-\d+-tab-\d+$/.test(t.id || '')); }""",
+                [x,y],
+            )
             is_preview = allow_return_preview and label.strip() == "Оформить возврат" and await page.evaluate(
                 "() => location.hostname.endsWith('.armtek.ru') && !/Оформить возврат по фактуре/i.test(document.body.innerText)"
             )
@@ -434,7 +441,7 @@ class BrowserManager:
                 from urllib.parse import urlsplit
                 host = (urlsplit(page.url).hostname or "").lower()
                 is_preview = (host == "motexc.ru" or host.endswith(".motexc.ru")) and label.strip() == "Отправить заявку на возврат"
-            if not is_preview:
+            if not is_preview and not is_shate_tab:
                 raise BrowserError("Финальный клик разрешён только через submit_return после проверки формы" if allow_return_preview else f"Кнопка «{label.strip()}» заблокирована: в режиме проверки ничего не отправляется")
         from playwright.async_api import TimeoutError as PlaywrightTimeout
         from urllib.parse import urlparse
