@@ -205,9 +205,12 @@ def _summary(db: Session, batch: ReturnBatch) -> dict:
     no_inv = sum(1 for ln in lines if not ln.invoice_no)
     if no_inv:
         problems.append(f"У {no_inv} строк нет номера счёта")
+    from ..assembly_scope import source_block_reason, source_deletion_state
     return {
         "id": batch.id,
         "supplier_id": batch.supplier_id,
+        "source_deletion_mark": source_deletion_state(db, batch),
+        "source_block_reason": source_block_reason(db, batch),
         "doc_date": batch.doc_date.isoformat() if batch.doc_date else None,
         "supplier": batch.supplier,
         "number": batch.number,
@@ -238,6 +241,27 @@ def batches(
         q = q.where(ReturnBatch.doc_date <= date_to)
     rows = db.scalars(q)
     return [_summary(db, b) for b in rows]
+
+
+class SourceDeletionMarkIn(BaseModel):
+    marked: bool
+
+
+@router.patch("/batches/{batch_id}/deletion-mark")
+def set_batch_deletion_mark(batch_id: int, body: SourceDeletionMarkIn, db: Session = Depends(get_db), me: User = Depends(current_user)):
+    _owner(me)
+    batch = db.get(ReturnBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Сборка не найдена")
+    if supplier_busy(db, batch.supplier_id):
+        raise HTTPException(status_code=409, detail="Сначала остановите запуск и очередь поставщика")
+    from ..assembly_scope import set_source_deletion_state, source_block_reason
+    set_source_deletion_state(db, batch, body.marked)
+    db.commit()
+    return {
+        "source_deletion_mark": body.marked,
+        "source_block_reason": source_block_reason(db, batch),
+    }
 
 
 @router.post("/batches/{batch_id}/reset-errors")

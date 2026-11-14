@@ -117,14 +117,49 @@ def block_source(db, supplier, label, reason):
                 batch.source = (batch.source[:max(0, 497-len(marker))] + " · " + marker)[:500]
 
 
+def source_deletion_state(db, batch):
+    from .models import AppSetting
+    try:
+        key = document_key(batch.supplier, batch.number)
+    except BrowserError:
+        return None
+    choice = db.get(AppSetting, "assembly-del-choice:" + key)
+    if choice and choice.value in ("marked", "clear"):
+        return choice.value == "marked"
+    block = db.get(AppSetting, "assembly-source-block:" + key)
+    if block and "пометка удаления" in block.value.casefold():
+        return True
+    return None
+
+
+def set_source_deletion_state(db, batch, marked):
+    from .models import AppSetting
+    if type(marked) is not bool:
+        raise BrowserError("Укажите, помечена ли сборка на удаление")
+    key = "assembly-del-choice:" + document_key(batch.supplier, batch.number)
+    setting = db.get(AppSetting, key)
+    value = "marked" if marked else "clear"
+    if setting is None:
+        db.add(AppSetting(key=key, value=value))
+    else:
+        setting.value = value
+
+
 def source_block_reason(db, batch):
     from .models import AppSetting
     try:
-        key = "assembly-source-block:" + document_key(batch.supplier, batch.number)
+        key = document_key(batch.supplier, batch.number)
     except BrowserError:
         return ""
-    entry = db.get(AppSetting, key)
-    return entry.value if entry else ""
+    entry = db.get(AppSetting, "assembly-source-block:" + key)
+    reason = entry.value if entry else ""
+    choice = db.get(AppSetting, "assembly-del-choice:" + key)
+    if choice and choice.value == "clear" and "пометка удаления" in reason.casefold():
+        reason = ""
+    if choice and choice.value == "marked" and "пометка удаления" not in reason.casefold():
+        mark_reason = "Пометка удаления в 1С (установлена владельцем)"
+        reason = f"{mark_reason}; {reason}" if reason else mark_reason
+    return reason
 
 
 def record_state(db, run, supplier, label, posted, deletion_mark, evidence):

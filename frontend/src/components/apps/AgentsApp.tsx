@@ -81,6 +81,8 @@ interface Summary {
   supplier: string;
   number: string;
   source: string;
+  source_deletion_mark: boolean | null;
+  source_block_reason: string;
   positions: number;
   qty: number;
   invoices: { invoice_no: string; positions: number; qty: number; date: string; status: string; note: string }[];
@@ -294,6 +296,26 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
       loadRuns();
     } catch (err) {
       setRunsError(err instanceof Error ? err.message : "Ошибка");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setDeletionMark(marked: boolean) {
+    if (!current || busy || checking || queue?.active) return;
+    setBusy(true);
+    setError("");
+    setInfo("");
+    try {
+      const result = await api<{ source_deletion_mark: boolean; source_block_reason: string }>(
+        `/returns/batches/${current.id}/deletion-mark`, { method: "PATCH", body: { marked } },
+      );
+      setInfo(marked ? "Для этой сборки установлена пометка удаления. Запуск возвратов заблокирован." :
+        result.source_block_reason ? `Пометка удаления снята. Осталась блокировка: ${result.source_block_reason}` :
+        "Для этой сборки указано, что пометки удаления нет. Можно запускать возвраты.");
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось сохранить пометку удаления");
     } finally {
       setBusy(false);
     }
@@ -527,6 +549,16 @@ function ReturnsPanel({ me, focusSupplier }: { me: User; focusSupplier: number |
             </header>
 
             {runsError && <p className="error" role="alert">{runsError}</p>}
+            {me.role === "owner" && (
+              <div className="return-source-mark" aria-label="Пометка удаления сборки в 1С">
+                <span>Пометка удаления в 1С: <b>{current.source_deletion_mark === null ? "не задана" : current.source_deletion_mark ? "да" : "нет"}</b></span>
+                <button className="ghost" disabled={busy || checking || !!queue?.active || current.source_deletion_mark === true}
+                  onClick={() => setDeletionMark(true)}>Помечена на удаление</button>
+                <button className="ghost" disabled={busy || checking || !!queue?.active || current.source_deletion_mark === false}
+                  onClick={() => setDeletionMark(false)}>Не помечена</button>
+                {current.source_block_reason && <span className="error">{current.source_block_reason}</span>}
+              </div>
+            )}
             <div className="ag-sum">
               <div><b>{current.positions}</b><span>позиций</span></div>
               <div><b>{current.qty}</b><span>штук</span></div>
